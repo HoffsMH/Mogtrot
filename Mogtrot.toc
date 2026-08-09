@@ -1,0 +1,10 @@
+## Interface: 120007, 120100
+## Title: Mogtrot
+## Notes: Categorised transmog outfit picker with LiteMount integration. Open anywhere, click to wear.
+## Version: 0.1
+## SavedVariables: MogtrotDB
+## SavedVariablesPerCharacter: MogtrotCharDB
+## IconTexture: Interface\Icons\INV_Chest_Cloth_17
+## X-Category: Collections
+
+Core.lua
