@@ -1,0 +1,9 @@
+package-as: Mogtrot
+
+enable-nolib-creation: no
+
+ignore:
+  - .busted
+  - .luacheckrc
+  - .pkgmeta
+  - spec

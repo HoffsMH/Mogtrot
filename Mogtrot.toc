@@ -1,10 +1,46 @@
 ## Interface: 120007, 120100
 ## Title: Mogtrot
-## Notes: Categorised transmog outfit picker with LiteMount integration. Open anywhere, click to wear.
-## Version: 0.1
+## Notes: Categorised transmog outfit picker with linked mounts. Open anywhere, click to wear.
+## Author: Bitrot-Aegwynn
+## Version: 0.2
+## License: MIT
 ## SavedVariables: MogtrotDB
 ## SavedVariablesPerCharacter: MogtrotCharDB
 ## IconTexture: Interface\Icons\INV_Chest_Cloth_17
 ## X-Category: Collections
 
+Tree.lua
+Addon.lua
+Database.lua
+UI.lua
+SearchPicker.lua
+OutfitTitles.lua
+OutfitTitlePicker.lua
+OutfitTitleController.lua
+MountPins.lua
+MountPinController.lua
+MountPickerUI.lua
+SettingsUI.lua
+SettingsUI.xml
+Diagnostics.lua
+Commands.lua
+MountCollection.lua
+SummonController.lua
+MountIndex.lua
+Lint.lua
+OutfitLint.lua
+BlizzardOutfitUI.lua
+MountSort.lua
+MountFilter.lua
+MountType.lua
+MountPreference.lua
+TargetMount.lua
+MountPick.lua
+LinkedMountShuffle.lua
+SummonDecision.lua
+Macro.lua
+OutfitWearTime.lua
+OutfitLookCapture.lua
+OutfitPreviewUI.lua
+MainWindowUI.lua
 Core.lua

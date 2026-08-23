@@ -1,0 +1,15 @@
+-- Run with: busted-5.1
+--
+-- Not plain `busted`: on this machine that is the Lua 5.5 build, which accepts
+-- syntax WoW's 5.1-flavoured VM rejects, so a suite could pass on code that
+-- cannot load in game. Install with: sudo pacman -S lua51-busted
+--
+-- lpath is what lets a spec require an addon file by name. The WoW stubs are
+-- pulled in by spec/helpers.lua rather than declared as a busted helper, so a
+-- spec file also runs on its own.
+return {
+	default = {
+		ROOT = { "spec" },
+		lpath = "./?.lua",
+	},
+}

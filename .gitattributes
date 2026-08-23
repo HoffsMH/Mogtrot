@@ -1,0 +1,7 @@
+# Keeps the dev files out of `git archive`, which is how a release zip is built:
+#   git archive --prefix=Mogtrot/ -o Mogtrot-0.2.zip HEAD
+.busted export-ignore
+.gitattributes export-ignore
+.luacheckrc export-ignore
+.pkgmeta export-ignore
+spec export-ignore
