@@ -2,12 +2,13 @@
 ## Title: Mogtrot
 ## Notes: Categorised transmog outfit picker with linked mounts. Open anywhere, click to wear.
 ## Author: Bitrot-Aegwynn
-## Version: 0.2
+## Version: @project-version@
 ## License: MIT
 ## SavedVariables: MogtrotDB
 ## SavedVariablesPerCharacter: MogtrotCharDB
 ## IconTexture: Interface\Icons\INV_Chest_Cloth_17
 ## X-Category: Collections
+## X-Curse-Project-ID: 1645181
 
 Tree.lua
 Addon.lua

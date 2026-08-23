@@ -1,0 +1,140 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+die() {
+  printf 'release: %s\n' "$*" >&2
+  exit 1
+}
+
+step() {
+  printf '\n==> %s\n' "$*"
+}
+
+[[ $# -eq 0 || ( $# -eq 1 && $1 == "--help" ) ]] || die "usage: scripts/release"
+if [[ ${1:-} == "--help" ]]; then
+  printf 'Run scripts/release to publish the next version.\n'
+  exit 0
+fi
+
+script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+repo_root=$(git -C "$script_dir/.." rev-parse --show-toplevel 2>/dev/null) || die "not inside a Git repository"
+cd "$repo_root"
+
+[[ $(git branch --show-current) == "master" ]] || die "release from master"
+[[ -z $(git status --porcelain) ]] || die "working tree is not clean"
+[[ -f .github/workflows/release.yml ]] || die "release workflow is missing"
+[[ -f .pkgmeta ]] || die ".pkgmeta is missing"
+grep -qx '## Version: @project-version@' Mogtrot.toc || die "Mogtrot.toc must use @project-version@"
+
+step "Fetching origin/master and tags"
+git fetch --quiet origin master --tags || die "fetch failed; if SSH asked, touch the YubiKey and retry"
+
+head=$(git rev-parse HEAD)
+origin_head=$(git rev-parse origin/master)
+[[ $head == "$origin_head" ]] || die "master must exactly match origin/master"
+
+interface=$(awk -F ': *' '$1 == "## Interface" { print $2; exit }' Mogtrot.toc |
+  tr ',' '\n' |
+  tr -d ' ' |
+  grep -E '^[0-9]+$' |
+  sort -n |
+  tail -1)
+[[ -n $interface ]] || die "Mogtrot.toc has no numeric Interface version"
+
+wow_major=$((interface / 10000))
+wow_minor=$(((interface / 100) % 100))
+wow_patch=$((interface % 100))
+wow_version="$wow_major.$wow_minor.$wow_patch"
+
+last_version=$(git tag --list "$wow_version-*" |
+  grep -E "^${wow_version//./\\.}-[0-9]+$" |
+  sort -t- -k2,2n |
+  tail -1 || true)
+
+if [[ -n $last_version ]]; then
+  release_number=${last_version##*-}
+  version="$wow_version-$((release_number + 1))"
+else
+  version="$wow_version-1"
+fi
+
+printf '\nCurrent WoW release: %s\n' "$wow_version"
+printf 'Next Mogtrot release: %s\n' "$version"
+
+[[ -z $(git tag --list "$version") ]] || die "$version already exists locally"
+set +e
+git ls-remote --exit-code --tags origin "refs/tags/$version" >/dev/null 2>&1
+remote_tag_status=$?
+set -e
+case $remote_tag_status in
+  0) die "$version already exists on origin" ;;
+  2) ;;
+  *) die "could not check tags on origin" ;;
+esac
+
+for command in lua5.1 luac5.1 luajit xmllint unzip git; do
+  command -v "$command" >/dev/null || die "required command not found: $command"
+done
+
+step "Checking Lua and XML"
+for file in ./*.lua; do
+  luac5.1 -p "$file"
+  luajit -bl "$file" >/dev/null
+done
+xmllint --noout ./*.xml
+
+step "Running tests"
+if command -v busted-5.1 >/dev/null; then
+  busted-5.1
+elif command -v busted >/dev/null; then
+  busted
+elif [[ -f /usr/lib/luarocks/rocks-5.1/busted/2.3.0-1/bin/busted ]]; then
+  lua5.1 /usr/lib/luarocks/rocks-5.1/busted/2.3.0-1/bin/busted
+else
+  die "Busted for Lua 5.1 was not found"
+fi
+
+tmp_dir=$(mktemp -d)
+trap 'command rm -rf -- "$tmp_dir"' EXIT
+
+if command -v luacheck >/dev/null; then
+  step "Checking lint errors"
+  set +e
+  luacheck . --no-color >"$tmp_dir/luacheck.log" 2>&1
+  lint_status=$?
+  set -e
+  cat "$tmp_dir/luacheck.log"
+  if (( lint_status != 0 )) && ! grep -Eq 'Total: [0-9]+ warnings / 0 errors' "$tmp_dir/luacheck.log"; then
+    die "luacheck found errors"
+  fi
+fi
+
+step "Inspecting the release archive"
+archive="$tmp_dir/Mogtrot-$version.zip"
+git archive --format=zip --prefix=Mogtrot/ --output="$archive" HEAD
+entries="$tmp_dir/archive-entries"
+unzip -Z1 "$archive" >"$entries"
+
+for required in Mogtrot/Mogtrot.toc Mogtrot/Core.lua Mogtrot/SettingsUI.xml Mogtrot/Bindings.xml; do
+  grep -qx "$required" "$entries" || die "archive has no ${required#Mogtrot/}"
+done
+if grep -Eq '^Mogtrot/(spec/|scripts/|\.github/|\.busted$|\.luacheckrc$|\.pkgmeta$)' "$entries"; then
+  die "archive contains development files"
+fi
+if grep -Ev '^Mogtrot/' "$entries" | grep -q .; then
+  die "archive contains files outside the Mogtrot directory"
+fi
+
+printf '\nPreflight passed for %s at %s.\n' "$version" "${head:0:12}"
+printf 'Type %s to create and push the release tag: ' "$version"
+read -r confirmation
+[[ $confirmation == "$version" ]] || die "confirmation did not match; nothing was published"
+
+git tag -a "$version" -m "Mogtrot $version"
+if ! git push origin "$version"; then
+  printf 'release: push failed; local tag %s remains.\n' "$version" >&2
+  printf 'After resolving the problem, run: git push origin %s\n' "$version" >&2
+  exit 1
+fi
+
+printf 'Published %s. GitHub Actions will package and upload the release.\n' "$version"

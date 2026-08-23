@@ -4,6 +4,8 @@ enable-nolib-creation: no
 
 ignore:
   - .busted
+  - .github
   - .luacheckrc
   - .pkgmeta
+  - scripts
   - spec
