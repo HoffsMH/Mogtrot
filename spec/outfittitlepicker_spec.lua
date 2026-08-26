@@ -22,6 +22,7 @@ describe("OutfitTitlePicker", function()
 
 	it("uses Blizzard's trailing-space convention when there is no placeholder", function()
 		assert.equals("Corporal Bitrot", Picker.DisplayName("Corporal ", "Bitrot"))
+		assert.equals("Anub' Bitrot", Picker.DisplayName("Anub'", "Bitrot"))
 		assert.equals("Bitrot, Champion of the Naaru",
 			Picker.DisplayName("Champion of the Naaru", "Bitrot"))
 	end)

@@ -20,6 +20,32 @@ local function NewController(active)
 end
 
 describe("OutfitTitleController", function()
+	it("keeps the outfit preview beside its title picker", function()
+		local config, shown, hidden
+		local controller = Controller.New({
+			model = { Get = function() return {} end }, char = {},
+			picker = { BuildItems = function() return {} end },
+			getNumTitles = function() return 0 end,
+			isTitleKnown = function() return false end,
+			getTitleName = function() end,
+			playerName = function() return "Bitrot" end,
+			outfitName = function() return "Jester" end,
+			openSearchPicker = function(value) config = value end,
+			showOutfitPreview = function(owner, outfitID, label)
+				shown = { owner, outfitID, label }
+			end,
+			hideOutfitPreview = function() hidden = true end,
+		})
+
+		controller:OpenPicker(37)
+		local owner = {}
+		config.onOpen(owner)
+		config.onClose()
+
+		assert.same({ owner, 37, "Choosing titles for Jester" }, shown)
+		assert.is_true(hidden)
+	end)
+
 	it("rotates during a Mogtrot outfit click", function()
 		local active = { value = 7 }
 		local controller, set = NewController(active)

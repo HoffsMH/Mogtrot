@@ -26,6 +26,7 @@ function MainWindowUI.Attach(Addon, deps)
 	assert(type(ClearOutfitTitles) == "function", "MainWindowUI requires clearOutfitTitles")
 	local UI, MainWindow = ns.UI, ns.UI.MainWindow
 	local NEW_CATEGORY_NAME = Tree.NEW_CATEGORY_NAME
+	local CategoryColor = ns.CategoryColor
 
 	local function CategoryPath(catID)
 		return Tree.CategoryPath(MogtrotCharDB, catID)
@@ -361,6 +362,27 @@ function MainWindowUI.Attach(Addon, deps)
 		MenuUtil.CreateContextMenu(header, function(_owner, root)
 			root:CreateTitle(cat.name)
 
+			root:CreateButton("Change color", function()
+				local original = CategoryColor.Normalize(cat.color)
+				local function Apply(r, g, b)
+					if Tree.SetCategoryColor(MogtrotCharDB, catID, r, g, b) then
+						Addon:Refresh()
+					end
+				end
+				ColorPickerFrame:SetupColorPickerAndShow({
+					r = original.r,
+					g = original.g,
+					b = original.b,
+					hasOpacity = false,
+					swatchFunc = function()
+						Apply(ColorPickerFrame:GetColorRGB())
+					end,
+					cancelFunc = function()
+						Apply(original.r, original.g, original.b)
+					end,
+				})
+			end)
+
 			root:CreateButton("Add sub-category", function()
 				Addon:CreateCategory(NEW_CATEGORY_NAME, catID, true)
 			end)
@@ -425,19 +447,67 @@ function MainWindowUI.Attach(Addon, deps)
 	frame.Title:SetJustifyH("LEFT")
 	frame.Title:SetWordWrap(false)
 
+	local function StyleHeaderControl(button, width, atlas, label)
+		button:SetSize(width, MainWindow.HeaderButtonHeight)
+		button.Highlight = button:CreateTexture(nil, "BACKGROUND")
+		button.Highlight:SetAllPoints()
+		button.Highlight:SetColorTexture(1, 1, 1, 0.08)
+		button.Highlight:Hide()
+
+		button.Icon = button:CreateTexture(nil, "ARTWORK")
+		button.Icon:SetSize(MainWindow.HeaderControlIconSize,
+			MainWindow.HeaderControlIconSize)
+		button.Icon:SetPoint("LEFT", 2, 0)
+		button.Icon:SetAtlas(atlas, false)
+		button.Icon:SetVertexColor(0.75, 0.75, 0.75)
+
+		button.Text = button:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+		button.Text:SetPoint("LEFT", button.Icon, "RIGHT", 3, 0)
+		button.Text:SetText(label)
+		button.Text:SetTextColor(0.75, 0.75, 0.75)
+	end
+
+	local function HeaderControlEnter(button)
+		button.Highlight:Show()
+		button.Icon:SetVertexColor(1, 0.82, 0)
+		button.Text:SetTextColor(1, 0.82, 0)
+	end
+
+	local function HeaderControlLeave(button)
+		button.Highlight:Hide()
+		button.Icon:SetVertexColor(0.75, 0.75, 0.75)
+		button.Text:SetTextColor(0.75, 0.75, 0.75)
+		GameTooltip:Hide()
+	end
+
+	frame.PinsButton = CreateFrame("Button", nil, frame)
+	StyleHeaderControl(frame.PinsButton, 42, "auctionhouse-icon-favorite", "Pins")
+	frame.PinsButton.Icon:SetSize(12, 12)
+	frame.PinsButton:SetScript("OnClick", function() Addon:OpenMountPins() end)
+	frame.PinsButton:SetScript("OnEnter", function(self)
+		HeaderControlEnter(self)
+		GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+		GameTooltip:SetText("Pinned mounts")
+		GameTooltip:AddLine("View and edit mounts used across outfits.", 0.6, 0.6, 0.6)
+		GameTooltip:Show()
+	end)
+	frame.PinsButton:SetScript("OnLeave", function(self)
+		HeaderControlLeave(self)
+	end)
+
 	frame.CloseButton = CreateFrame("Button", nil, frame, "UIPanelCloseButton")
-	frame.CloseButton:SetPoint("TOPRIGHT", 0, 0)
+	frame.CloseButton:SetPoint("TOPRIGHT", -UI.CloseButtonInset, -UI.CloseButtonInset)
 
 	frame.NewCategoryButton = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
+	frame.NewCategoryButton:SetNormalFontObject(GameFontHighlightSmall)
+	frame.NewCategoryButton:SetHighlightFontObject(GameFontHighlightSmall)
+	frame.NewCategoryButton:SetDisabledFontObject(GameFontDisableSmall)
 	frame.NewCategoryButton:SetText("Add category")
-	-- Width from the label rather than a guess, so the button never crops its text
-	-- and never leaves a gap when the wording changes.
-		frame.NewCategoryButton:SetSize(frame.NewCategoryButton:GetTextWidth() + 20, MainWindow.HeaderButtonHeight)
 	local newCategoryLabel = frame.NewCategoryButton:GetFontString()
 	newCategoryLabel:ClearAllPoints()
 	newCategoryLabel:SetAllPoints()
 	newCategoryLabel:SetJustifyH("CENTER")
-	frame.NewCategoryButton:SetPoint("LEFT", frame.Title, "RIGHT", 4, 0)
+	frame.NewCategoryButton:SetSize(frame.NewCategoryButton:GetTextWidth() + 16, 16)
 	frame.NewCategoryButton:SetScript("OnClick", function()
 		Addon:CreateCategory(NEW_CATEGORY_NAME, nil, true)
 	end)
@@ -630,15 +700,32 @@ function MainWindowUI.Attach(Addon, deps)
 		.. "you are wearing - the same thing the summon keybinding does.")
 	frame.SummonDrag:SetPoint("TOPRIGHT", frame.MacroDrag, "TOPLEFT", -4, 0)
 
-	frame.SettingsButton = CreateFrame("Button", nil, frame)
-		frame.SettingsButton:SetSize(MainWindow.HeaderButtonHeight, MainWindow.HeaderButtonHeight)
-		frame.SettingsButton:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -26, -UI.Pad + 1)
+	local ACTION_SLOT_COUNT = 180
 
-	frame.SettingsButton.Icon = frame.SettingsButton:CreateTexture(nil, "ARTWORK")
-	frame.SettingsButton.Icon:SetAllPoints()
-	frame.SettingsButton.Icon:SetTexCoord(0.07, 0.93, 0.07, 0.93)
-	frame.SettingsButton.Icon:SetTexture(136243)
+	local function ActionBarCommands()
+		return Macro.ActionBarCommands(ACTION_SLOT_COUNT, GetActionInfo,
+			AccountMacroBody)
+	end
+
+	function Addon:MacroDragControlsShown()
+		return MogtrotDB and MogtrotDB.showMacroDragControls == true
+	end
+
+	function Addon:SetMacroDragControlsShown(shown)
+		MogtrotDB.showMacroDragControls = shown and true or nil
+		self:UpdateMacroDragControls()
+	end
+
+	frame.SettingsButton = CreateFrame("Button", nil, frame)
+	StyleHeaderControl(frame.SettingsButton, 64, "GM-icon-settings", "Settings")
+	frame.SettingsButton.Icon:SetTexture("Interface\\WorldMap\\GEAR_64GREY")
+	frame.SettingsButton.Icon:SetTexCoord(0, 1, 0, 1)
+	frame.SettingsButton.Icon:SetSize(MainWindow.HeaderControlIconSize,
+		MainWindow.HeaderControlIconSize)
+	frame.SettingsButton:SetPoint("RIGHT", frame.CloseButton, "LEFT",
+		-MainWindow.HeaderControlGap, 0)
 	frame.SettingsButton.Icon:SetVertexColor(0.4, 0.4, 0.4)
+	frame.SettingsButton.Text:SetTextColor(0.4, 0.4, 0.4)
 	frame.SettingsButton:Disable()
 	frame.SettingsButton:SetScript("OnClick", function()
 		if Addon.settingsCategory and Settings and Settings.OpenToCategory then
@@ -646,22 +733,47 @@ function MainWindowUI.Attach(Addon, deps)
 		end
 	end)
 	frame.SettingsButton:SetScript("OnEnter", function(self)
-		self.Icon:SetVertexColor(1, 1, 1)
+		HeaderControlEnter(self)
 		GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
 		GameTooltip:SetText("Mogtrot settings")
 		GameTooltip:Show()
 	end)
 	frame.SettingsButton:SetScript("OnLeave", function(self)
-		self.Icon:SetVertexColor(0.75, 0.75, 0.75)
-		GameTooltip:Hide()
+		HeaderControlLeave(self)
 	end)
 
 
 	frame.SearchBox = CreateFrame("EditBox", nil, frame, "SearchBoxTemplate")
 	frame.SearchBox:SetHeight(20)
 	frame.SearchBox:SetAutoFocus(false)
-		frame.SearchBox:SetPoint("TOPLEFT", frame, "TOPLEFT", UI.Pad + 6, -(UI.Pad + 18))
-	frame.SearchBox:SetPoint("TOPRIGHT", frame.SummonDrag, "TOPLEFT", -6, 0)
+	frame.SearchBox:SetPoint("TOPLEFT", frame, "TOPLEFT", UI.Pad + 6, -(UI.Pad + 18))
+
+	function Addon:UpdateMacroDragControls()
+		local forceShown = self:MacroDragControlsShown()
+		local placed = ActionBarCommands()
+		local openShown = forceShown or not placed[Macro.OPEN]
+		local summonShown = forceShown or not placed[Macro.SUMMON]
+		frame.MacroDrag:SetShown(openShown)
+		frame.SummonDrag:SetShown(summonShown)
+		frame.SearchBox:ClearAllPoints()
+		frame.SearchBox:SetPoint("TOPLEFT", frame, "TOPLEFT", UI.Pad + 6,
+			-(UI.Pad + 18))
+		if summonShown then
+			frame.SearchBox:SetPoint("TOPRIGHT", frame.SummonDrag, "TOPLEFT", -6, 0)
+		elseif openShown then
+			frame.SearchBox:SetPoint("TOPRIGHT", frame.MacroDrag, "TOPLEFT", -6, 0)
+		else
+			frame.SearchBox:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -UI.Pad,
+				-(UI.Pad + 18))
+		end
+	end
+
+	local macroControlEvents = CreateFrame("Frame")
+	macroControlEvents:RegisterEvent("ACTIONBAR_SLOT_CHANGED")
+	macroControlEvents:RegisterEvent("UPDATE_MACROS")
+	macroControlEvents:SetScript("OnEvent", function()
+		if MogtrotDB then Addon:UpdateMacroDragControls() end
+	end)
 	if frame.SearchBox.Instructions then
 		frame.SearchBox.Instructions:SetText("Search outfits and categories")
 	end
@@ -674,13 +786,30 @@ function MainWindowUI.Attach(Addon, deps)
 		Addon:Refresh()
 	end)
 
+	frame.HideEmptyCategories = CreateFrame("CheckButton", nil, frame,
+		"UICheckButtonTemplate")
+	frame.HideEmptyCategories:SetSize(18, 18)
+	frame.HideEmptyCategories:SetPoint("TOPLEFT", frame.SearchBox, "BOTTOMLEFT", -4, -1)
+	frame.HideEmptyCategories.Label = frame.HideEmptyCategories:CreateFontString(nil,
+		"OVERLAY", "GameFontHighlightSmall")
+	frame.HideEmptyCategories.Label:SetPoint("LEFT", frame.HideEmptyCategories,
+		"RIGHT", 2, 0)
+	frame.HideEmptyCategories.Label:SetText("Hide empty categories")
+	frame.HideEmptyCategories:SetHitRectInsets(0,
+		-(frame.HideEmptyCategories.Label:GetStringWidth() + 2), 0, 0)
+	frame.HideEmptyCategories:SetScript("OnClick", function(self)
+		MogtrotDB.hideEmptyCategories = self:GetChecked() and true or false
+		Addon:Refresh()
+	end)
+
 	frame.Notice = frame:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
 		frame.Notice:SetPoint("BOTTOMLEFT", UI.Pad, 8)
 		frame.Notice:SetPoint("BOTTOMRIGHT", -UI.Pad, 8)
 	frame.Notice:SetJustifyH("LEFT")
 
 	Addon.listBox = CreateFrame("Frame", nil, frame, "WowScrollBoxList")
-		Addon.listBox:SetPoint("TOPLEFT", frame, "TOPLEFT", UI.Pad, -(UI.Pad + 18 + MainWindow.SearchRowHeight))
+		Addon.listBox:SetPoint("TOPLEFT", frame, "TOPLEFT", UI.Pad,
+			-(UI.Pad + 18 + MainWindow.SearchRowHeight))
 	-- Width is fixed because the window only resizes vertically; the 10px gutter is the bar.
 		Addon.listBox:SetSize(MainWindow.Width - 2 * UI.Pad - 10, MainWindow.MinListHeight)
 
@@ -968,21 +1097,12 @@ function MainWindowUI.Attach(Addon, deps)
 	-- option either, since the template's own OnClick has to stay untainted.
 	local blizzardListButton = CreateFrame("Button", "MogtrotBlizzardList", frame,
 		"SecureHandlerClickTemplate")
-		blizzardListButton:SetSize(MainWindow.HeaderButtonHeight, MainWindow.HeaderButtonHeight)
-	blizzardListButton:SetPoint("RIGHT", frame.SettingsButton, "LEFT", -4, 0)
+	StyleHeaderControl(blizzardListButton, 68, "lootroll-icon-transmog", "Blizzard")
+	blizzardListButton:SetPoint("RIGHT", frame.SettingsButton, "LEFT",
+		-MainWindow.HeaderControlGap, 0)
 	blizzardListButton:RegisterForClicks("AnyUp")
-
-	blizzardListButton.Icon = blizzardListButton:CreateTexture(nil, "ARTWORK")
-	blizzardListButton.Icon:SetAllPoints()
-	blizzardListButton.Icon:SetTexCoord(0.07, 0.93, 0.07, 0.93)
-	-- Blizzard's own transmogrify icon, the one their transmogrifier UI uses, so the
-	-- button reads as "their window" rather than as another Mogtrot control. Falls
-	-- back to the equip spell's icon if the art is ever renamed.
-	blizzardListButton.Icon:SetTexture("Interface\\Icons\\INV_Misc_EngGizmos_19")
-	if not blizzardListButton.Icon:GetTexture() then
-		blizzardListButton.Icon:SetTexture(C_Spell.GetSpellTexture(EQUIP_SPELL_ID))
-	end
-	blizzardListButton.Icon:SetVertexColor(0.75, 0.75, 0.75)
+	frame.PinsButton:SetPoint("RIGHT", blizzardListButton, "LEFT",
+		-(MainWindow.HeaderControlGap + 3), 0)
 	blizzardListButton:SetAttribute("_onclick", [[
 		local f = self:GetFrameRef("transmog")
 		if not f then return end
@@ -1003,7 +1123,7 @@ function MainWindowUI.Attach(Addon, deps)
 		end
 	end)
 	blizzardListButton:SetScript("OnEnter", function(self)
-		self.Icon:SetVertexColor(1, 1, 1)
+		HeaderControlEnter(self)
 		GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
 		GameTooltip:SetText("Blizzard's outfit list")
 		GameTooltip:AddLine("Locking, renaming and icons only work there. No NPC needed.",
@@ -1011,15 +1131,16 @@ function MainWindowUI.Attach(Addon, deps)
 		GameTooltip:Show()
 	end)
 	local function LayoutTitleBar()
-		local rightControls = 26 + MainWindow.HeaderButtonHeight * 2 + 4 + 8
+		local rightControls = frame.CloseButton:GetWidth()
+			+ frame.PinsButton:GetWidth() + blizzardListButton:GetWidth()
+			+ frame.SettingsButton:GetWidth() + MainWindow.HeaderControlGap * 3 + 3
+			+ UI.CloseButtonInset
 		local available = MainWindow.Width - UI.Pad - rightControls
-			- frame.NewCategoryButton:GetWidth() - 4
 		frame.Title:SetWidth(math.max(20, math.min(frame.Title:GetStringWidth(), available)))
 	end
 
 	blizzardListButton:SetScript("OnLeave", function(self)
-		self.Icon:SetVertexColor(0.75, 0.75, 0.75)
-		GameTooltip:Hide()
+		HeaderControlLeave(self)
 	end)
 
 	-- Built by hand rather than with GameTooltip:SetOutfit, whose "right click to lock"
@@ -1084,9 +1205,9 @@ function MainWindowUI.Attach(Addon, deps)
 		if MogtrotDB.announceEnabled ~= false then
 			GameTooltip:AddLine("Shift-click to wear and announce it in /say", 0.6, 0.6, 0.6)
 		end
-		GameTooltip:AddLine("... on the right opens this outfit's menu", 0.6, 0.6, 0.6)
+		GameTooltip:AddLine("|cffffd100\"...\"|r on the right opens this outfit's menu",
+			0.6, 0.6, 0.6)
 		GameTooltip:AddLine("Drag to reorder", 0.6, 0.6, 0.6)
-		GameTooltip:AddLine("Lock from Blizzard's outfit list - no NPC needed", 0.5, 0.5, 0.5)
 		GameTooltip:Show()
 	end
 
@@ -1301,16 +1422,16 @@ function MainWindowUI.Attach(Addon, deps)
 		row.MenuButton.Text = row.MenuButton:CreateFontString(nil, "OVERLAY", "GameFontNormal")
 		row.MenuButton.Text:SetAllPoints()
 		row.MenuButton.Text:SetText("...")
-		row.MenuButton.Text:SetTextColor(0.7, 0.7, 0.7)
+		row.MenuButton.Text:SetTextColor(1, 0.82, 0)
 		row.MenuButton:SetScript("OnClick", function(self)
 			local parent = self:GetParent()
 			if parent.outfitID then ShowOutfitMenu(parent) end
 		end)
 		row.MenuButton:SetScript("OnEnter", function(self)
-			self.Text:SetTextColor(1, 1, 1)
+			self.Text:SetTextColor(1, 0.92, 0.35)
 		end)
 		row.MenuButton:SetScript("OnLeave", function(self)
-			self.Text:SetTextColor(0.7, 0.7, 0.7)
+			self.Text:SetTextColor(1, 0.82, 0)
 		end)
 
 		row:SetScript("OnEnter", Row_OnEnter)
@@ -1415,9 +1536,7 @@ function MainWindowUI.Attach(Addon, deps)
 			if not firstMountID or mountID < firstMountID then firstMountID = mountID end
 		end
 
-		-- The slot is always shown, so an outfit with no mounts is an empty square to
-		-- click rather than nothing at all. Pooled rows arrive carrying the last
-		-- outfit's state, so both branches have to set everything.
+		-- Pooled rows arrive carrying the previous outfit's icon and count.
 		row.MountButton:Show()
 		if firstMountID then
 			local _name, _spellID, mountIcon = C_MountJournal.GetMountInfoByID(firstMountID)
@@ -1426,8 +1545,10 @@ function MainWindowUI.Attach(Addon, deps)
 			row.MountCount:SetText(mountCount > 1 and mountCount or "")
 			row.MountCount:SetShown(mountCount > 1)
 		else
-			row.MountIcon:Hide()
-			row.MountCount:Hide()
+			row.MountIcon:SetTexture(MacroIcon(Macro.SUMMON))
+			row.MountIcon:Show()
+			row.MountCount:SetText(0)
+			row.MountCount:Show()
 		end
 
 		local titleCount = CountOutfitTitles(info.outfitID)
@@ -1481,6 +1602,9 @@ function MainWindowUI.Attach(Addon, deps)
 			self.clearRow.Icon:SetTexture("Interface\\Icons\\INV_Shirt_White_01")
 			self.clearRow.Name:SetText("Show equipped gear")
 			self.clearRow.Name:SetTextColor(0.7, 0.7, 0.7)
+			self.clearRow.Name:ClearAllPoints()
+			self.clearRow.Name:SetPoint("LEFT", self.clearRow.Icon, "RIGHT", 16, 0)
+			self.clearRow.Name:SetPoint("RIGHT", frame.NewCategoryButton, "LEFT", -4, 0)
 			self.clearRow.MenuButton:Hide()
 			self.clearRow.LockOverlay:Hide()
 			-- "Show equipped gear" is not an outfit, so it has no mount slot and nothing
@@ -1492,6 +1616,8 @@ function MainWindowUI.Attach(Addon, deps)
 			self.clearRow:SetAttribute("action", "clear")
 			self.clearRow.Cooldown:Clear()
 			self.clearRow:Show()
+			frame.NewCategoryButton:SetPoint("RIGHT", self.clearRow, "RIGHT", -4, 0)
+			frame.NewCategoryButton:SetFrameLevel(self.clearRow:GetFrameLevel() + 2)
 		end
 		return self.clearRow
 	end
@@ -1576,10 +1702,14 @@ function MainWindowUI.Attach(Addon, deps)
 		header:SetScript("OnDragStart", Header_OnDragStart)
 		header:SetScript("OnDragStop", Header_OnDragStop)
 		header:SetScript("OnEnter", function(self)
-			self.Background:SetColorTexture(0.35, 0.35, 0.42, 0.8)
+			local cat = MogtrotCharDB.cats[self.catID]
+			local color = CategoryColor.Normalize(cat and cat.color)
+			self.Background:SetColorTexture(color.r, color.g, color.b, 0.8)
 		end)
 		header:SetScript("OnLeave", function(self)
-			self.Background:SetColorTexture(0.25, 0.25, 0.3, 0.7)
+			local cat = MogtrotCharDB.cats[self.catID]
+			local color = CategoryColor.Normalize(cat and cat.color)
+			self.Background:SetColorTexture(color.r, color.g, color.b, 0.55)
 		end)
 
 		return header
@@ -1602,7 +1732,8 @@ function MainWindowUI.Attach(Addon, deps)
 		-- move that category to a different frame, so the choice is made per row, not once.
 		header.Name:SetText(self.editing == entry.catID and "" or cat.name)
 		header.Count:SetText(Tree.CountOutfits(MogtrotCharDB, entry.catID))
-		header.Background:SetColorTexture(0.25, 0.25, 0.3, 0.7)
+		local color = CategoryColor.Normalize(cat.color)
+		header.Background:SetColorTexture(color.r, color.g, color.b, 0.55)
 		header:SetAlpha(1)
 	end
 
@@ -1765,7 +1896,8 @@ function MainWindowUI.Attach(Addon, deps)
 			-(UI.Pad + 18 + MainWindow.SearchRowHeight + contentHeight))
 
 		-- Constant: chrome + list budget + the pinned row + footer.
-		frame:SetHeight(UI.Pad + 18 + MainWindow.SearchRowHeight + contentHeight + MainWindow.RowHeight + 26)
+		frame:SetHeight(UI.Pad + 18 + MainWindow.SearchRowHeight
+			+ contentHeight + MainWindow.RowHeight + 26)
 	end
 
 	function Addon:UpdateNotice()
@@ -1869,6 +2001,8 @@ function MainWindowUI.Attach(Addon, deps)
 	frame:SetScript("OnShow", function()
 		-- Combat may show the prepared window, but cannot rebuild its protected rows.
 		if InCombatLockdown() then return end
+		Addon:UpdateMacroDragControls()
+		frame.HideEmptyCategories:SetChecked(MogtrotDB.hideEmptyCategories)
 		Addon:Refresh()
 		Addon:SetCombatDimmed(false)
 	end)
@@ -1880,7 +2014,6 @@ function MainWindowUI.Attach(Addon, deps)
 		Addon:HidePreview()
 		frame.SearchBox:SetText("")
 		Addon.searchText = nil
-		Addon.scrollToTop = true
 	end)
 
 

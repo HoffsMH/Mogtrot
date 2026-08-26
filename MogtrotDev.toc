@@ -1,14 +1,13 @@
 ## Interface: 120007, 120100
-## Title: Mogtrot
-## Notes: Categorised transmog outfit picker with linked mounts. Open anywhere, click to wear.
+## Title: Mogtrot Dev
+## Notes: Development checkout of Mogtrot.
 ## Author: Bitrot-Aegwynn
-## Version: @project-version@
+## Version: development
 ## License: MIT
-## SavedVariables: MogtrotDB
-## SavedVariablesPerCharacter: MogtrotCharDB
-## IconTexture: Interface\AddOns\Mogtrot\Art\Mogtrot
+## SavedVariables: MogtrotDevDB
+## SavedVariablesPerCharacter: MogtrotDevCharDB
+## IconTexture: Interface\AddOns\MogtrotDev\Art\Mogtrot
 ## X-Category: Collections
-## X-Curse-Project-ID: 1645181
 
 StartupGuard.lua
 CategoryColor.lua

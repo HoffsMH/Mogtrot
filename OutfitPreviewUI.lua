@@ -1,14 +1,12 @@
 local _, ns = ...
+local OutfitPreviewRender = ns.OutfitPreviewRender
 
 -- Controls the outfit preview beside the main window and the outfit preview
 -- attached to the mount picker window.
 local OutfitPreviewUI = {}
 ns.OutfitPreviewUI = OutfitPreviewUI
 
-local function ApplyPendingLook(model)
-	local look = model.pendingLook
-	if not look then return end
-
+local function ApplyLook(model, look)
 	model:Undress()
 	for slotID, entry in pairs(look) do
 		model:SetItemTransmogInfo(
@@ -42,13 +40,10 @@ local function BuildOutfitPreview(name, parent)
 end
 
 local function RenderOutfitPreview(preview, outfitID)
-	preview.outfitID = outfitID
-	preview.renderToken = (preview.renderToken or 0) + 1
-	local token = preview.renderToken
 	local look = MogtrotCharDB.looks and MogtrotCharDB.looks[outfitID]
 	if not look then
-		preview.renderedOutfitID = nil
-		preview.Model.pendingLook = nil
+		preview.outfitID = outfitID
+		preview.renderToken = (preview.renderToken or 0) + 1
 		preview.Model:Hide()
 		preview.Message:SetText("Wear this outfit once and its look is captured here.")
 		preview.Message:Show()
@@ -57,58 +52,10 @@ local function RenderOutfitPreview(preview, outfitID)
 
 	preview.Message:Hide()
 	preview.Model:Show()
-	if preview.renderedOutfitID == outfitID and preview.Model.unitLoaded then return end
-
-	local model = preview.Model
-	model.pendingLook = look
-	if model.unitLoaded then
-		ApplyPendingLook(model)
-		preview.renderedOutfitID = outfitID
-		return
-	end
-
-	local function OnReady(m)
-		if preview.outfitID ~= outfitID or preview.renderToken ~= token
-			or m.pendingLook ~= look then return end
-
-		local function PaintLoadedLook()
-			if preview.outfitID ~= outfitID or preview.renderToken ~= token
-				or m.pendingLook ~= look then return end
-			ApplyPendingLook(m)
-			m.unitLoaded = true
-			preview.renderedOutfitID = outfitID
-			m:SetModelAlpha(1)
-			preview.Message:Hide()
-		end
-
-		-- A new player model can finish dressing after OnModelLoaded.
-		C_Timer.After(0, PaintLoadedLook)
-		C_Timer.After(0.1, PaintLoadedLook)
-	end
-
-	model:SetScript("OnModelLoaded", OnReady)
-	model:SetModelAlpha(0)
-	preview.Message:SetText("Loading...")
-	preview.Message:Show()
-	model:ClearModel()
-	model:SetUnit("player")
-	model:SetPortraitZoom(0)
-	model:SetPosition(0, 0, 0)
-	model:SetFacing(0.4)
-
-	C_Timer.After(0.5, function()
-		if preview.outfitID == outfitID and preview.renderToken == token
-			and model.pendingLook == look then
-			if model.unitLoaded then
-				ApplyPendingLook(model)
-				preview.renderedOutfitID = outfitID
-				model:SetModelAlpha(1)
-				preview.Message:Hide()
-			else
-				OnReady(model)
-			end
-		end
-	end)
+	OutfitPreviewRender.Render(preview, outfitID, look, {
+		applyLook = ApplyLook,
+		after = C_Timer.After,
+	})
 end
 
 local function BuildDockGlow(owner)
@@ -147,7 +94,7 @@ local function PaintDockGlow(glow, side)
 end
 
 function OutfitPreviewUI.Attach(Addon, callbacks)
-	local previewFrame, mountEditPreview, mountPicker
+	local previewFrame, mountEditPreview, searchPickerPreview, mountPicker
 	local mountEditDock = { side = "right", position = 0.5 }
 	local mainWindow = callbacks.mainWindow
 
@@ -260,6 +207,22 @@ function OutfitPreviewUI.Attach(Addon, callbacks)
 		return mountEditPreview
 	end
 
+	local function EnsureSearchPickerPreview()
+		if searchPickerPreview then return searchPickerPreview end
+		searchPickerPreview = BuildOutfitPreview("MogtrotTitlePickerPreview", UIParent)
+		searchPickerPreview:SetFrameStrata("HIGH")
+		searchPickerPreview.Model:ClearAllPoints()
+		searchPickerPreview.Model:SetPoint("TOPLEFT", 8, -8)
+		searchPickerPreview.Model:SetPoint("BOTTOMRIGHT", -8, 28)
+		searchPickerPreview.Label = searchPickerPreview:CreateFontString(
+			nil, "OVERLAY", "GameFontHighlightSmall")
+		searchPickerPreview.Label:SetPoint("BOTTOMLEFT", 10, 9)
+		searchPickerPreview.Label:SetPoint("BOTTOMRIGHT", -10, 9)
+		searchPickerPreview.Label:SetJustifyH("CENTER")
+		searchPickerPreview.Label:SetWordWrap(false)
+		return searchPickerPreview
+	end
+
 	function Addon:ShowPreview(outfitID)
 		if not outfitID or not MogtrotDB.previewEnabled or InCombatLockdown() then return end
 		if self:IsPickerOpen() then
@@ -282,7 +245,6 @@ function OutfitPreviewUI.Attach(Addon, callbacks)
 	function Addon:HidePreview()
 		if not previewFrame then return end
 		previewFrame:Hide()
-		previewFrame.renderedOutfitID = nil
 		previewFrame.outfitID = nil
 	end
 
@@ -311,15 +273,29 @@ function OutfitPreviewUI.Attach(Addon, callbacks)
 			mountEditPreview:Hide()
 			for _, texture in ipairs(mountEditPreview.DockGlow or {}) do texture:Hide() end
 		end,
+		ShowSearchPickerPreview = function(owner, outfitID, label)
+			local preview = EnsureSearchPickerPreview()
+			preview.Label:SetText(label)
+			preview:ClearAllPoints()
+			local fitsRight = (owner:GetRight() or 0) + preview:GetWidth() <= UIParent:GetRight()
+			if fitsRight then
+				preview:SetPoint("TOPLEFT", owner, "TOPRIGHT", 0, 0)
+			else
+				preview:SetPoint("TOPRIGHT", owner, "TOPLEFT", 0, 0)
+			end
+			preview:Show()
+			RenderOutfitPreview(preview, outfitID)
+		end,
+		HideSearchPickerPreview = function()
+			if searchPickerPreview then searchPickerPreview:Hide() end
+		end,
 		SetMountPicker = function(picker) mountPicker = picker end,
 		OnCaptured = function(outfitID)
 			if previewFrame and previewFrame.outfitID == outfitID then
-				previewFrame.renderedOutfitID = nil
 				if previewFrame:IsShown() then Addon:ShowPreview(outfitID) end
 			end
 			if mountEditPreview and mountEditPreview:IsShown()
 				and mountEditPreview.outfitID == outfitID then
-				mountEditPreview.renderedOutfitID = nil
 				RenderOutfitPreview(mountEditPreview, outfitID)
 			end
 		end,

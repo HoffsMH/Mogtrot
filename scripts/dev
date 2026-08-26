@@ -1,0 +1,125 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+die() {
+  printf 'dev: %s\n' "$*" >&2
+  exit 1
+}
+
+usage() {
+  printf 'Usage: scripts/dev {status|backup}\n'
+}
+
+[[ $# -eq 1 ]] || {
+  usage >&2
+  exit 2
+}
+
+command=$1
+case $command in
+  status|backup) ;;
+  *) usage >&2; exit 2 ;;
+esac
+
+script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+repo_root=$(git -C "$script_dir/.." rev-parse --show-toplevel 2>/dev/null) || die "not inside a Git repository"
+
+if [[ -n ${MOGTROT_RETAIL_DIR:-} ]]; then
+  retail_dir=$MOGTROT_RETAIL_DIR
+else
+  candidates=(
+    "$HOME/Games/battlenet/drive_c/Program Files (x86)/World of Warcraft/_retail_"
+    "$HOME/Games/World of Warcraft/_retail_"
+  )
+  retail_dir=
+  for candidate in "${candidates[@]}"; do
+    if [[ -d $candidate ]]; then
+      retail_dir=$candidate
+      break
+    fi
+  done
+fi
+
+[[ -n $retail_dir && -d $retail_dir ]] || die "retail install not found; set MOGTROT_RETAIL_DIR"
+
+addons_dir="$retail_dir/Interface/AddOns"
+release_dir="$addons_dir/Mogtrot"
+dev_dir="$addons_dir/MogtrotDev"
+wtf_dir="$retail_dir/WTF"
+backup_dir="$retail_dir/.mogtrot-savedvariables"
+
+path_exists() {
+  [[ -e $1 || -L $1 ]]
+}
+
+prune_saved_variable_backups() {
+  local backups remove_count i
+
+  shopt -s nullglob
+  backups=("$backup_dir"/Mogtrot-*.tar.gz)
+  shopt -u nullglob
+  remove_count=$(( ${#backups[@]} - 5 ))
+  for (( i = 0; i < remove_count; i++ )); do
+    command rm -- "${backups[$i]}"
+  done
+}
+
+is_repo_link() {
+  [[ -L $1 && $(readlink -f -- "$1") == "$repo_root" ]]
+}
+
+backup_saved_variables() {
+  mkdir -p -- "$backup_dir"
+  timestamp=$(date '+%Y%m%d-%H%M%S')
+  archive="$backup_dir/Mogtrot-$timestamp-$$.tar.gz"
+
+  files=()
+  if [[ -d $wtf_dir ]]; then
+    while IFS= read -r -d '' file; do
+      files+=("${file#"$wtf_dir"/}")
+    done < <(find "$wtf_dir" -type f \
+      \( -name 'Mogtrot.lua' -o -name 'Mogtrot.lua.bak' \
+      -o -name 'MogtrotDev.lua' -o -name 'MogtrotDev.lua.bak' \) -print0)
+  fi
+
+  if (( ${#files[@]} == 0 )); then
+    printf 'No Mogtrot SavedVariables found.\n'
+    return
+  fi
+
+  tar -C "$wtf_dir" -czf "$archive" -- "${files[@]}"
+  tar -tzf "$archive" >/dev/null || die "SavedVariables backup could not be verified"
+  prune_saved_variable_backups
+  printf 'SavedVariables backup: %s\n' "$archive"
+}
+
+require_wow_stopped() {
+  if pgrep -fi 'Wow(\.exe)?([[:space:]]|$)' >/dev/null; then
+    die "World of Warcraft is running; exit the client before backing up"
+  fi
+}
+
+if [[ $command == status ]]; then
+  if is_repo_link "$dev_dir" && ! path_exists "$release_dir"; then
+    printf 'Mode: development\n'
+  elif [[ -d $release_dir && ! -L $release_dir ]] && ! path_exists "$dev_dir"; then
+    printf 'Mode: CurseForge release\n'
+  elif is_repo_link "$release_dir" && ! path_exists "$dev_dir"; then
+    printf 'Mode: legacy development link\n'
+  elif path_exists "$release_dir" && path_exists "$dev_dir"; then
+    printf 'Mode: both installed; in-game enablement is character-specific\n'
+  else
+    printf 'Mode: incomplete\n'
+  fi
+  path_exists "$release_dir" && printf 'Mogtrot: %s\n' "$release_dir"
+  path_exists "$dev_dir" && printf 'MogtrotDev: %s -> %s\n' "$dev_dir" "$(readlink -f -- "$dev_dir")"
+  printf 'SavedVariables backups: %s\n' "$backup_dir"
+  exit 0
+fi
+
+require_wow_stopped
+
+if [[ $command == backup ]]; then
+  backup_saved_variables
+  exit 0
+fi

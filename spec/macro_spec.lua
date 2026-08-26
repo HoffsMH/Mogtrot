@@ -249,6 +249,55 @@ describe("Macro.CanOffer", function()
 	end)
 end)
 
+describe("Macro.ActionBarCommands", function()
+	local function Actions(entries)
+		return function(slot)
+			local entry = entries[slot]
+			if not entry then return nil end
+			return entry.kind, entry.id
+		end
+	end
+
+	it("reports each Mogtrot macro independently", function()
+		local bodies = {
+			[4] = "#mogtrot:open\n/click MogtrotToggle",
+			[9] = "#mogtrot:summon\n/click MogtrotSummon",
+		}
+		local actions = {
+			[2] = { kind = "macro", id = 9 },
+			[17] = { kind = "macro", id = 4 },
+		}
+		local found = Macro.ActionBarCommands(24, Actions(actions), Reader(bodies))
+		assert.is_true(found.open)
+		assert.is_true(found.summon)
+	end)
+
+	it("does not report the absent macro", function()
+		local bodies = {
+			[4] = "#mogtrot:open\n/click MogtrotToggle",
+			[9] = "#mogtrot:summon\n/click MogtrotSummon",
+		}
+		local actions = { [2] = { kind = "macro", id = 4 } }
+		local found = Macro.ActionBarCommands(24, Actions(actions), Reader(bodies))
+		assert.is_true(found.open)
+		assert.is_nil(found.summon)
+	end)
+
+	it("ignores non-macro actions with a matching numeric id", function()
+		local bodies = {
+			[4] = "#mogtrot:open\n/click MogtrotToggle",
+			[9] = "#mogtrot:summon\n/click MogtrotSummon",
+		}
+		local actions = {
+			[2] = { kind = "spell", id = 9 },
+			[17] = { kind = "macro", id = 4 },
+		}
+		local found = Macro.ActionBarCommands(24, Actions(actions), Reader(bodies))
+		assert.is_true(found.open)
+		assert.is_nil(found.summon)
+	end)
+end)
+
 describe("Macro.IconToApply", function()
 	it("updates a reused open macro whose icon differs", function()
 		assert.equals(2869702, Macro.IconToApply("open", 136243, 2869702))

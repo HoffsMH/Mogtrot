@@ -20,14 +20,17 @@ local GRID_COLS = 3
 local GRID_ROWS = 3
 local CARD_W = 210
 local CARD_H = 226
-local CARD_GAP = 8
+local CARD_GAP = 10
+local GRID_PAD = 8
 local CARD_LINK_COLUMNS = 2
 local CARD_LINK_ROWS = 3
 local CARD_LINK_ICONS = CARD_LINK_COLUMNS * CARD_LINK_ROWS
 local CARD_NUDGE = 40
 local PICKER_HEADER = 72
 local PICKER_FOOTER = 26
-local PICKER_BAR_GUTTER = 26
+local PICKER_BAR_GUTTER = 24
+local PICKER_BAR_GAP = 8
+local PICKER_HEADER_CONTROL_H = 26
 
 local PICKER_MIN_SCALE = 1
 local PICKER_MAX_SCALE = 1.8
@@ -44,8 +47,10 @@ end
 
 local function PickerSize()
 	local cardW, cardH = CardSize()
-	return UI.Pad * 2 + GRID_COLS * cardW + (GRID_COLS - 1) * CARD_GAP + PICKER_BAR_GUTTER,
-		PICKER_HEADER + GRID_ROWS * cardH + (GRID_ROWS - 1) * CARD_GAP + PICKER_FOOTER
+	return UI.Pad * 2 + GRID_PAD * 2 + GRID_COLS * cardW
+			+ (GRID_COLS - 1) * CARD_GAP + PICKER_BAR_GUTTER,
+		PICKER_HEADER + GRID_PAD * 2 + GRID_ROWS * cardH
+			+ (GRID_ROWS - 1) * CARD_GAP + PICKER_FOOTER
 end
 function Addon:IsPickerOpen()
 	return mountPicker ~= nil and mountPicker:IsShown()
@@ -241,12 +246,6 @@ local function BuildMountCard(card)
 	card.Name:SetWordWrap(false)
 	card.Name:SetMaxLines(1)
 
-	card.Check = card:CreateTexture(nil, "OVERLAY")
-	card.Check:SetSize(18, 18)
-	card.Check:SetPoint("CENTER", card.Icon, "CENTER", 0, 0)
-	card.Check:SetTexture("Interface\\Buttons\\UI-CheckBox-Check")
-	card.Check:Hide()
-
 	card.PinButton = CreateFrame("Button", nil, card)
 	card.PinButton:SetSize(22, 22)
 	card.PinButton:SetPoint("TOPRIGHT", -1, -1)
@@ -363,11 +362,11 @@ end
 
 local LINK_LINE_H = 17
 
-function Addon:PaintCardLinks(card, outfitIDs)
+function Addon:PaintCardLinks(card, outfitIDs, excludedOutfitID)
 	local names = {}
 	for _, outfitID in ipairs(outfitIDs or {}) do
 		local info = self.outfitsByID and self.outfitsByID[outfitID]
-		if info then
+		if info and outfitID ~= excludedOutfitID then
 			table.insert(names, {
 				name = info.name,
 				icon = info.icon,
@@ -467,7 +466,7 @@ function Addon:PaintMountCard(card, mount)
 	if mountPicker.mode == "pins" then
 		self:PaintCardLinks(card, {})
 	else
-		self:PaintCardLinks(card, card.linkedOutfits)
+		self:PaintCardLinks(card, card.linkedOutfits, mountPicker.outfitID)
 	end
 
 	local isChosen = mountPicker.selected[mount.mountID] == true
@@ -488,7 +487,6 @@ function Addon:PaintMountCard(card, mount)
 		if not card.PinDays:HasFocus() then card.PinDays:SetText(tostring(days)) end
 	end
 
-	card.Check:SetShown(isChosen)
 	if isChosen then
 		card:SetCardColors(0.18, 0.14, 0.02, 0.9, 1, 0.82, 0)
 	else
@@ -531,12 +529,9 @@ local function ChoosePickerOutfit()
 		searchHint = "Search outfits",
 		emptyText = "No outfits match.",
 		items = OutfitChoices(),
-		buttons = { {
-			text = "Choose", width = 90,
-			onClick = function(chosen)
-				if chosen[1] then Addon:SetMountPickerOutfit(chosen[1].outfitID) end
-			end,
-		} },
+		onChoose = function(chosen)
+			Addon:SetMountPickerOutfit(chosen.outfitID)
+		end,
 	})
 end
 
@@ -546,7 +541,7 @@ function Addon:SetMountPickerOutfit(outfitID)
 	mountPicker.outfitID = outfitID
 	mountPicker.mounts, mountPicker.typeNote = CollectMounts(outfitID)
 	ShowMountEditPreview(outfitID)
-	self:RefreshMountPicker()
+	self:RefreshMountPicker({ preserveScrollOffset = true })
 end
 
 function Addon:SetMountPickerPinMode()
@@ -576,10 +571,6 @@ function Addon:PaintPickerChrome()
 	mountPicker.ModeButton.Text:SetText(mountPicker.mode == "pins" and "Switch to outfit"
 		or "Switch to pins")
 	mountPicker.TitleIcon:Hide()
-	mountPicker.PinShuffle:SetShown(mountPicker.mode ~= "pins")
-	if mountPicker.mode ~= "pins" then
-		mountPicker.PinShuffle:SetChecked(not MogtrotCharDB.noPinnedShuffle[mountPicker.outfitID])
-	end
 end
 
 function Addon:ApplyPickerSize()
@@ -595,9 +586,11 @@ function Addon:ApplyPickerSize()
 	ApplyMountEditDock()
 end
 -- Rebuilds the visible grid after search or filter controls change.
-function Addon:RefreshMountPicker()
+function Addon:RefreshMountPicker(options)
 	if not mountPicker or not mountPicker:IsShown() then return end
 	if InCombatLockdown() then return end
+	local scrollOffset = options and options.preserveScrollOffset
+		and mountPicker.Box:GetDerivedScrollOffset()
 
 	RefreshPickerState()
 
@@ -625,6 +618,7 @@ function Addon:RefreshMountPicker()
 	end
 	mountPicker.scrollToTop = nil
 	mountPicker.Box:SetDataProvider(CreateDataProvider(matches), retain)
+	if scrollOffset then mountPicker.Box:ScrollToOffset(scrollOffset, 0, 0) end
 
 	self:PaintPickerChrome()
 end
@@ -687,15 +681,20 @@ local function EnsureMountPicker()
 	mountPicker.Title:SetPoint("LEFT", mountPicker.TitleIcon, "RIGHT", 6, -1)
 
 	mountPicker.CloseButton = CreateFrame("Button", nil, mountPicker, "UIPanelCloseButton")
-	mountPicker.CloseButton:SetPoint("TOPRIGHT", 0, 0)
+	mountPicker.CloseButton:SetSize(PICKER_HEADER_CONTROL_H, PICKER_HEADER_CONTROL_H)
+	mountPicker.CloseButton:SetPoint("TOPRIGHT", -UI.CloseButtonInset, -UI.CloseButtonInset)
 
 	mountPicker.Title:SetPoint("RIGHT", mountPicker.CloseButton, "LEFT", -4, 0)
 	mountPicker.Title:SetJustifyH("LEFT")
 	mountPicker.Title:SetWordWrap(false)
 
-	mountPicker.HeaderClick = CreateFrame("Button", nil, mountPicker, "BackdropTemplate")
-	mountPicker.HeaderClick:SetPoint("TOPLEFT", UI.Pad - 3, -UI.Pad + 4)
-	mountPicker.HeaderClick:SetSize(310, 28)
+	mountPicker.HeaderRow = CreateFrame("Frame", nil, mountPicker)
+	mountPicker.HeaderRow:SetPoint("TOPLEFT", UI.Pad, -UI.Pad)
+	mountPicker.HeaderRow:SetPoint("RIGHT", mountPicker.CloseButton, "LEFT", -8, 0)
+	mountPicker.HeaderRow:SetHeight(PICKER_HEADER_CONTROL_H)
+
+	mountPicker.HeaderClick = CreateFrame("Button", nil, mountPicker.HeaderRow, "BackdropTemplate")
+	mountPicker.HeaderClick:SetSize(210, PICKER_HEADER_CONTROL_H)
 	mountPicker.HeaderClick:SetBackdrop({ edgeFile = "Interface\\Buttons\\WHITE8X8", edgeSize = 1 })
 	mountPicker.HeaderClick:SetBackdropBorderColor(1, 0.82, 0, 1)
 	mountPicker.HeaderClick:SetScript("OnClick", function()
@@ -712,39 +711,27 @@ local function EnsureMountPicker()
 		GameTooltip:Show()
 	end)
 	mountPicker.HeaderClick:SetScript("OnLeave", GameTooltip_Hide)
-	mountPicker.HeaderPrefix = mountPicker:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-	mountPicker.HeaderPrefix:SetPoint("TOPLEFT", UI.Pad, -UI.Pad - 4)
-	mountPicker.HeaderClick:ClearAllPoints()
+	mountPicker.HeaderPrefix = mountPicker.HeaderRow:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+	mountPicker.HeaderPrefix:SetPoint("LEFT", 0, 0)
 	mountPicker.HeaderClick:SetPoint("LEFT", mountPicker.HeaderPrefix, "RIGHT", 6, 0)
-	mountPicker.HeaderClick:SetSize(210, 28)
 	mountPicker.HeaderName = mountPicker.HeaderClick:CreateFontString(nil, "OVERLAY", "GameFontNormal")
 	mountPicker.HeaderName:SetPoint("CENTER", 10, 0)
 	mountPicker.HeaderIcon = mountPicker.HeaderClick:CreateTexture(nil, "ARTWORK")
 	mountPicker.HeaderIcon:SetSize(22, 22)
 	mountPicker.HeaderIcon:SetPoint("RIGHT", mountPicker.HeaderName, "LEFT", -5, 0)
 	mountPicker.HeaderIcon:SetTexCoord(0.07, 0.93, 0.07, 0.93)
-	mountPicker.HeaderCount = mountPicker:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+	mountPicker.HeaderCount = mountPicker.HeaderRow:CreateFontString(nil, "OVERLAY", "GameFontNormal")
 	mountPicker.HeaderCount:SetPoint("LEFT", mountPicker.HeaderClick, "RIGHT", 6, 0)
-	mountPicker.ModeButton = CreateFrame("Button", nil, mountPicker, "BackdropTemplate")
-	mountPicker.ModeButton:SetSize(120, 26)
+	mountPicker.ModeButton = CreateFrame("Button", nil, mountPicker.HeaderRow, "BackdropTemplate")
+	mountPicker.ModeButton:SetSize(120, PICKER_HEADER_CONTROL_H)
 	mountPicker.ModeButton:SetPoint("LEFT", mountPicker.HeaderCount, "RIGHT", 6, 0)
 	mountPicker.ModeButton:SetBackdrop({ edgeFile = "Interface\\Buttons\\WHITE8X8", edgeSize = 1 })
 	mountPicker.ModeButton:SetBackdropBorderColor(1, 0.82, 0, 1)
-	mountPicker.ModeButton.Text = mountPicker.ModeButton:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+	mountPicker.ModeButton.Text = mountPicker.ModeButton:CreateFontString(nil, "OVERLAY", "GameFontNormal")
 	mountPicker.ModeButton.Text:SetPoint("CENTER")
 	mountPicker.ModeButton:SetScript("OnClick", function()
 		if mountPicker.mode == "pins" then ChoosePickerOutfit()
 		else Addon:SetMountPickerPinMode() end
-	end)
-
-	mountPicker.PinShuffle = CreateFrame("CheckButton", nil, mountPicker,
-		"UICheckButtonTemplate")
-	mountPicker.PinShuffle:SetSize(22, 22)
-	mountPicker.PinShuffle:SetPoint("TOPRIGHT", mountPicker.CloseButton, "BOTTOMRIGHT", -6, -2)
-	mountPicker.PinShuffle.Text:SetText("Shuffle in pinned mounts")
-	mountPicker.PinShuffle.Text:SetPoint("RIGHT", mountPicker.PinShuffle, "LEFT", -2, 0)
-	mountPicker.PinShuffle:SetScript("OnClick", function(self)
-		MogtrotCharDB.noPinnedShuffle[mountPicker.outfitID] = self:GetChecked() and nil or true
 	end)
 
 	mountPicker.SearchBox = CreateFrame("EditBox", nil, mountPicker, "SearchBoxTemplate")
@@ -864,11 +851,12 @@ local function EnsureMountPicker()
 		-(UI.Pad + PICKER_BAR_GUTTER), PICKER_FOOTER)
 
 	mountPicker.Bar = CreateFrame("EventFrame", nil, mountPicker, "MinimalScrollBar")
-	mountPicker.Bar:SetPoint("TOPLEFT", mountPicker.Box, "TOPRIGHT", 12, 0)
-	mountPicker.Bar:SetPoint("BOTTOMLEFT", mountPicker.Box, "BOTTOMRIGHT", 12, 0)
+	mountPicker.Bar:SetPoint("TOPLEFT", mountPicker.Box, "TOPRIGHT", PICKER_BAR_GAP, 0)
+	mountPicker.Bar:SetPoint("BOTTOMLEFT", mountPicker.Box, "BOTTOMRIGHT", PICKER_BAR_GAP, 0)
 
 	local cardW, cardH = CardSize()
-	mountPicker.View = CreateScrollBoxListGridView(GRID_COLS, 0, 0, 0, 0, CARD_GAP, CARD_GAP)
+	mountPicker.View = CreateScrollBoxListGridView(GRID_COLS,
+		GRID_PAD, GRID_PAD, GRID_PAD, GRID_PAD, CARD_GAP, CARD_GAP)
 	mountPicker.View:SetElementSize(cardW, cardH)
 	mountPicker.View:SetPanExtent(cardH)
 	mountPicker.View:SetElementInitializer("Button", function(card, mount)
@@ -945,6 +933,12 @@ function Addon:OpenMountPicker(outfitID)
 	if InCombatLockdown() then return end
 
 	local picker = EnsureMountPicker()
+	if picker:IsShown() then
+		self:SetMountPickerOutfit(outfitID)
+		picker.SearchBox:SetFocus()
+		return
+	end
+
 	picker.outfitID = outfitID
 	picker.mode = "outfit"
 	picker.mounts, picker.typeNote = CollectMounts(outfitID)
@@ -956,6 +950,25 @@ function Addon:OpenMountPicker(outfitID)
 	self:HidePreview()
 	picker:Show()
 	ShowMountEditPreview(outfitID)
+	self:RefreshMountPicker()
+	picker.SearchBox:SetFocus()
+end
+
+function Addon:OpenMountPins()
+	if InCombatLockdown() then return end
+
+	local picker = EnsureMountPicker()
+	picker.outfitID = nil
+	picker.mode = "pins"
+	picker.mounts, picker.typeNote = CollectMounts(nil)
+	picker.filter = ns.MountFilter.DefaultState(ValidMountTypes())
+	picker.Filter:ValidateResetState()
+	picker.SearchBox:SetText("")
+	picker.scrollToTop = true
+
+	self:HidePreview()
+	picker:Show()
+	HideMountEditPreview()
 	self:RefreshMountPicker()
 	picker.SearchBox:SetFocus()
 end

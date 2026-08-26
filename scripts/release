@@ -119,7 +119,10 @@ for required in Mogtrot/Mogtrot.toc Mogtrot/Core.lua Mogtrot/SettingsUI.xml Mogt
   grep -qx "$required" "$entries" || die "archive has no ${required#Mogtrot/}"
 done
 if grep -Eq '^Mogtrot/(spec/|scripts/|\.github/|\.busted$|\.luacheckrc$|\.pkgmeta$)' "$entries"; then
-  die "archive contains development files"
+	die "archive contains development files"
+fi
+if grep -Eq '^Mogtrot/(CONTRIBUTING.md|MogtrotDev.toc)$' "$entries"; then
+	die "archive contains development-only files"
 fi
 if grep -Ev '^Mogtrot/' "$entries" | grep -q .; then
   die "archive contains files outside the Mogtrot directory"

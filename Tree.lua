@@ -10,6 +10,7 @@ if type(ns) ~= "table" then ns = {} end
 --   db.roots    = { id... }              ordered top-level categories
 --   db.assign   = { [outfitID] = catID }
 local Tree = {}
+local CategoryColor = ns.CategoryColor or require("CategoryColor")
 
 Tree.UNSORTED_NAME = "Unsorted"
 Tree.NEW_CATEGORY_NAME = "New category"
@@ -25,7 +26,7 @@ function Tree.NewCategoryID(db)
 	return id
 end
 
-function Tree.CreateCategoryNode(db, name, parentID, protected)
+function Tree.CreateCategoryNode(db, name, parentID, protected, random)
 	local id = Tree.NewCategoryID(db)
 	db.cats[id] = {
 		id = id,
@@ -35,6 +36,7 @@ function Tree.CreateCategoryNode(db, name, parentID, protected)
 		items = {},
 		collapsed = false,
 		protected = protected or nil,
+		color = CategoryColor.Random(random),
 	}
 	return id
 end
@@ -91,8 +93,8 @@ function Tree.UniqueName(db, base)
 	return base .. " " .. n
 end
 
-function Tree.CreateCategory(db, name, parentID)
-	local id = Tree.CreateCategoryNode(db, name or Tree.NEW_CATEGORY_NAME, parentID, false)
+function Tree.CreateCategory(db, name, parentID, random)
+	local id = Tree.CreateCategoryNode(db, name or Tree.NEW_CATEGORY_NAME, parentID, false, random)
 
 	if parentID then
 		db.cats[parentID].collapsed = false
@@ -112,6 +114,14 @@ function Tree.RenameCategory(db, catID, name)
 	if name == "" then return true, false end
 	cat.name = name
 	return true, true
+end
+
+function Tree.SetCategoryColor(db, catID, r, g, b)
+	local cat = db.cats[catID]
+	local color = { r = r, g = g, b = b }
+	if not cat or not CategoryColor.IsValid(color) then return false end
+	cat.color = color
+	return true
 end
 
 function Tree.DeleteCategory(db, catID)
@@ -241,12 +251,13 @@ end
 -- all of its contents come along so "tier" shows everything filed under Tier, or if
 -- anything beneath it matches, in which case only the matching rows are kept as
 -- context. Collapsed state is ignored during a search so hits are never hidden.
-function Tree.BuildEntries(db, outfitsByID, query)
+function Tree.BuildEntries(db, outfitsByID, query, hideEmpty)
 	outfitsByID = outfitsByID or {}
 
 	local function BuildCategoryEntries(catID, depth, inheritedMatch)
 		local cat = db.cats[catID]
 		if not cat or depth >= Tree.MAX_DEPTH then return nil, false end
+		if hideEmpty and Tree.CountOutfits(db, catID) == 0 then return nil, false end
 
 		local selfMatch = inheritedMatch or (not query) or Tree.NameMatches(cat.name, query)
 		local contents, matchedBelow = {}, false

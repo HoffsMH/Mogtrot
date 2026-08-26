@@ -49,6 +49,7 @@ function SettingsUI.Attach(Addon, deps)
 	local FALLBACK_MODES = deps.fallbackModes
 	local frame = deps.frame
 	local Titles = deps.titles
+	local Minimap = deps.minimap
 
 function Addon:RegisterTitleFallbackSetting(category, layout)
 	if not Titles or not Settings.CreateDropdown then return end
@@ -146,7 +147,25 @@ function Addon:RegisterSettings()
 		Settings.VarType.Boolean, "Match target's mount", false, GetTargetMatch, SetTargetMatch)
 	Settings.CreateCheckbox(category, targetSetting,
 		"When a targeted player is on a mount you own and can use here, summon the same mount. "
-		.. "Restricted or unidentified targets use the normal outfit and fallback choices.")
+			.. "Restricted or unidentified targets use the normal outfit and fallback choices.")
+
+	local macroControlsSetting = Settings.RegisterProxySetting(category,
+		"MOGTROT_SHOW_MACRO_CONTROLS", Settings.VarType.Boolean,
+		"Show action-bar setup buttons", false,
+		function() return Addon:MacroDragControlsShown() end,
+		function(value) Addon:SetMacroDragControlsShown(value) end)
+	Settings.CreateCheckbox(category, macroControlsSetting,
+		"Shows the two drag buttons in the outfit window. Turn this on to add or repair "
+			.. "Mogtrot action-bar macros.")
+
+	local minimapSetting = Settings.RegisterProxySetting(category,
+		"MOGTROT_SHOW_MINIMAP_BUTTON", Settings.VarType.Boolean,
+		"Show minimap button", true,
+		function() return Minimap:IsShown() end,
+		function(value) Minimap:SetShown(value) end)
+	Settings.CreateCheckbox(category, minimapSetting,
+		"Shows a draggable button around the minimap. Mogtrot remains available in "
+			.. "Blizzard's addon compartment when hidden.")
 
 	local autoPinSetting = Settings.RegisterProxySetting(category, "MOGTROT_AUTO_PIN_MOUNTS",
 		Settings.VarType.Boolean, "Automatically pin new mounts", true,

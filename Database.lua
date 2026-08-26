@@ -2,13 +2,14 @@ local _, ns = ...
 if type(ns) ~= "table" then ns = {} end
 
 local Tree = ns.Tree or require("Tree")
+local CategoryColor = ns.CategoryColor or require("CategoryColor")
 
 -- Initializes and upgrades the account settings and per-character outfit data
 -- saved by Mogtrot.
 local Database = {}
 
 local ACCOUNT_VERSION = 1
-local CHAR_VERSION = 3
+local CHAR_VERSION = 4
 local DEFAULT_CATEGORIES = { "Tier", "Non-tier sets", "Simple" }
 
 local function InitAccount(account)
@@ -16,6 +17,9 @@ local function InitAccount(account)
 	if account.autoPinNewMounts == nil then account.autoPinNewMounts = true end
 	account.autoPinNewMountDays = account.autoPinNewMountDays or 7
 	if account.previewEnabled == nil then account.previewEnabled = true end
+	if account.hideEmptyCategories == nil then account.hideEmptyCategories = false end
+	account.minimap = account.minimap or {}
+	if account.minimap.hide == nil then account.minimap.hide = false end
 	account.titleFallbackMode = account.titleFallbackMode or "random"
 end
 
@@ -67,9 +71,12 @@ function Database.MigrateOrInit(account, char)
 	local hadSavedTree = HasSavedTree(char)
 	InitCharacter(char)
 
-	local knownCharacter = char.version == 2 or char.version == CHAR_VERSION
+	local knownCharacter = char.version == 2 or char.version == 3 or char.version == CHAR_VERSION
 	local legacyCharacter = char.version == nil and hadSavedTree
 	if knownCharacter or legacyCharacter then
+		for _, cat in pairs(char.cats) do
+			cat.color = CategoryColor.Normalize(cat.color)
+		end
 		for outfitID, value in pairs(char.mounts) do
 			if type(value) == "number" then
 				char.mounts[outfitID] = { [value] = true }

@@ -12,6 +12,7 @@ local function CleanName(name, playerName)
 	end
 	if playerName == "" then return name:match("^%s*(.-)%s*$") end
 	if name:find("%s$") then return name .. playerName end
+	if name:find("'$") then return name .. " " .. playerName end
 	if name:find("^[%s,]") then return playerName .. name end
 	return playerName .. ", " .. name
 end

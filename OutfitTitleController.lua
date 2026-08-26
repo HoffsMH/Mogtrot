@@ -39,6 +39,8 @@ function OutfitTitleController.New(deps)
 		openSearchPicker = deps.openSearchPicker,
 		refresh = deps.refresh,
 		outfitName = deps.outfitName,
+		showOutfitPreview = deps.showOutfitPreview,
+		hideOutfitPreview = deps.hideOutfitPreview,
 		canSetTitle = deps.canSetTitle or function() return true end,
 		playerName = deps.playerName,
 	}
@@ -93,14 +95,19 @@ function OutfitTitleController:OnOutfitClick(outfitID)
 end
 
 function OutfitTitleController:OpenPicker(outfitID)
+	local outfitName = self.outfitName(outfitID)
 	local items = self.picker.BuildItems(self.getNumTitles(), self.isTitleKnown,
 		self.getTitleName, self.model.Get(self.char, outfitID), self.playerName())
 	self.openSearchPicker({
-		title = ("Titles for %s"):format(self.outfitName(outfitID)),
+		title = ("Titles for %s"):format(outfitName),
 		searchHint = "Search titles",
 		emptyText = "No known titles match.",
 		multi = true,
 		items = items,
+		onOpen = function(owner)
+			self.showOutfitPreview(owner, outfitID, ("Choosing titles for %s"):format(outfitName))
+		end,
+		onClose = self.hideOutfitPreview,
 		buttons = {{ text = "Apply", width = 90, allowEmpty = true, onClick = function(chosen)
 			self.picker.Apply(self.model, self.char, outfitID, chosen)
 			if self.refresh then self.refresh() end
@@ -164,6 +171,8 @@ function OutfitTitleController.Attach(Addon, deps)
 		end,
 		canSetTitle = function() return not InCombatLockdown() end,
 		playerName = function() return UnitName("player") or "" end,
+		showOutfitPreview = deps.showOutfitPreview,
+		hideOutfitPreview = deps.hideOutfitPreview,
 	})
 	return controller
 end

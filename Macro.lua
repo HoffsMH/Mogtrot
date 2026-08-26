@@ -94,6 +94,18 @@ function Macro.CanOffer(count, getBody, command, maxMacros)
 	return Macro.Plan(count, getBody, command, maxMacros) ~= "full"
 end
 
+function Macro.ActionBarCommands(slotCount, getActionInfo, getBody)
+	local found = {}
+	for slot = 1, slotCount do
+		local kind, macroIndex = getActionInfo(slot)
+		if kind == "macro" then
+			local command = Macro.CommandOf(getBody(macroIndex))
+			if command then found[command] = true end
+		end
+	end
+	return found
+end
+
 function Macro.IconToApply(command, currentIcon, desiredIcon)
 	if command == Macro.OPEN and currentIcon ~= desiredIcon then
 		return desiredIcon

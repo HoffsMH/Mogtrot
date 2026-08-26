@@ -5,5 +5,7 @@
 .luacheckrc export-ignore
 .pkgmeta export-ignore
 .github export-ignore
+CONTRIBUTING.md export-ignore
+MogtrotDev.toc export-ignore
 scripts export-ignore
 spec export-ignore

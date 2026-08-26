@@ -7,5 +7,7 @@ ignore:
   - .github
   - .luacheckrc
   - .pkgmeta
+  - CONTRIBUTING.md
+  - MogtrotDev.toc
   - scripts
   - spec

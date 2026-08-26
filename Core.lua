@@ -1,4 +1,6 @@
 local ADDON_NAME, ns = ...
+if ns.Disabled then return end
+local ACCOUNT_DB_NAME, CHAR_DB_NAME = ns.StartupGuard.DatabaseNames(ADDON_NAME)
 
 -- Pure logic, listed before this file in the TOC. Everything here is the adapter:
 -- frames, the WoW API, and LiteMount.
@@ -8,6 +10,7 @@ local OutfitLint, BlizzardOutfitUI = ns.OutfitLint, ns.BlizzardOutfitUI
 local LINT_COLOURS = OutfitLint.Colours
 local MountTravelSnapshot
 local titleController
+local previewUI
 local mountPinController = ns.MountPinController.New(nil, {
 	now = time,
 	changed = function()
@@ -187,7 +190,8 @@ end
 
 -- searchText is already trimmed and lowercased by the search box, and nil when empty.
 function Addon:BuildEntries()
-	return Tree.BuildEntries(MogtrotCharDB, self.outfitsByID, self.searchText)
+	return Tree.BuildEntries(MogtrotCharDB, self.outfitsByID, self.searchText,
+		MogtrotDB.hideEmptyCategories)
 end
 
 function Addon:MeasureViewedOutfit()
@@ -321,6 +325,10 @@ end
 titleController = ns.OutfitTitleController.Attach(Addon, {
 	model = ns.OutfitTitles,
 	picker = ns.OutfitTitlePicker,
+	showOutfitPreview = function(owner, outfitID, label)
+		previewUI.ShowSearchPickerPreview(owner, outfitID, label)
+	end,
+	hideOutfitPreview = function() previewUI.HideSearchPickerPreview() end,
 })
 
 local mainWindowUI = ns.MainWindowUI.Attach(Addon, {
@@ -341,6 +349,10 @@ local mainWindowUI = ns.MainWindowUI.Attach(Addon, {
 })
 local frame = mainWindowUI.frame
 local AccountMacroCount = mainWindowUI.accountMacroCount
+local minimapButton = ns.MinimapButton.Attach(Addon, {
+	addonName = ADDON_NAME,
+	frame = frame,
+})
 
 function Addon:AnnounceOutfit(outfitID)
 	if MogtrotDB.announceEnabled == false then return end
@@ -355,7 +367,7 @@ function Addon:AnnounceOutfit(outfitID)
 	SendChatMessage(template:format(name), "SAY")
 end
 
-local previewUI = ns.OutfitPreviewUI.Attach(Addon, {
+previewUI = ns.OutfitPreviewUI.Attach(Addon, {
 	mainWindow = frame,
 })
 
@@ -540,6 +552,7 @@ ns.SettingsUI.Attach(Addon, {
 	fallbackModes = FALLBACK_MODES,
 	frame = frame,
 	titles = titleController,
+	minimap = minimapButton,
 })
 
 
@@ -548,9 +561,12 @@ eventFrame:SetScript("OnEvent", function(_, event, arg1, arg2, arg3, arg4)
 	local self = Addon
 	if event == "ADDON_LOADED" then
 		if arg1 ~= ADDON_NAME then return end
-		MogtrotDB, MogtrotCharDB = Database.MigrateOrInit(MogtrotDB, MogtrotCharDB)
+		local account, char = Database.MigrateOrInit(_G[ACCOUNT_DB_NAME], _G[CHAR_DB_NAME])
+		_G[ACCOUNT_DB_NAME], _G[CHAR_DB_NAME] = account, char
+		MogtrotDB, MogtrotCharDB = account, char
 		titleController:BindStores(MogtrotDB, MogtrotCharDB)
 		mountPinController:BindStore(MogtrotDB)
+		minimapButton:Refresh()
 
 		local pos = MogtrotDB.position
 		if pos then

@@ -6,8 +6,9 @@ describe("Database.MigrateOrInit", function()
 
 		assert.equal(1, account.version)
 		assert.is_true(account.previewEnabled)
+		assert.is_false(account.hideEmptyCategories)
 		assert.equal("random", account.titleFallbackMode)
-		assert.equal(3, char.version)
+		assert.equal(4, char.version)
 		assert.same({}, char.titles)
 		assert.same({}, char.titleRotation)
 		assert.same({ "Tier", "Non-tier sets", "Simple", "Unsorted" }, {
@@ -17,6 +18,21 @@ describe("Database.MigrateOrInit", function()
 			char.cats[char.roots[4]].name,
 		})
 		assert.is_true(char.cats[char.roots[4]].protected)
+		assert.is_table(char.cats[char.roots[1]].color)
+	end)
+
+	it("adds safe colors while migrating version 3 categories", function()
+		local old = {
+			version = 3,
+			cats = { [7] = { id = 7, name = "Kept", color = { r = 2 } } },
+			roots = { 7 },
+			assign = {},
+		}
+		local _, char = Database.MigrateOrInit({}, old)
+
+		assert.equal(4, char.version)
+		assert.is_true(char.cats[7].color.r <= 1)
+		assert.equal("Kept", char.cats[7].name)
 	end)
 
 	it("preserves an unknown newer account schema", function()
@@ -70,7 +86,7 @@ describe("Database.MigrateOrInit", function()
 		local _, char = Database.MigrateOrInit({}, old)
 
 		assert.equal(old, char)
-		assert.equal(3, char.version)
+		assert.equal(4, char.version)
 		assert.equal(cats, char.cats)
 		assert.same({ 7 }, char.roots)
 		assert.same({ [42] = 7 }, char.assign)
@@ -105,7 +121,7 @@ describe("Database.MigrateOrInit", function()
 		local account, char = Database.MigrateOrInit({}, old)
 
 		assert.equal(old, char)
-		assert.equal(3, char.version)
+		assert.equal(4, char.version)
 		assert.equal(cats, char.cats)
 		assert.same({ kept = true }, char.custom)
 		assert.same({}, char.roots)

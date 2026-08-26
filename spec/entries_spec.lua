@@ -105,6 +105,37 @@ describe("Tree.BuildEntries", function()
 		assert.same({}, Tree.BuildEntries(H.NewDB(), byID, nil))
 	end)
 
+	it("hides only category subtrees with no outfits", function()
+		local emptyParent = H.AddRoot(db, "Empty parent")
+		local emptyChild = H.AddChild(db, emptyParent, "Empty child")
+		local parentWithOutfitBelow = H.AddRoot(db, "Parent with outfit below")
+		local childWithOutfit = H.AddChild(db, parentWithOutfitBelow, "Child with outfit")
+		H.AddOutfit(db, childWithOutfit, 40)
+		byID[40] = { outfitID = 40, name = "Descendant outfit" }
+
+		local rows = H.Rows(db, Tree.BuildEntries(db, byID, nil, true))
+
+		assert.is_nil(table.concat(rows, "\n"):match("Empty parent"))
+		assert.is_nil(table.concat(rows, "\n"):match("Empty child"))
+		assert.is_truthy(table.concat(rows, "\n"):match("Parent with outfit below"))
+		assert.is_truthy(table.concat(rows, "\n"):match("Child with outfit"))
+		assert.is_truthy(table.concat(rows, "\n"):match("Descendant outfit"))
+	end)
+
+	it("composes hiding empty categories with search and collapsed state", function()
+		local empty = H.AddRoot(db, "Matching empty")
+		db.cats[tier].collapsed = true
+
+		assert.same({
+			"0 cat:Tier",
+			"1 outfit:Tier Chest",
+			"1 cat:Sub",
+			"2 outfit:Sub Robe",
+		}, H.Rows(db, Tree.BuildEntries(db, byID, "tier", true)))
+		assert.same({}, Tree.BuildEntries(db, byID, "matching empty", true))
+		assert.is_not_nil(empty)
+	end)
+
 	it("stops at the depth guard rather than following a cycle", function()
 		local cyclic = H.NewDB()
 		local a = H.AddRoot(cyclic, "A")

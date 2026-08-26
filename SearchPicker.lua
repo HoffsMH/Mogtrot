@@ -8,6 +8,7 @@ local _, ns = ...
 --
 --   items   = { { name, path, note, noteDim, divider, preselected, ...caller's keys... } }
 --   buttons = { { text, width, danger, tipTitle, tipBody, onClick(chosen) } }
+--   onChoose(item) selects one item immediately instead of showing a confirm button
 --
 -- buttons are listed left to right; Cancel is added on the right by the window.
 
@@ -74,6 +75,10 @@ local function Row_OnClick(self)
 
 	if pickerWindow.multiSelect then
 		pickerWindow.selectedItems[item] = (not pickerWindow.selectedItems[item]) or nil
+	elseif pickerWindow.onChoose then
+		pickerWindow.onChoose(item)
+		pickerWindow:Hide()
+		return
 	else
 		-- Clicking the chosen row again keeps it. A single pick answers a question
 		-- that has no useful "none of them", unlike a multi-select where zero is a
@@ -311,7 +316,7 @@ local function EnsureWindow()
 	window:SetBackdropColor(0, 0, 0, 0.94)
 
 	window.CloseButton = CreateFrame("Button", nil, window, "UIPanelCloseButton")
-	window.CloseButton:SetPoint("TOPRIGHT", 0, 0)
+	window.CloseButton:SetPoint("TOPRIGHT", -ns.UI.CloseButtonInset, -ns.UI.CloseButtonInset)
 
 	window.Title = window:CreateFontString(nil, "OVERLAY", "GameFontNormal")
 	window.Title:SetPoint("TOPLEFT", PAD, -PAD)
@@ -370,6 +375,9 @@ local function EnsureWindow()
 
 	window:SetScript("OnHide", function()
 		GameTooltip:Hide()
+		local onClose = window.onClose
+		window.onClose = nil
+		if onClose then onClose() end
 	end)
 
 	-- No secure children here, so ESC can stay registered in combat too.
@@ -390,9 +398,16 @@ end
 -- a different caller.
 function ns.OpenSearchPicker(config)
 	local win = EnsureWindow()
+	if win:IsShown() and win.onClose then
+		local onClose = win.onClose
+		win.onClose = nil
+		onClose()
+	end
 
 	win.items = config.items or {}
 	win.multiSelect = config.multi == true
+	win.onChoose = config.onChoose
+	win.onClose = config.onClose
 	win.query = nil
 
 	-- An item flagged preselected starts ticked, so the window opens showing the
@@ -418,6 +433,7 @@ function ns.OpenSearchPicker(config)
 	LayoutButtons(config.buttons or {})
 
 	win:Show()
+	if config.onOpen then config.onOpen(win) end
 	RefreshItems()
 	win.SearchBox:SetFocus()
 end
