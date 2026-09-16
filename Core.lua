@@ -11,7 +11,228 @@ local LINT_COLOURS = OutfitLint.Colours
 local MountTravelSnapshot
 local titleController
 local previewUI
-local mountPinController = ns.MountPinController.New(nil, {
+local frame
+local NO_TRANSMOG = (Constants and Constants.Transmog and Constants.Transmog.NoTransmogID) or 0
+local C_PetJournal, C_ToyBox, C_Item = _G.C_PetJournal, _G.C_ToyBox, _G.C_Item
+local OutfitLinks = ns.OutfitLinks
+local Pins = ns.Pins
+local BattlePetCollection = ns.BattlePetCollection
+local BattlePetController = ns.BattlePetController
+local HearthstoneCollection = ns.HearthstoneCollection
+local HearthstoneController = ns.HearthstoneController
+local battlePetControllerDeps
+local hearthstoneControllerDeps
+local HearthstoneDefinitions = ns.HearthstoneDefinitions
+local hearthstoneBaseline
+
+local companionReady = false
+local battlePetController
+local hearthstoneController
+local battlePetPinController
+local hearthstonePinController
+
+local function ReadActiveOutfitID()
+	return C_TransmogOutfitInfo and C_TransmogOutfitInfo.GetActiveOutfitID
+		and C_TransmogOutfitInfo.GetActiveOutfitID() or nil
+end
+
+local function CurrentOutfitID()
+	local outfitID = ReadActiveOutfitID()
+	if outfitID == nil or outfitID == NO_TRANSMOG then return nil end
+	return outfitID
+end
+
+local function HasActiveOutfit()
+	return CurrentOutfitID() ~= nil
+end
+
+local function ScheduleRead(callback)
+	C_Timer.After(0, callback)
+end
+
+local battlePetAdapter = {
+	getOwnedPetIDs = function()
+		return C_PetJournal and C_PetJournal.GetOwnedPetIDs
+			and C_PetJournal.GetOwnedPetIDs() or {}
+	end,
+	getPetInfoByID = function(guid)
+		if not (C_PetJournal and C_PetJournal.GetPetInfoByPetID) then return nil end
+		local speciesID, customName, _, _, _, displayID, isFavorite, name, icon, _, creatureID =
+			C_PetJournal.GetPetInfoByPetID(guid)
+		return {
+			speciesID = speciesID,
+			creatureID = creatureID,
+			displayID = displayID,
+			icon = icon,
+			isFavorite = isFavorite and true or false,
+			customName = customName,
+			name = name,
+		}
+	end,
+	getSummonedPetGUID = function()
+		return C_PetJournal and C_PetJournal.GetSummonedPetGUID
+			and C_PetJournal.GetSummonedPetGUID() or nil
+	end,
+	getSummonInfo = function(guid)
+		if not (C_PetJournal and C_PetJournal.GetPetSummonInfo) then
+			return false
+		end
+		return C_PetJournal.GetPetSummonInfo(guid)
+	end,
+}
+
+local hearthstoneAdapter = {
+	hasToy = function(itemID)
+		return _G.PlayerHasToy and _G.PlayerHasToy(itemID) or false
+	end,
+	getToyInfo = function(itemID)
+		if not (C_ToyBox and C_ToyBox.GetToyInfo) then return nil end
+		local first, second, third, fourth = C_ToyBox.GetToyInfo(itemID)
+		if type(first) == "number" then return second, third, fourth end
+		return first, second, third
+	end,
+	itemCount = function(itemID)
+		return C_Item and C_Item.GetItemCount and C_Item.GetItemCount(itemID) or 0
+	end,
+	totalItemCount = function(itemID)
+		return C_Item and C_Item.GetItemCount and C_Item.GetItemCount(itemID, true) or 0
+	end,
+	isEquipped = function(itemID)
+		return C_Item and C_Item.IsEquippedItem
+			and C_Item.IsEquippedItem(itemID) or false
+	end,
+	isUsable = function(itemID)
+		return C_Item and C_Item.IsUsableItem and C_Item.IsUsableItem(itemID) or false
+	end,
+	getCooldown = function(itemID)
+		if not (C_Item and C_Item.GetItemCooldown) then return nil, nil end
+		return C_Item.GetItemCooldown(itemID)
+	end,
+	getItemName = function(itemID)
+		return C_Item and C_Item.GetItemNameByID and C_Item.GetItemNameByID(itemID) or nil
+	end,
+	getItemIcon = function(itemID)
+		return C_Item and C_Item.GetItemIconByID and C_Item.GetItemIconByID(itemID) or nil
+	end,
+	-- GetItemSpell returns the spell name then its ID; both callers want one
+	-- of the two and neither wants to remember the order.
+	getItemSpellID = function(itemID)
+		local fn = C_Item and C_Item.GetItemSpell
+		if type(fn) ~= "function" then fn = _G.GetItemSpell end
+		if type(fn) ~= "function" then return nil end
+		local ok, _, spellID = pcall(fn, itemID)
+		return ok and spellID or nil
+	end,
+	getItemSpell = function(itemID)
+		local fn = C_Item and C_Item.GetItemSpell
+		if type(fn) ~= "function" then fn = _G.GetItemSpell end
+		if type(fn) ~= "function" then return nil end
+		local ok, spellID = pcall(fn, itemID)
+		return ok and spellID or nil
+	end,
+}
+
+local function PinDomain(account, name)
+	local pins = account and account.pins
+	if type(pins) ~= "table" then return nil end
+	local domain = pins[name]
+	if type(domain) ~= "table" or type(domain.records) ~= "table"
+		or domain.autoNew == nil or domain.days == nil then
+		return nil
+	end
+	return domain
+end
+
+local function CompanionSchemaSupported(account, char)
+	return type(account) == "table"
+		and PinDomain(account, "battlePets") ~= nil
+		and PinDomain(account, "hearthstones") ~= nil
+		and type(char) == "table"
+		and type(char.battlePets) == "table"
+		and type(char.hearthstones) == "table"
+		and type(char.pinOptOut) == "table"
+		and type(char.pinOptOut.battlePets) == "table"
+		and type(char.pinOptOut.hearthstones) == "table"
+		and type(char.rotations) == "table"
+		and type(char.rotations.battlePets) == "table"
+		and type(char.rotations.hearthstones) == "table"
+end
+
+local function RefreshCompanionPins()
+	if not companionReady then return end
+	local now = time()
+	if battlePetControllerDeps then
+		battlePetControllerDeps.pins =
+			Pins.ActiveSet(PinDomain(MogtrotDB, "battlePets"), now)
+	end
+	if hearthstoneControllerDeps then
+		hearthstoneControllerDeps.pins =
+			Pins.ActiveSet(PinDomain(MogtrotDB, "hearthstones"), now)
+	end
+end
+
+local function OpenBattlePetPicker(outfitID)
+	if companionReady and Addon.OpenBattlePetPicker then
+		return Addon.OpenBattlePetPicker(outfitID)
+	end
+end
+
+local function OpenHearthstonePicker(outfitID)
+	if companionReady and Addon.OpenHearthstonePicker then
+		return Addon.OpenHearthstonePicker(outfitID)
+	end
+end
+
+local function CountOutfitBattlePets(outfitID)
+	if companionReady and Addon.CountOutfitBattlePets then
+		return Addon:CountOutfitBattlePets(outfitID)
+	end
+	return nil
+end
+
+local function CountOutfitHearthstones(outfitID)
+	if companionReady and Addon.CountOutfitHearthstones then
+		return Addon:CountOutfitHearthstones(outfitID)
+	end
+	return nil
+end
+
+local function GetFirstBattlePetIcon(outfitID)
+	if companionReady and Addon.GetFirstBattlePetIcon then
+		return Addon:GetFirstBattlePetIcon(outfitID)
+	end
+end
+
+local function GetFirstHearthstoneIcon(outfitID)
+	if companionReady and Addon.GetFirstHearthstoneIcon then
+		return Addon:GetFirstHearthstoneIcon(outfitID)
+	end
+end
+
+local hearthstoneControllerProxy = {
+	PreClick = function()
+		if hearthstoneController then
+			RefreshCompanionPins()
+			return hearthstoneController.PreClick()
+		end
+	end,
+	PostClick = function()
+		if hearthstoneController then return hearthstoneController.PostClick() end
+	end,
+}
+
+local function MountPinDomain(account)
+	local pins = account and account.pins
+	if type(pins) ~= "table" then return nil end
+	local domain = pins.mounts
+	if type(domain) ~= "table" or type(domain.records) ~= "table"
+		or domain.autoNew == nil or domain.days == nil then
+		return nil
+	end
+	return domain
+end
+
+local mountPinController = ns.PinController.New(nil, {
 	now = time,
 	changed = function()
 		if Addon.Changed then Addon:Changed() end
@@ -280,7 +501,6 @@ function Addon:CopyMountsTo(fromOutfitID, toOutfitID, merge)
 	self:Changed()
 end
 
-local NO_TRANSMOG = (Constants and Constants.Transmog and Constants.Transmog.NoTransmogID) or 0
 
 local ANNOUNCE_FORMATS = {
 	"*changes into %s*",
@@ -346,8 +566,15 @@ local mainWindowUI = ns.MainWindowUI.Attach(Addon, {
 		return titleController:Copy(fromOutfitID, toOutfitID, merge)
 	end,
 	clearOutfitTitles = function(outfitID) return titleController:Clear(outfitID) end,
+	openBattlePetPicker = OpenBattlePetPicker,
+	countOutfitBattlePets = CountOutfitBattlePets,
+	getFirstBattlePetIcon = GetFirstBattlePetIcon,
+	openHearthstonePicker = OpenHearthstonePicker,
+	countOutfitHearthstones = CountOutfitHearthstones,
+	getFirstHearthstoneIcon = GetFirstHearthstoneIcon,
+	hearthstoneController = hearthstoneControllerProxy,
 })
-local frame = mainWindowUI.frame
+frame = mainWindowUI.frame
 local AccountMacroCount = mainWindowUI.accountMacroCount
 local minimapButton = ns.MinimapButton.Attach(Addon, {
 	addonName = ADDON_NAME,
@@ -544,10 +771,202 @@ function Addon:ApplyMountToOutfits(mountID, mountName, choices, chosen)
 	self:Changed()
 	if self:IsPickerOpen() then self:RepaintMountCards() end
 end
+function Addon:GetOutfitBattlePets(_self, outfitID)
+	if not companionReady or type(MogtrotCharDB) ~= "table" then return {} end
+	return MogtrotCharDB.battlePets[outfitID] or {}
+end
+function Addon:CountOutfitBattlePets(_self, outfitID)
+	if not companionReady then return 0 end
+	return OutfitLinks.Count(MogtrotCharDB.battlePets, outfitID)
+end
+
+function Addon:ToggleBattlePetLink(outfitID, guid)
+	if not companionReady or not outfitID or not guid then return false end
+	local added = OutfitLinks.Toggle(MogtrotCharDB.battlePets, outfitID, guid)
+	self:Changed()
+	return added
+end
+
+function Addon:ApplyBattlePetLinks(guid, want)
+	if not companionReady then return 0, 0 end
+	local added, removed = OutfitLinks.Apply(MogtrotCharDB.battlePets, guid, want)
+	self:Changed()
+	return added, removed
+end
+
+function Addon:GetFirstBattlePetIcon(outfitID)
+	for guid in pairs(self:GetOutfitBattlePets(outfitID)) do
+		local info = battlePetAdapter.getPetInfoByID(guid)
+		if info and info.icon then return info.icon end
+	end
+end
+function Addon:GetOutfitHearthstones(_self, outfitID)
+	if not companionReady or type(MogtrotCharDB) ~= "table" then return {} end
+	return MogtrotCharDB.hearthstones[outfitID] or {}
+end
+function Addon:CountOutfitHearthstones(_self, outfitID)
+	if not companionReady then return 0 end
+	return OutfitLinks.Count(MogtrotCharDB.hearthstones, outfitID)
+end
+
+function Addon:ToggleHearthstoneLink(outfitID, itemID)
+	if not companionReady or not outfitID or not itemID then return false end
+	local added = OutfitLinks.Toggle(MogtrotCharDB.hearthstones, outfitID, itemID)
+	self:Changed()
+	return added
+end
+
+function Addon:ApplyHearthstoneLinks(itemID, want)
+	if not companionReady then return 0, 0 end
+	local added, removed = OutfitLinks.Apply(MogtrotCharDB.hearthstones, itemID, want)
+	self:Changed()
+	return added, removed
+end
+
+function Addon:GetFirstHearthstoneIcon(outfitID)
+	for itemID in pairs(self:GetOutfitHearthstones(outfitID)) do
+		local icon = hearthstoneAdapter.getItemIcon(itemID)
+		if icon then return icon end
+	end
+end
+
+local function CompanionWarning(message)
+	if UIErrorsFrame then
+		UIErrorsFrame:AddMessage("Mogtrot: " .. message, 1, 0.3, 0.3)
+	end
+end
+
+local function AttachCompanions(account, char)
+	if not CompanionSchemaSupported(account, char) then return false end
+
+	local battlePetDomain = PinDomain(account, "battlePets")
+	local hearthstoneDomain = PinDomain(account, "hearthstones")
+	battlePetPinController = ns.PinController.New(battlePetDomain, {
+		now = time,
+		changed = function() Addon:Changed() end,
+	})
+	hearthstonePinController = ns.PinController.New(hearthstoneDomain, {
+		now = time,
+		changed = function() Addon:Changed() end,
+	})
+
+	battlePetControllerDeps = {
+		collection = battlePetAdapter,
+		links = char.battlePets,
+		pins = {},
+		pinsOptOut = char.pinOptOut.battlePets,
+		rotationStates = char.rotations.battlePets,
+		random = math.random,
+		summon = function(guid)
+			if C_PetJournal and C_PetJournal.SummonPetByGUID then
+				C_PetJournal.SummonPetByGUID(guid)
+			end
+		end,
+		hasActiveOutfit = HasActiveOutfit,
+		activeOutfitID = CurrentOutfitID,
+		readActiveOutfitID = ReadActiveOutfitID,
+		schedule = ScheduleRead,
+	}
+	battlePetController = BattlePetController.New(battlePetControllerDeps)
+
+	local hearthButton = _G["MogtrotHearthstone"]
+	if hearthButton and hearthButton.SetAttribute then
+		hearthstoneControllerDeps = {
+			registry = HearthstoneDefinitions,
+			collection = HearthstoneCollection,
+			adapter = hearthstoneAdapter,
+			links = char.hearthstones,
+			pins = {},
+			pinsOptOut = char.pinOptOut.hearthstones,
+			rotationStates = char.rotations.hearthstones,
+			random = math.random,
+			hasActiveOutfit = HasActiveOutfit,
+			activeOutfitID = CurrentOutfitID,
+			button = hearthButton,
+			combat = InCombatLockdown,
+			now = GetTime,
+			warn = CompanionWarning,
+		}
+		hearthstoneController = HearthstoneController.New(hearthstoneControllerDeps)
+	end
+
+	companionReady = true
+	RefreshCompanionPins()
+	ns.BattlePetPickerUI.Attach(Addon, {
+		collectPets = function()
+			return BattlePetCollection.OwnedRows(battlePetAdapter)
+		end,
+		account = account,
+		links = char.battlePets,
+		pinsDomain = "battlePets",
+		pinOperations = Pins,
+		getLinks = function(outfitID) return Addon:GetOutfitBattlePets(outfitID) end,
+		toggleLink = function(outfitID, guid)
+			return Addon:ToggleBattlePetLink(outfitID, guid)
+		end,
+		applyLinks = function(guid, want) return Addon:ApplyBattlePetLinks(guid, want) end,
+		outfitsByID = function() return Addon.outfitsByID or {} end,
+		getCurrentOutfit = CurrentOutfitID,
+		now = time,
+	})
+	ns.HearthstonePickerUI.Attach(Addon, {
+		registry = HearthstoneDefinitions,
+		collection = HearthstoneCollection,
+		adapter = hearthstoneAdapter,
+		links = char.hearthstones,
+		pins = hearthstoneControllerDeps and hearthstoneControllerDeps.pins,
+		pinsOptOut = char.pinOptOut.hearthstones,
+		pinOperations = Pins,
+		account = account,
+		pinsDomain = "hearthstones",
+		rotationStates = char.rotations.hearthstones,
+		random = math.random,
+		now = time,
+		combat = InCombatLockdown,
+		warn = CompanionWarning,
+		hasActiveOutfit = HasActiveOutfit,
+		activeOutfitID = CurrentOutfitID,
+		getLinks = function(outfitID) return Addon:GetOutfitHearthstones(outfitID) end,
+		toggleLink = function(outfitID, itemID)
+			return Addon:ToggleHearthstoneLink(outfitID, itemID)
+		end,
+		applyLinks = function(itemID, want)
+			return Addon:ApplyHearthstoneLinks(itemID, want)
+		end,
+		outfitsByID = function() return Addon.outfitsByID or {} end,
+		getCurrentOutfit = CurrentOutfitID,
+		buildDockGlow = previewUI.BuildDockGlow,
+		showEditPreview = previewUI.ShowEditPreview,
+		hideEditPreview = previewUI.HideMountEditPreview,
+	})
+
+	companionReady = true
+	return true
+end
+local function ResetHearthstoneBaseline()
+	if not companionReady then return end
+	hearthstoneBaseline = HearthstoneCollection.Baseline(hearthstoneAdapter,
+		HearthstoneDefinitions)
+end
+
+local function ScanHearthstoneAcquisitions()
+	if not companionReady then return end
+	if not hearthstoneBaseline then
+		ResetHearthstoneBaseline()
+		return
+	end
+	HearthstoneCollection.Acquisitions(hearthstoneAdapter, HearthstoneDefinitions,
+		hearthstoneBaseline, function(itemID)
+			hearthstonePinController:OnAcquired(itemID)
+		end, function(itemID)
+			return hearthstoneAdapter.hasToy(itemID)
+		end)
+end
 
 ns.SettingsUI.Attach(Addon, {
 	Wear = Wear,
 	Lint = Lint,
+
 	liteMountFallbackAvailable = LiteMountFallbackAvailable,
 	fallbackModes = FALLBACK_MODES,
 	frame = frame,
@@ -565,9 +984,10 @@ eventFrame:SetScript("OnEvent", function(_, event, arg1, arg2, arg3, arg4)
 		_G[ACCOUNT_DB_NAME], _G[CHAR_DB_NAME] = account, char
 		MogtrotDB, MogtrotCharDB = account, char
 		titleController:BindStores(MogtrotDB, MogtrotCharDB)
-		mountPinController:BindStore(MogtrotDB)
+		mountPinController:BindDomain(MountPinDomain(MogtrotDB))
 		minimapButton:Refresh()
 
+		AttachCompanions(MogtrotDB, MogtrotCharDB)
 		local pos = MogtrotDB.position
 		if pos then
 			frame:ClearAllPoints()
@@ -578,11 +998,20 @@ eventFrame:SetScript("OnEvent", function(_, event, arg1, arg2, arg3, arg4)
 		eventFrame:RegisterEvent("TRANSMOG_OUTFITS_CHANGED")
 		eventFrame:RegisterEvent("TRANSMOG_DISPLAYED_OUTFIT_CHANGED")
 		eventFrame:RegisterEvent("SPELL_UPDATE_COOLDOWN")
+		eventFrame:RegisterEvent("ITEM_COUNT_CHANGED")
+		eventFrame:RegisterEvent("BAG_UPDATE_COOLDOWN")
+		eventFrame:RegisterEvent("SPELL_UPDATE_USABLE")
 		eventFrame:RegisterEvent("PLAYER_REGEN_DISABLED")
 		eventFrame:RegisterEvent("PLAYER_REGEN_ENABLED")
 		eventFrame:RegisterEvent("PLAYER_ENTERING_WORLD")
 		eventFrame:RegisterEvent("PLAYER_LOGOUT")
 		eventFrame:RegisterEvent("NEW_MOUNT_ADDED")
+		eventFrame:RegisterEvent("NEW_PET_ADDED")
+		eventFrame:RegisterEvent("PET_JOURNAL_LIST_UPDATE")
+		eventFrame:RegisterEvent("NEW_TOY_ADDED")
+		eventFrame:RegisterEvent("TOYS_UPDATED")
+		eventFrame:RegisterEvent("BAG_UPDATE_DELAYED")
+		eventFrame:RegisterEvent("COMPANION_UPDATE")
 		eventFrame:RegisterUnitEvent("UNIT_SPELLCAST_SENT", "player")
 		eventFrame:RegisterUnitEvent("UNIT_SPELLCAST_START", "player")
 		eventFrame:RegisterUnitEvent("UNIT_SPELLCAST_SUCCEEDED", "player")
@@ -593,7 +1022,44 @@ eventFrame:SetScript("OnEvent", function(_, event, arg1, arg2, arg3, arg4)
 		eventFrame:RegisterEvent("VIEWED_TRANSMOG_OUTFIT_SLOT_SAVE_SUCCESS")
 
 	elseif event == "NEW_MOUNT_ADDED" then
-		mountPinController:OnNewMount(arg1)
+		mountPinController:OnAcquired(arg1)
+	elseif event == "NEW_PET_ADDED" then
+		if battlePetPinController and CompanionSchemaSupported(MogtrotDB, MogtrotCharDB) then
+			battlePetPinController:OnAcquired(arg1)
+		end
+		if Addon.IsBattlePetPickerOpen and Addon:IsBattlePetPickerOpen() then
+			Addon:RefreshBattlePetPicker()
+		end
+
+	elseif event == "PET_JOURNAL_LIST_UPDATE" then
+		if Addon.IsBattlePetPickerOpen and Addon:IsBattlePetPickerOpen() then
+			Addon:RefreshBattlePetPicker()
+		end
+
+	elseif event == "NEW_TOY_ADDED" then
+		if HearthstoneDefinitions.Lookup(arg1) and hearthstonePinController then
+			hearthstonePinController:OnAcquired(arg1)
+		end
+		if hearthstoneBaseline then hearthstoneBaseline[arg1] = true end
+		if Addon.IsHearthstonePickerOpen and Addon:IsHearthstonePickerOpen() then
+			Addon:RefreshHearthstonePicker()
+		end
+
+	elseif event == "TOYS_UPDATED" or event == "BAG_UPDATE_DELAYED" then
+		ScanHearthstoneAcquisitions()
+		if Addon.IsHearthstonePickerOpen and Addon:IsHearthstonePickerOpen() then
+			Addon:RefreshHearthstonePicker()
+		end
+
+	elseif event == "COMPANION_UPDATE" then
+		if arg1 == "CRITTER" and battlePetController then
+			C_Timer.After(0, function()
+				if battlePetController then battlePetController:OnCompanionUpdate() end
+				if Addon.IsBattlePetPickerOpen and Addon:IsBattlePetPickerOpen() then
+					Addon:RefreshBattlePetPicker()
+				end
+			end)
+		end
 
 	elseif event == "UNIT_SPELLCAST_SENT" then
 		if not (issecretvalue(arg3) or issecretvalue(arg4)) then
@@ -630,10 +1096,23 @@ eventFrame:SetScript("OnEvent", function(_, event, arg1, arg2, arg3, arg4)
 
 	elseif event == "SPELL_UPDATE_COOLDOWN" then
 		if frame:IsShown() then self:UpdateCooldowns() end
+		if Addon.IsHearthstonePickerOpen and Addon:IsHearthstonePickerOpen() then
+			Addon:RefreshHearthstonePicker()
+		end
+
+	elseif event == "ITEM_COUNT_CHANGED" or event == "BAG_UPDATE_COOLDOWN"
+		or event == "SPELL_UPDATE_USABLE" then
+		if Addon.IsHearthstonePickerOpen and Addon:IsHearthstonePickerOpen() then
+			Addon:RefreshHearthstonePicker()
+		end
 
 	elseif event == "TRANSMOG_DISPLAYED_OUTFIT_CHANGED" then
 		-- Synchronous event: the swap has not settled yet, so defer both the capture
 		-- and the refresh rather than reading state inline.
+		if battlePetController then
+			RefreshCompanionPins()
+			battlePetController:OutfitChanged()
+		end
 		self:ScheduleCapture()
 		C_Timer.After(0, function()
 			-- Before the refresh, so rows paint against the interval that is open
@@ -644,6 +1123,8 @@ eventFrame:SetScript("OnEvent", function(_, event, arg1, arg2, arg3, arg4)
 
 	elseif event == "PLAYER_ENTERING_WORLD" then
 		-- Prepare the hidden list so the secure toggle can reveal it during combat.
+		if battlePetController then battlePetController:Initialize() end
+		C_Timer.After(0, ResetHearthstoneBaseline)
 		C_Timer.After(0, function()
 			if not InCombatLockdown() then Addon:Refresh(true) end
 		end)
@@ -667,7 +1148,7 @@ eventFrame:SetScript("OnEvent", function(_, event, arg1, arg2, arg3, arg4)
 		-- that it is not competing with everything else loading.
 		C_Timer.After(8, function() Addon:BeginLintSweep(false) end)
 		Addon:RegisterSettings()
-		Addon:UpdateOwnedOpenMacroIcon()
+		Addon:UpdateOwnedMacroIcons()
 		Addon:RepairSummonMacro()
 
 	elseif event == "PLAYER_REGEN_DISABLED" then
@@ -680,7 +1161,7 @@ eventFrame:SetScript("OnEvent", function(_, event, arg1, arg2, arg3, arg4)
 	elseif event == "PLAYER_REGEN_ENABLED" then
 		self:SetEscapeClosing(true)
 		self:SetCombatDimmed(false)
-		self:UpdateOwnedOpenMacroIcon()
+		self:UpdateOwnedMacroIcons()
 	elseif event == "PLAYER_LOGOUT" then
 		summonController:Transition({ type = "clear" })
 		-- Logging out, /reload and a disconnect all arrive here, and the saved
@@ -693,7 +1174,6 @@ eventFrame:SetScript("OnEvent", function(_, event, arg1, arg2, arg3, arg4)
 		-- The list changing under a scan invalidates the queue it is working from.
 		self:AbandonLintSweep("the outfit list changed")
 		self:Refresh()
-
 	else
 		self:Refresh()
 	end
@@ -710,4 +1190,6 @@ ns.Commands.Register(Addon, {
 	fallbackModes = FALLBACK_MODES,
 	Macro = Macro,
 	accountMacroCount = AccountMacroCount,
+	hearthstoneDefinitions = HearthstoneDefinitions,
+	hearthstoneAdapter = hearthstoneAdapter,
 })

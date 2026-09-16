@@ -21,8 +21,12 @@ local HELP = {
 	{ "capture", "re-capture the outfit you are wearing" },
 	{ "slots scan", "check every outfit again, including ones already checked" },
 	{ "slots wipe", "forget every measurement, so the next scan redoes it" },
-	{ "macro", "check the two action bar macros, for a bug report" },
+	{ "macro", "check the three action bar macros, for a bug report" },
 	{ "state", "print what Mogtrot can see, for a bug report" },
+	{ "probe", "dump what this client build actually exposes" },
+	{ "probe render", "show one outfit on four differently-set bodies" },
+	{ "probe form", "try every way of rendering your other form" },
+	{ "inspect", "capture the appearance list of the player you target" },
 }
 
 local function ShowHelp()
@@ -117,6 +121,22 @@ SlashCmdList.MOGTROT = function(msg)
 
 	if cmd == "state" then
 		Diagnostics.ShowState(Addon, deps)
+		return
+	end
+	if cmd == "probe" then
+		Diagnostics.ProbeClient(Addon, deps)
+		return
+	end
+	if cmd == "probe render" then
+		Diagnostics.ProbeRender(Addon, deps)
+		return
+	end
+	if cmd == "probe form" then
+		Diagnostics.ProbeForm(Addon, deps)
+		return
+	end
+	if cmd == "inspect" then
+		Diagnostics.InspectTargetLook(Addon, deps)
 		return
 	end
 

@@ -120,6 +120,48 @@ function Wear.Share(totalSeconds, seconds)
 	return math.min(seconds / totalSeconds, 1)
 end
 
+function Wear.LeastWornEligible(char, outfitsByID)
+	local eligible = {}
+	if not char or not char.cats or not char.assign then return eligible end
+
+	for outfitID, info in pairs(outfitsByID or {}) do
+		local cat = char.cats[char.assign[outfitID] or 0]
+		if cat and not cat.protected and not info.isDisabled then
+			eligible[outfitID] = true
+		end
+	end
+
+	return eligible
+end
+
+function Wear.ChooseLeastWorn(snapshot, eligibleOutfitIDs, excludedOutfitID, random)
+	local totals = (snapshot and snapshot.totals) or {}
+	local ranked = {}
+
+	for outfitID in pairs(eligibleOutfitIDs or {}) do
+		if outfitID ~= excludedOutfitID then table.insert(ranked, outfitID) end
+	end
+	if #ranked == 0 then return nil end
+
+	table.sort(ranked, function(a, b)
+		local aSeconds, bSeconds = totals[a] or 0, totals[b] or 0
+		if aSeconds ~= bSeconds then return aSeconds < bSeconds end
+		return a < b
+	end)
+
+	local percentileCount = math.floor((#ranked + 4) / 5)
+	local cutoffIndex = math.min(#ranked, math.max(5, percentileCount))
+	local cutoffSeconds = totals[ranked[cutoffIndex]] or 0
+	local candidates = {}
+	for _, outfitID in ipairs(ranked) do
+		if (totals[outfitID] or 0) > cutoffSeconds then break end
+		table.insert(candidates, outfitID)
+	end
+
+	random = random or math.random
+	return candidates[random(#candidates)]
+end
+
 function Wear.Format(seconds)
 	seconds = math.floor(tonumber(seconds) or 0)
 	if seconds < 0 then seconds = 0 end

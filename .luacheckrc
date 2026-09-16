@@ -31,16 +31,23 @@ globals = {
 read_globals = {
 	"CAMERA_MODIFICATION_TYPE_DISCARD",
 	"CAMERA_TRANSITION_TYPE_IMMEDIATE",
+	"DRESS_UP_FRAME_MODEL_SCENE_ID",
 	"CHECK_ALL",
 	"UNCHECK_ALL",
 	"C_MountJournal",
 	"C_AddOns",
+	"C_Item",
+	"C_ToyBox",
+	"C_TooltipInfo",
+	"PlayerHasToy",
+	"ITEM_SPELL_TRIGGER_ONUSE",
 	"C_Secrets",
 	"C_UnitAuras",
 	"C_PaperDollInfo",
 	"C_Spell",
 	"C_Timer",
 	"C_TransmogOutfitInfo",
+	"C_TransmogCollection",
 	"ColorPickerFrame",
 	"Constants",
 	"Enum",
@@ -70,6 +77,14 @@ read_globals = {
 	"IsMounted",
 	"issecretvalue",
 	"UnitExists",
+	"NotifyInspect",
+	"UnitSex",
+	"UnitClass",
+	"UnitRace",
+	"UnitLevel",
+	"C_PlayerInfo",
+	"C_BarberShop",
+	"PlayerLocation",
 	"UnitIsPlayer",
 	"IconSelectorPopupFrameModes",
 	"InCombatLockdown",
@@ -113,6 +128,7 @@ read_globals = {
 	"strtrim",
 	"tCompare",
 	"tDeleteItem",
+	"tinsert",
 	-- Epoch seconds. WoW's global, not os.time.
 	"date",
 	"time",
@@ -128,7 +144,6 @@ files["MountPick.lua"] = { ignore = { "331/ns" } }
 files["TargetMount.lua"] = { ignore = { "331/ns" } }
 files["Lint.lua"] = { ignore = { "331/ns" } }
 files["Macro.lua"] = { ignore = { "331/ns" } }
-files["MountPins.lua"] = { ignore = { "331/ns" } }
 
 files["spec/"] = {
 	std = "lua51+busted",

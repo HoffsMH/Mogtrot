@@ -1,5 +1,7 @@
 local _, ns = ...
 
+local Pins = ns.Pins or require("Pins")
+
 local MountPickerUI = {}
 
 function MountPickerUI.Attach(Addon, deps)
@@ -14,6 +16,24 @@ function MountPickerUI.Attach(Addon, deps)
 	local OutfitWear_PreClick = deps.outfitWearPreClick
 	local OutfitWear_PostClick = deps.outfitWearPostClick
 	local mountPicker
+
+local function MountPinDomain()
+	local db = MogtrotDB
+	local pins = db and db.pins
+	if type(pins) ~= "table" then return nil end
+	local domain = pins.mounts
+	if type(domain) ~= "table" or type(domain.records) ~= "table"
+		or domain.autoNew == nil or domain.days == nil then
+		return nil
+	end
+	return domain
+end
+
+local function ActiveMountPins()
+	local domain = MountPinDomain()
+	if not domain then return {} end
+	return Pins.ActiveSet(domain, time())
+end
 
 -- The picker shows a three-by-three grid; resizing changes the cards, not the count.
 local GRID_COLS = 3
@@ -479,7 +499,8 @@ function Addon:PaintMountCard(card, mount)
 	card.FallbackStar:SetAtlas(isPinned and "auctionhouse-icon-favorite"
 		or "auctionhouse-icon-favorite-off", false)
 	card.FallbackStar:Show()
-	local days = ns.MountPins.DaysRemaining(MogtrotDB, mount.mountID, time())
+	local domain = MountPinDomain()
+	local days = domain and Pins.DaysRemaining(domain, mount.mountID, time()) or nil
 	card.PinRow:SetShown(mountPicker.mode == "pins" and days ~= nil)
 	if mountPicker.mode == "pins" and days ~= nil then
 		card.PinDays.mountID = mount.mountID
@@ -504,7 +525,7 @@ end
 
 local function RefreshPickerState()
 	mountPicker.selected = mountPicker.mode == "pins"
-		and ns.MountPins.ActiveSet(MogtrotDB, time())
+		and ActiveMountPins()
 		or Addon:GetOutfitMounts(mountPicker.outfitID)
 	mountPicker.linkIndex = ns.MountIndex.Build(MogtrotCharDB)
 end
@@ -599,11 +620,12 @@ function Addon:RefreshMountPicker(options)
 	if mountPicker.mode == "pins" then
 		local original = {}
 		for i, mount in ipairs(matches) do original[mount.mountID] = i end
+		local domain = MountPinDomain()
 		table.sort(matches, function(a, b)
 			local ap, bp = Addon:IsMountPinned(a.mountID), Addon:IsMountPinned(b.mountID)
 			if ap ~= bp then return ap end
-			local ar = MogtrotDB.mountPins[a.mountID]
-			local br = MogtrotDB.mountPins[b.mountID]
+			local ar = domain and domain.records[a.mountID]
+			local br = domain and domain.records[b.mountID]
 			local aa, ba = ar and ar.acquiredAt, br and br.acquiredAt
 			if (aa ~= nil) ~= (ba ~= nil) then return aa ~= nil end
 			if aa and aa ~= ba then return aa > ba end

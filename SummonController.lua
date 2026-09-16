@@ -1,5 +1,7 @@
 local _, ns = ...
 
+local Pins = ns.Pins or require("Pins")
+
 -- Coordinates mount selection, fallback behavior, and summon feedback.
 local SummonController = {}
 
@@ -44,6 +46,31 @@ function Addon:SaySummon(lines)
 end
 
 local FALLBACK_MODES = { random = true, pinned = true, litemount = true, off = true }
+
+local function MountPinDomain()
+	local db = MogtrotDB
+	local pins = db and db.pins
+	if type(pins) ~= "table" then return nil end
+	local domain = pins.mounts
+	if type(domain) ~= "table" or type(domain.records) ~= "table"
+		or domain.autoNew == nil or domain.days == nil then
+		return nil
+	end
+	return domain
+end
+
+local function ActivePinnedMounts(now)
+	local domain = MountPinDomain()
+	if not domain then return {} end
+	return Pins.ActiveSet(domain, now)
+end
+
+local function MountPinOptedOut(outfitID)
+	local char = MogtrotCharDB
+	local optOut = char and char.pinOptOut
+	if type(optOut) ~= "table" or type(optOut.mounts) ~= "table" then return false end
+	return optOut.mounts[outfitID] and true or false
+end
 
 function Addon:FallbackMode()
 	local mode = MogtrotDB.fallbackMode
@@ -217,7 +244,7 @@ function Addon:SummonForActiveOutfit(canDelegateLiteMount)
 	local outfitName = info and info.name or tostring(outfitID)
 	local set = hasOutfit and self:GetOutfitMounts(outfitID) or nil
 	local preference = MountTravelSnapshot()
-	local pinnedMountIDs = ns.MountPins.ActiveSet(MogtrotDB, time())
+	local pinnedMountIDs = ActivePinnedMounts(time())
 	local target, targetReason, targetDetail = ns.TargetMount.Resolve(
 		ReadTargetMount(), InspectTargetMount)
 	local result = ns.SummonDecision.Decide({
@@ -237,8 +264,7 @@ function Addon:SummonForActiveOutfit(canDelegateLiteMount)
 		pinnedMountIDs = pinnedMountIDs,
 		preferences = {
 			fallbackMode = self:FallbackMode(),
-			shufflePinned = not (MogtrotCharDB.noPinnedShuffle
-				and MogtrotCharDB.noPinnedShuffle[outfitID]),
+			shufflePinned = not MountPinOptedOut(outfitID),
 			matchTarget = MogtrotDB.matchTargetMount and true or false,
 		},
 		integrations = { liteMountReady = LiteMountFallbackReady() and true or false },
@@ -328,7 +354,7 @@ function Addon:SummonFallbackText()
 	end
 	if mode == "pinned" then
 		local count = 0
-		for _ in pairs(ns.MountPins.ActiveSet(MogtrotDB, time())) do count = count + 1 end
+		for _ in pairs(ActivePinnedMounts(time())) do count = count + 1 end
 		return ("summon fallback: a pinned mount (%d active)."):format(count)
 	end
 	if mode == "litemount" then
@@ -396,24 +422,31 @@ function Addon:SetSummonFallback(choice)
 end
 
 function Addon:IsMountPinned(mountID)
-	return ns.MountPins.IsPinned(MogtrotDB, mountID, time())
+	local domain = MountPinDomain()
+	return domain and Pins.IsPinned(domain, mountID, time()) or false
 end
 
 function Addon:ToggleMountPin(mountID)
+	local domain = MountPinDomain()
+	if not domain then return end
 	if self:IsMountPinned(mountID) then
-		ns.MountPins.Unpin(MogtrotDB, mountID)
+		Pins.Unpin(domain, mountID)
 	else
-		ns.MountPins.Pin(MogtrotDB, mountID, time())
+		Pins.Pin(domain, mountID, time())
 	end
 	self:RepaintMountCards()
 end
 
 function Addon:SetMountPinDays(mountID, days)
-	return ns.MountPins.SetDaysRemaining(MogtrotDB, mountID, days, time())
+	local domain = MountPinDomain()
+	if not domain then return false end
+	return Pins.SetDaysRemaining(domain, mountID, days, time())
 end
 
 function Addon:KeepMountPinned(mountID)
-	ns.MountPins.Keep(MogtrotDB, mountID)
+	local domain = MountPinDomain()
+	if not domain then return end
+	Pins.Keep(domain, mountID, time())
 	self:RepaintMountCards()
 end
 

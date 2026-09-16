@@ -51,6 +51,45 @@ function SettingsUI.Attach(Addon, deps)
 	local Titles = deps.titles
 	local Minimap = deps.minimap
 
+local function MountPinDomain()
+	local db = MogtrotDB
+	if type(db) ~= "table" then return nil end
+	local pins = db.pins
+	if type(pins) ~= "table" then return nil end
+	local domain = pins.mounts
+	if type(domain) ~= "table" or type(domain.records) ~= "table"
+		or domain.autoNew == nil or domain.days == nil then
+		return nil
+	end
+	return domain
+end
+
+local function BattlePetPinDomain()
+	local db = MogtrotDB
+	if type(db) ~= "table" then return nil end
+	local pins = db.pins
+	if type(pins) ~= "table" then return nil end
+	local domain = pins.battlePets
+	if type(domain) ~= "table" or type(domain.records) ~= "table"
+		or domain.autoNew == nil or domain.days == nil then
+		return nil
+	end
+	return domain
+end
+
+local function HearthstonePinDomain()
+	local db = MogtrotDB
+	if type(db) ~= "table" then return nil end
+	local pins = db.pins
+	if type(pins) ~= "table" then return nil end
+	local domain = pins.hearthstones
+	if type(domain) ~= "table" or type(domain.records) ~= "table"
+		or domain.autoNew == nil or domain.days == nil then
+		return nil
+	end
+	return domain
+end
+
 function Addon:RegisterTitleFallbackSetting(category, layout)
 	if not Titles or not Settings.CreateDropdown then return end
 	local function Options()
@@ -155,7 +194,7 @@ function Addon:RegisterSettings()
 		function() return Addon:MacroDragControlsShown() end,
 		function(value) Addon:SetMacroDragControlsShown(value) end)
 	Settings.CreateCheckbox(category, macroControlsSetting,
-		"Shows the two drag buttons in the outfit window. Turn this on to add or repair "
+		"Shows the four drag buttons in the outfit window. Turn this on to add or repair "
 			.. "Mogtrot action-bar macros.")
 
 	local minimapSetting = Settings.RegisterProxySetting(category,
@@ -169,19 +208,67 @@ function Addon:RegisterSettings()
 
 	local autoPinSetting = Settings.RegisterProxySetting(category, "MOGTROT_AUTO_PIN_MOUNTS",
 		Settings.VarType.Boolean, "Automatically pin new mounts", true,
-		function() return MogtrotDB.autoPinNewMounts ~= false end,
-		function(value) MogtrotDB.autoPinNewMounts = value and true or false end)
+		function()
+			local domain = MountPinDomain()
+			if not domain then return true end
+			return domain.autoNew ~= false
+		end,
+		function(value)
+			local domain = MountPinDomain()
+			if not domain then return false end
+			domain.autoNew = value and true or false
+			return true
+		end)
 	Settings.CreateCheckbox(category, autoPinSetting,
 		"Keeps each newly acquired mount pinned for the selected number of days.")
 
+	local autoPinBattlePetsSetting = Settings.RegisterProxySetting(category,
+		"MOGTROT_AUTO_PIN_BATTLE_PETS", Settings.VarType.Boolean,
+		"Automatically pin new battle pets", true,
+		function()
+			local domain = BattlePetPinDomain()
+			if not domain then return true end
+			return domain.autoNew ~= false
+		end,
+		function(value)
+			local domain = BattlePetPinDomain()
+			if not domain then return false end
+			domain.autoNew = value and true or false
+			return true
+		end)
+	Settings.CreateCheckbox(category, autoPinBattlePetsSetting,
+		"Keeps each newly acquired battle pet pinned for the selected number of days.")
+
+	local autoPinHearthstonesSetting = Settings.RegisterProxySetting(category,
+		"MOGTROT_AUTO_PIN_HEARTHSTONES", Settings.VarType.Boolean,
+		"Automatically pin new hearthstones", true,
+		function()
+			local domain = HearthstonePinDomain()
+			if not domain then return true end
+			return domain.autoNew ~= false
+		end,
+		function(value)
+			local domain = HearthstonePinDomain()
+			if not domain then return false end
+			domain.autoNew = value and true or false
+			return true
+		end)
+	Settings.CreateCheckbox(category, autoPinHearthstonesSetting,
+		"Keeps each newly acquired hearthstone pinned for the selected number of days.")
+
+
 	if Settings.CreateElementInitializer then
 		local function GetPinDays()
-			return tostring(MogtrotDB.autoPinNewMountDays or 7)
+			local domain = MountPinDomain()
+			if domain and domain.days ~= nil then return tostring(domain.days) end
+			return "7"
 		end
 		local function SetPinDays(value)
 			local days = SettingsUI.ParsePinDays(value)
 			if days == nil then return false end
-			MogtrotDB.autoPinNewMountDays = days
+			local domain = MountPinDomain()
+			if not domain then return false end
+			domain.days = days
 			return true
 		end
 		layout:AddInitializer(Settings.CreateElementInitializer(
@@ -190,6 +277,47 @@ function Addon:RegisterSettings()
 				tooltip = "Used for future automatic and manual pins. 0 never expires.",
 				getText = GetPinDays,
 				setText = SetPinDays,
+			}))
+		local function GetBattlePetPinDays()
+			local domain = BattlePetPinDomain()
+			if domain and domain.days ~= nil then return tostring(domain.days) end
+			return "7"
+		end
+		local function SetBattlePetPinDays(value)
+			local days = SettingsUI.ParsePinDays(value)
+			if days == nil then return false end
+			local domain = BattlePetPinDomain()
+			if not domain then return false end
+			domain.days = days
+			return true
+		end
+		layout:AddInitializer(Settings.CreateElementInitializer(
+			"MogtrotPinDaysSettingTemplate", {
+				name = "Battle-pet pins default to expiring in",
+				tooltip = "Used for future battle-pet pins. 0 never expires.",
+				getText = GetBattlePetPinDays,
+				setText = SetBattlePetPinDays,
+			}))
+
+		local function GetHearthstonePinDays()
+			local domain = HearthstonePinDomain()
+			if domain and domain.days ~= nil then return tostring(domain.days) end
+			return "7"
+		end
+		local function SetHearthstonePinDays(value)
+			local days = SettingsUI.ParsePinDays(value)
+			if days == nil then return false end
+			local domain = HearthstonePinDomain()
+			if not domain then return false end
+			domain.days = days
+			return true
+		end
+		layout:AddInitializer(Settings.CreateElementInitializer(
+			"MogtrotPinDaysSettingTemplate", {
+				name = "Hearthstone pins default to expiring in",
+				tooltip = "Used for future hearthstone pins. 0 never expires.",
+				getText = GetHearthstonePinDays,
+				setText = SetHearthstonePinDays,
 			}))
 	end
 

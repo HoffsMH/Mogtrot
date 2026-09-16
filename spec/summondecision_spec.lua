@@ -119,3 +119,103 @@ describe("SummonDecision.Transition", function()
 		assert.equals(decided.intent.mountID, confirmed.lastMountID)
 	end)
 end)
+
+-- OutfitCandidates pin precedence for active outfits. Default is union;
+-- `preferences.shufflePinned = false` is the explicit per-outfit opt-out
+-- until the controller field cutover. Configured fallback modes still run
+-- after the local candidate set.
+describe("SummonDecision local pin precedence", function()
+	local function PinSnapshot(overrides)
+		return Snapshot(overrides or {})
+	end
+
+	it("uses eligible pins as the first local pool with no links", function()
+		local result = SummonDecision.Decide(PinSnapshot({
+			outfit = { id = 7, name = "Set", linkedMountIDs = {} },
+			pinnedMountIDs = { [102] = true },
+			preferences = { fallbackMode = "off" },
+			random = function(n) return n end,
+		}))
+		assert.equals(102, result.intent.mountID)
+		assert.equals("outfit", result.intent.from)
+		assert.same({ 102 }, result.intent.viableCandidates)
+	end)
+
+	it("falls to eligible pins when every explicit link is unusable", function()
+		local result = SummonDecision.Decide(PinSnapshot({
+			outfit = { id = 7, name = "Set", linkedMountIDs = { [101] = true } },
+			collection = {
+				[101] = { collected = true, usable = false, name = "A" },
+				[102] = { collected = true, usable = true, name = "B" },
+			},
+			pinnedMountIDs = { [102] = true },
+			preferences = { fallbackMode = "off" },
+			random = function(n) return n end,
+		}))
+		assert.equals(102, result.intent.mountID)
+		assert.equals("outfit", result.intent.from)
+		assert.same({ 102 }, result.intent.viableCandidates)
+	end)
+
+	it("unions active pins into linked mounts by default", function()
+		local result = SummonDecision.Decide(PinSnapshot({
+			outfit = { id = 7, name = "Set", linkedMountIDs = { [101] = true } },
+			pinnedMountIDs = { [102] = true },
+			preferences = { fallbackMode = "off" },
+			random = function(n) return n end,
+		}))
+		assert.same({ 101, 102 }, result.intent.viableCandidates)
+		assert.equals(102, result.intent.mountID)
+		assert.equals("outfit", result.intent.from)
+	end)
+
+	it("excludes pins when the outfit opts out", function()
+		local result = SummonDecision.Decide(PinSnapshot({
+			outfit = { id = 7, name = "Set", linkedMountIDs = { [101] = true } },
+			pinnedMountIDs = { [102] = true },
+			preferences = { fallbackMode = "off", shufflePinned = false },
+			random = function(n) return n end,
+		}))
+		assert.same({ 101 }, result.intent.viableCandidates)
+	end)
+
+	it("excludes pins from the local fallback of an opted-out dead-link outfit", function()
+		local result = SummonDecision.Decide(PinSnapshot({
+			outfit = { id = 7, name = "Set", linkedMountIDs = { [101] = true } },
+			collection = {
+				[101] = { collected = true, usable = false, name = "A" },
+				[102] = { collected = true, usable = true, name = "B" },
+			},
+			pinnedMountIDs = { [102] = true },
+			preferences = { fallbackMode = "off", shufflePinned = false },
+		}))
+		assert.is_nil(result.intent.mountID)
+		assert.is_nil(result.intent.viableCandidates or next(result.intent.viableCandidates or {}))
+	end)
+
+	it("keeps the configured pinned fallback reachable under active opt-out", function()
+		local result = SummonDecision.Decide(PinSnapshot({
+			outfit = { id = 7, name = "Set", linkedMountIDs = { [101] = true } },
+			collection = {
+				[101] = { collected = true, usable = false, name = "A" },
+				[102] = { collected = true, usable = true, name = "B" },
+			},
+			pinnedMountIDs = { [102] = true },
+			preferences = { fallbackMode = "pinned", shufflePinned = false },
+		}))
+		assert.equals(102, result.intent.mountID)
+		assert.equals("fallback", result.intent.from)
+	end)
+
+	it("keeps configured fallback after the local candidates", function()
+		local result = SummonDecision.Decide(PinSnapshot({
+			outfit = { id = 7, name = "Set", linkedMountIDs = {} },
+			pinnedMountIDs = { [102] = true },
+			preferences = { fallbackMode = "random", shufflePinned = false },
+			random = function(n) return n end,
+		}))
+		-- The default random fallback prefers favourites: 101 is the favourite.
+		assert.equals("favourite", result.intent.from)
+		assert.equals(101, result.intent.mountID)
+	end)
+end)

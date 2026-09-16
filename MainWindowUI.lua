@@ -20,6 +20,16 @@ function MainWindowUI.Attach(Addon, deps)
 	local CountOutfitTitles = deps.countOutfitTitles
 	local CopyOutfitTitles = deps.copyOutfitTitles
 	local ClearOutfitTitles = deps.clearOutfitTitles
+	-- Companion pickers are optional at composition time; their entries appear in
+	-- the outfit menu only when Core supplies the callbacks.
+	local OpenBattlePetPicker = deps.openBattlePetPicker
+	local CountOutfitBattlePets = deps.countOutfitBattlePets
+	local OpenHearthstonePicker = deps.openHearthstonePicker
+	local CountOutfitHearthstones = deps.countOutfitHearthstones
+	local hearthstoneController = deps.hearthstoneController
+	local hearthstoneIcon = C_Item and C_Item.GetItemIconByID
+		and C_Item.GetItemIconByID(6948)
+		or nil
 	assert(type(OpenTitlePicker) == "function", "MainWindowUI requires openTitlePicker")
 	assert(type(CountOutfitTitles) == "function", "MainWindowUI requires countOutfitTitles")
 	assert(type(CopyOutfitTitles) == "function", "MainWindowUI requires copyOutfitTitles")
@@ -28,6 +38,21 @@ function MainWindowUI.Attach(Addon, deps)
 	local NEW_CATEGORY_NAME = Tree.NEW_CATEGORY_NAME
 	local CategoryColor = ns.CategoryColor
 
+	local function MountPinOptOut()
+		local char = MogtrotCharDB
+		local pinOptOut = char and char.pinOptOut
+		if type(pinOptOut) ~= "table" or type(pinOptOut.mounts) ~= "table" then
+			return nil
+		end
+		return pinOptOut.mounts
+	end
+
+	local function CompanionText(label, count)
+		if type(count) == "number" then
+			return ("%s (%d)"):format(label, count)
+		end
+		return label
+	end
 	local function CategoryPath(catID)
 		return Tree.CategoryPath(MogtrotCharDB, catID)
 	end
@@ -305,10 +330,12 @@ function MainWindowUI.Attach(Addon, deps)
 			end
 
 			root:CreateCheckbox("Shuffle in pinned mounts", function()
-				return not MogtrotCharDB.noPinnedShuffle[outfitID]
+				local mounts = MountPinOptOut()
+				return not (mounts and mounts[outfitID])
 			end, function()
-				MogtrotCharDB.noPinnedShuffle[outfitID] =
-					not MogtrotCharDB.noPinnedShuffle[outfitID] and true or nil
+				local mounts = MountPinOptOut()
+				if not mounts then return MenuResponse.Refresh end
+				mounts[outfitID] = not mounts[outfitID] and true or nil
 				return MenuResponse.Refresh
 			end)
 
@@ -328,8 +355,24 @@ function MainWindowUI.Attach(Addon, deps)
 					ConfirmClearOutfitTitles(outfitID, outfitName)
 				end)
 			end
+			local companionShown = false
+			if type(OpenHearthstonePicker) == "function" then
+				local count = type(CountOutfitHearthstones) == "function"
+					and CountOutfitHearthstones(outfitID) or nil
+				root:CreateButton(CompanionText("Hearthstones", count),
+					function() OpenHearthstonePicker(outfitID) end)
+				companionShown = true
+			end
 
-			root:CreateDivider()
+			if type(OpenBattlePetPicker) == "function" then
+				local count = type(CountOutfitBattlePets) == "function"
+					and CountOutfitBattlePets(outfitID) or nil
+				root:CreateButton(CompanionText("Battle pets", count),
+					function() OpenBattlePetPicker(outfitID) end)
+				companionShown = true
+			end
+
+			if companionShown then root:CreateDivider() end
 
 			root:CreateButton("Move to...", function()
 				OpenMoveOutfit(outfitID, row.outfitName)
@@ -520,10 +563,10 @@ function MainWindowUI.Attach(Addon, deps)
 	end)
 	frame.NewCategoryButton:SetScript("OnLeave", GameTooltip_Hide)
 
-	-- Account macros occupy the first block of indices, so the nth is index n. Neither
-	-- macro does anything character-specific - one opens the window, the other runs the
-	-- same summon the keybinding runs - so both belong to the account rather than being
-	-- remade on each alt. From the client's own constant, with today's value as a
+	-- Account macros occupy the first block of indices, so the nth is index n. None
+	-- of the macros is character-specific: they open the window or dispatch through
+	-- character-aware buttons. They belong to the account rather than being remade
+	-- on each alt. From the client's own constant, with today's value as a
 	-- fallback if a build stops defining it.
 	local ACCOUNT_MACRO_CAP = MAX_ACCOUNT_MACROS or 120
 
@@ -531,16 +574,23 @@ function MainWindowUI.Attach(Addon, deps)
 	-- (Blizzard_MountCollection.xml:222), so its texture is the icon a user already
 	-- reads as "put me on a mount".
 	local RANDOM_FAVOURITE_SPELL_ID = 150544
-	local OPEN_MACRO_DRAG_ICON = 2869702
 
 	-- CreateMacro wants a fileID, not a path: handed the TOC's icon path it stores
-	-- the default cog instead. Spell textures are fileIDs already, and these two are
-	-- the icons the created macros use on the action bar.
+	-- the default cog instead. Spell textures are fileIDs already, and these are the
+	-- icons the created macros use on the action bar. The fixed OPEN/LEAST icons
+	-- live in Macro.DEFS; only the summon icon is a runtime texture.
 	local function MacroIcon(command)
 		if command == Macro.SUMMON then
 			return C_Spell.GetSpellTexture(RANDOM_FAVOURITE_SPELL_ID)
 		end
-		return OPEN_MACRO_DRAG_ICON
+		return Macro.FixedIcon(command)
+	end
+
+	local function MacroDragIcon(command)
+		if command == Macro.HEARTH and hearthstoneIcon then
+			return hearthstoneIcon
+		end
+		return MacroIcon(command)
 	end
 
 	local function AccountMacroBody(slot)
@@ -554,7 +604,7 @@ function MainWindowUI.Attach(Addon, deps)
 
 	-- Asked before the drag rather than reported after it, so a full macro list is a
 	-- tooltip line instead of a gesture that silently does nothing. Per command: one
-	-- free slot and neither macro made means the first drag works and the second does
+	-- free slot and no macros made means the first drag works and the rest do
 	-- not, and each handle has to say so for itself.
 	function Addon:CanOfferMacro(command)
 		return Macro.CanOffer(AccountMacroCount(), AccountMacroBody, command,
@@ -564,15 +614,21 @@ function MainWindowUI.Attach(Addon, deps)
 	function Addon.UpdateMacroIcon(_self, slot, command)
 		if InCombatLockdown() then return false end
 		local currentIcon = select(2, GetMacroInfo(slot))
-		local icon = Macro.IconToApply(command, currentIcon, MacroIcon(command))
+		local icon = Macro.IconToApply(command, currentIcon)
 		if not icon then return false end
 		EditMacro(slot, nil, icon, nil)
 		return true
 	end
 
-	function Addon:UpdateOwnedOpenMacroIcon()
-		local slot = Macro.Find(AccountMacroCount(), AccountMacroBody, Macro.OPEN)
-		if slot then self:UpdateMacroIcon(slot, Macro.OPEN) end
+	-- Re-corrects the icons of macros Mogtrot owns: the client can substitute its
+	-- fallback icon, so the refresh runs on login and after combat, not only when
+	-- the user re-drags a handle.
+	function Addon:UpdateOwnedMacroIcons()
+		local openSlot = Macro.Find(AccountMacroCount(), AccountMacroBody, Macro.OPEN)
+		if openSlot then self:UpdateMacroIcon(openSlot, Macro.OPEN) end
+
+		local leastSlot = Macro.Find(AccountMacroCount(), AccountMacroBody, Macro.LEAST)
+		if leastSlot then self:UpdateMacroIcon(leastSlot, Macro.LEAST) end
 	end
 
 	-- A macro index for the cursor, or nil and a reason. Reuse before create: the
@@ -626,9 +682,9 @@ function MainWindowUI.Attach(Addon, deps)
 		end
 	end
 
-	-- Two handles rather than one handle plus a modifier: both macros are then
-	-- discoverable by hovering, with no gesture to learn. Same button, different
-	-- command behind it, so the shape lives in one place.
+	-- Separate handles rather than modifiers: every macro is discoverable by hovering,
+	-- with no gesture to learn. Same button, different command behind it, so the shape
+	-- lives in one place.
 	local MACRO_DRAG_SIZE = 20
 
 	local function CreateMacroDrag(command, title, description)
@@ -639,7 +695,7 @@ function MainWindowUI.Attach(Addon, deps)
 		button.Icon = button:CreateTexture(nil, "ARTWORK")
 		button.Icon:SetAllPoints()
 		button.Icon:SetTexCoord(0.07, 0.93, 0.07, 0.93)
-		button.Icon:SetTexture(MacroIcon(command))
+		button.Icon:SetTexture(MacroDragIcon(command))
 		button.Icon:SetVertexColor(0.75, 0.75, 0.75)
 
 		button:SetScript("OnEnter", function(self)
@@ -647,8 +703,8 @@ function MainWindowUI.Attach(Addon, deps)
 			GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
 			GameTooltip:SetText(title)
 			GameTooltip:AddLine(description, 0.6, 0.6, 0.6, true)
-			-- Asked per command and per hover: with one slot left and neither macro
-			-- made, both handles work, and whichever is dragged first takes it.
+			-- Asked per command and per hover: with one slot left and no macro
+			-- made, every handle works, and whichever is dragged first takes it.
 			if not Addon:CanOfferMacro(command) then
 				GameTooltip:AddLine(" ")
 				GameTooltip:AddLine(("No free general macro slots (%d of %d used)."):format(
@@ -687,18 +743,22 @@ function MainWindowUI.Attach(Addon, deps)
 	frame.MacroDrag = CreateMacroDrag(Macro.OPEN, "Macro for the action bar",
 		"Drag to a bar. Makes one general macro that opens this window, and reuses "
 		.. "that same one every time after.")
-	-- The right-hand button hangs off the frame's right edge, the left-hand one off
-	-- the right-hand one, and the search box off the left-hand one - never the
-	-- reverse. That way the box absorbs the whole of any width change and neither
-	-- button can drift onto the other or onto the box.
-		frame.MacroDrag:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -UI.Pad, -(UI.Pad + 18))
+	frame.MacroDrag:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -UI.Pad, -(UI.Pad + 18))
 
-	-- The same summon the keybinding does, on a bar. Its own handle rather than a
-	-- modifier on the one above, so hovering finds it.
+	-- The same summon the keybinding does, on a bar.
 	frame.SummonDrag = CreateMacroDrag(Macro.SUMMON, "Mount macro for the action bar",
 		"Drag to a bar. Makes one general macro that summons a mount for the outfit "
 		.. "you are wearing - the same thing the summon keybinding does.")
 	frame.SummonDrag:SetPoint("TOPRIGHT", frame.MacroDrag, "TOPLEFT", -4, 0)
+
+	frame.LeastDrag = CreateMacroDrag(Macro.LEAST,
+		"Least-worn outfit macro for the action bar",
+		"Drag to a bar. Each click chooses from the least-worn 20% of your outfits "
+		.. "(at least five), excluding Unsorted and the outfit you are wearing.")
+	frame.LeastDrag:SetPoint("TOPRIGHT", frame.SummonDrag, "TOPLEFT", -4, 0)
+	frame.HearthDrag = CreateMacroDrag(Macro.HEARTH, "Hearthstone macro for the action bar",
+		"Drag to a bar. Each click chooses a usable linked or pinned hearthstone.")
+	frame.HearthDrag:SetPoint("TOPRIGHT", frame.LeastDrag, "TOPLEFT", -4, 0)
 
 	local ACTION_SLOT_COUNT = 180
 
@@ -753,16 +813,29 @@ function MainWindowUI.Attach(Addon, deps)
 		local placed = ActionBarCommands()
 		local openShown = forceShown or not placed[Macro.OPEN]
 		local summonShown = forceShown or not placed[Macro.SUMMON]
+		local leastShown = forceShown or not placed[Macro.LEAST]
+		local hearthShown = forceShown or not placed[Macro.HEARTH]
 		frame.MacroDrag:SetShown(openShown)
 		frame.SummonDrag:SetShown(summonShown)
+		frame.LeastDrag:SetShown(leastShown)
+		frame.HearthDrag:SetShown(hearthShown)
 		frame.SearchBox:ClearAllPoints()
 		frame.SearchBox:SetPoint("TOPLEFT", frame, "TOPLEFT", UI.Pad + 6,
 			-(UI.Pad + 18))
-		if summonShown then
-			frame.SearchBox:SetPoint("TOPRIGHT", frame.SummonDrag, "TOPLEFT", -6, 0)
-		elseif openShown then
-			frame.SearchBox:SetPoint("TOPRIGHT", frame.MacroDrag, "TOPLEFT", -6, 0)
-		else
+		local visible = {
+			{ button = frame.MacroDrag, shown = openShown },
+			{ button = frame.SummonDrag, shown = summonShown },
+			{ button = frame.LeastDrag, shown = leastShown },
+			{ button = frame.HearthDrag, shown = hearthShown },
+		}
+		for index = #visible, 1, -1 do
+			local control = visible[index]
+			if control.shown then
+				frame.SearchBox:SetPoint("TOPRIGHT", control.button, "TOPLEFT", -6, 0)
+				break
+			end
+		end
+		if not (openShown or summonShown or leastShown or hearthShown) then
 			frame.SearchBox:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -UI.Pad,
 				-(UI.Pad + 18))
 		end
@@ -1083,9 +1156,90 @@ function MainWindowUI.Attach(Addon, deps)
 		ClearSummonClick()
 	end)
 
+	-- The macro targets one stable button, while each click chooses a fresh outfit
+	-- before the insecure action handler reads these attributes.
+	local leastWornClick = CreateFrame("Button", "MogtrotLeastWorn", nil,
+		UI.ActionButtonTemplate)
+	leastWornClick:SetSize(1, 1)
+	leastWornClick:RegisterForClicks("AnyDown", "AnyUp")
+	leastWornClick:SetAttribute("useOnKeyDown", false)
+
+	local function ClearLeastWornClick(self)
+		self:SetAttribute("type", nil)
+		self:SetAttribute("action", nil)
+		self:SetAttribute("outfit-index", nil)
+		self.outfitID = nil
+	end
+
+	leastWornClick:SetScript("PreClick", function(self, button, down)
+		if down or InCombatLockdown() then return end
+		ClearLeastWornClick(self)
+		Addon:SyncOutfits()
+
+		local eligible = Wear.LeastWornEligible(MogtrotCharDB, Addon.outfitsByID)
+		local outfitID = Wear.ChooseLeastWorn(Addon:WearSnapshot(), eligible,
+			C_TransmogOutfitInfo.GetActiveOutfitID())
+		local info = outfitID and Addon.outfitsByID[outfitID]
+		if not info then
+			UIErrorsFrame:AddMessage("Mogtrot: no other categorized outfit is available.",
+				1, 0.3, 0.3)
+			return
+		end
+
+		self.outfitID = outfitID
+		self:SetAttribute("type", "outfit")
+		self:SetAttribute("action", "change")
+		self:SetAttribute("outfit-index", info.index)
+		OutfitWear_PreClick(self, button, down)
+	end)
+	leastWornClick:SetScript("PostClick", function(self, button, down)
+		OutfitWear_PostClick(self, button, down)
+		if not InCombatLockdown() then ClearLeastWornClick(self) end
+	end)
+	-- The macro targets one stable action button. Core may inject the controller
+	-- after its domains are composed; without one, the button remains inert.
+	local hearthstoneClick = CreateFrame("Button", "MogtrotHearthstone", nil,
+		UI.ActionButtonTemplate)
+	hearthstoneClick:SetSize(1, 1)
+	hearthstoneClick:RegisterForClicks("AnyDown", "AnyUp")
+	hearthstoneClick:SetAttribute("useOnKeyDown", false)
+
+	local function ClearHearthstoneClick()
+		if InCombatLockdown() then return end
+		hearthstoneClick:SetAttribute("type", nil)
+		hearthstoneClick:SetAttribute("toy", nil)
+		hearthstoneClick:SetAttribute("item", nil)
+	end
+
+	hearthstoneClick:SetScript("PreClick", function(_, _, down)
+		if down then return end
+		if type(hearthstoneController) == "table"
+			and type(hearthstoneController.PreClick) == "function" then
+			hearthstoneController:PreClick()
+		else
+			ClearHearthstoneClick()
+		end
+	end)
+	hearthstoneClick:SetScript("PostClick", function(_, _, down)
+		if down then return end
+		if type(hearthstoneController) == "table"
+			and type(hearthstoneController.PostClick) == "function" then
+			hearthstoneController:PostClick()
+		else
+			ClearHearthstoneClick()
+		end
+	end)
+
+	hearthstoneClick:RegisterEvent("PLAYER_REGEN_DISABLED")
+	hearthstoneClick:SetScript("OnEvent", ClearHearthstoneClick)
+
+
 	BINDING_HEADER_MOGTROT = "Mogtrot"
 	_G["BINDING_NAME_CLICK MogtrotToggle:LeftButton"] = "Toggle outfit list"
 	_G["BINDING_NAME_CLICK MogtrotSummon:LeftButton"] = "Summon a mount for this outfit"
+	_G["BINDING_NAME_CLICK MogtrotLeastWorn:LeftButton"] = "Wear a least-worn outfit"
+	-- Hearthstone dispatch is intentionally not a keybinding: the action-bar macro
+	-- supplies the hardware click that permits the secure toy/item action.
 
 	-- Opens Blizzard's outfit list, where locking, renaming and icons live. That window
 	-- can be shown anywhere - no transmogrifier needed - but it takes a real click on a
@@ -1249,7 +1403,7 @@ function MainWindowUI.Attach(Addon, deps)
 	-- shrinks with nesting depth, so a proportional bar would put a nested outfit and a
 	-- top-level one on different scales and stop being comparable, which is the only
 	-- thing a bar is for. Anchored to the right edge, where indent never reaches, and
-	-- ending level with the name so it clears the mount and menu buttons.
+	-- ending level with the name so it clears every right-side row control.
 	local WEAR_BAR_W, WEAR_BAR_H = 56, 3
 	-- Mogtrot's own light blue, deliberately outside the vocabulary already on this row:
 	-- green and yellow belong to the lint dot, gold to the active row and the flash.
@@ -1303,7 +1457,7 @@ function MainWindowUI.Attach(Addon, deps)
 
 		row.Name = row:CreateFontString(nil, "OVERLAY", "GameFontNormal")
 		row.Name:SetPoint("LEFT", row.Icon, "RIGHT", 16, 0)
-		row.Name:SetPoint("RIGHT", -42, 0)
+		row.Name:SetPoint("RIGHT", -72, 0)
 		row.Name:SetJustifyH("LEFT")
 		row.Name:SetWordWrap(false)
 
@@ -1312,8 +1466,9 @@ function MainWindowUI.Attach(Addon, deps)
 		-- texture alone could not take the click, and the row underneath would wear the
 		-- outfit instead.
 		row.MountButton = CreateFrame("Button", nil, row)
+		row.MountButton:Hide()
 		row.MountButton:SetSize(22, MainWindow.RowHeight)
-		row.MountButton:SetPoint("RIGHT", -34, 0)
+		row.MountButton:SetPoint("RIGHT", -40, 0)
 		row.MountButton:RegisterForClicks("LeftButtonUp")
 
 		row.MountButton.Empty = row.MountButton:CreateTexture(nil, "BACKGROUND")
@@ -1351,6 +1506,25 @@ function MainWindowUI.Attach(Addon, deps)
 		row.TitleCount = row.TitleButton:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
 		row.TitleCount:SetPoint("BOTTOMRIGHT", row.TitleIcon, "BOTTOMRIGHT", 2, -2)
 		row.TitleCount:Hide()
+		row.TitleButton:SetScript("OnClick", function(self)
+			local outfitID = self:GetParent().outfitID
+			if outfitID then OpenTitlePicker(outfitID) end
+		end)
+		row.TitleButton:SetScript("OnEnter", function(self)
+			self.Empty:SetColorTexture(1, 1, 1, 0.1)
+			local outfitID = self:GetParent().outfitID
+			if not outfitID then return end
+			local count = CountOutfitTitles(outfitID)
+			GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+			GameTooltip:SetText(count > 0 and ("Titles (%d)"):format(count) or "No titles linked")
+			GameTooltip:AddLine("Click to choose titles for this outfit.", 0.6, 0.6, 0.6, true)
+			GameTooltip:Show()
+		end)
+		row.TitleButton:SetScript("OnLeave", function(self)
+			self.Empty:SetColorTexture(1, 1, 1, 0)
+			GameTooltip:Hide()
+		end)
+
 
 		-- This row has no room for "11/16", so it carries the state as a dot and the
 		-- detail in the tooltip. Immediately left of the name rather than out in the
@@ -1367,10 +1541,10 @@ function MainWindowUI.Attach(Addon, deps)
 		-- cannot be trusted to report that anyway: the view sizes it around the
 		-- initialiser, so a recycled frame answers for whatever it was last.
 		-- Created hidden, since a frame is shown by default and only a worn outfit
-		-- should carry one. The 42 matches row.Name's right inset.
+		-- should carry one. The 72 matches row.Name's right inset.
 		row.WearBar = CreateFrame("StatusBar", nil, row)
 		row.WearBar:SetSize(WEAR_BAR_W, WEAR_BAR_H)
-		row.WearBar:SetPoint("BOTTOMRIGHT", -64, 1)
+		row.WearBar:SetPoint("BOTTOMRIGHT", -72, 1)
 		row.WearBar:SetStatusBarTexture("Interface\\TargetingFrame\\UI-StatusBar")
 		row.WearBar:SetMinMaxValues(0, 1)
 		row.WearBar:Hide()
@@ -1413,6 +1587,7 @@ function MainWindowUI.Attach(Addon, deps)
 			GameTooltip:Hide()
 		end)
 
+
 		-- The menu also lives on a button of its own, so reaching it never depends on
 		-- what right-click happens to be bound to.
 		row.MenuButton = CreateFrame("Button", nil, row)
@@ -1423,6 +1598,7 @@ function MainWindowUI.Attach(Addon, deps)
 		row.MenuButton.Text:SetAllPoints()
 		row.MenuButton.Text:SetText("...")
 		row.MenuButton.Text:SetTextColor(1, 0.82, 0)
+		row.MenuButton:Hide()
 		row.MenuButton:SetScript("OnClick", function(self)
 			local parent = self:GetParent()
 			if parent.outfitID then ShowOutfitMenu(parent) end
@@ -1514,29 +1690,57 @@ function MainWindowUI.Attach(Addon, deps)
 
 		local info = entry.info
 		local activeOutfitID = C_TransmogOutfitInfo.GetActiveOutfitID()
+		local outfitID = info.outfitID
 
-		row.outfitID = info.outfitID
+		-- Clear every pooled value before assigning this outfit.
+		row.outfitID = nil
+		row.outfitName = nil
+		for _, button in ipairs({
+			row.MountButton, row.TitleButton, row.MenuButton,
+		}) do
+			button.outfitID = nil
+			button:Hide()
+			button:Enable()
+		end
+		for _, icon in ipairs({
+			row.MountIcon, row.TitleIcon,
+		}) do
+			icon:SetTexture(nil)
+			icon:Hide()
+		end
+		for _, count in ipairs({
+			row.MountCount, row.TitleCount,
+		}) do
+			count:SetText("")
+			count:Hide()
+		end
+		row.TitleButton.Empty:SetColorTexture(1, 1, 1, 0)
+		row.MenuButton.Text:SetText("...")
+		row.MenuButton.Text:SetTextColor(1, 0.82, 0)
+
+		row.outfitID = outfitID
 		row.outfitName = info.name
 		row.Icon:SetTexture(info.icon)
 		row.Name:SetText(info.name)
 		row.Name:ClearAllPoints()
 		row.Name:SetPoint("LEFT", row.Icon, "RIGHT", Lint.NameInset(MogtrotDB), 0)
-		row.Name:SetPoint("RIGHT", -64, 0)
-		row.Active:SetShown(info.outfitID == activeOutfitID)
+		row.Name:SetPoint("RIGHT", -72, 0)
+		row.Active:SetShown(outfitID == activeOutfitID)
+		row.MenuButton.outfitID = outfitID
 		row.MenuButton:Show()
 
 		-- A pooled frame arrives carrying whatever the drag and hover handlers last left on it.
 		row:SetAlpha(1)
 		row.Highlight:Hide()
 
-		local mounts = MogtrotCharDB.mounts[info.outfitID]
+		local mounts = MogtrotCharDB.mounts[outfitID]
 		local firstMountID, mountCount = nil, 0
 		for mountID in pairs(mounts or {}) do
 			mountCount = mountCount + 1
 			if not firstMountID or mountID < firstMountID then firstMountID = mountID end
 		end
 
-		-- Pooled rows arrive carrying the previous outfit's icon and count.
+		row.MountButton.outfitID = outfitID
 		row.MountButton:Show()
 		if firstMountID then
 			local _name, _spellID, mountIcon = C_MountJournal.GetMountInfoByID(firstMountID)
@@ -1551,11 +1755,14 @@ function MainWindowUI.Attach(Addon, deps)
 			row.MountCount:Show()
 		end
 
-		local titleCount = CountOutfitTitles(info.outfitID)
+		local titleCount = CountOutfitTitles(outfitID)
+		row.TitleButton.outfitID = outfitID
 		row.TitleButton:Show()
+		row.TitleIcon:SetTexture(237446)
 		row.TitleIcon:Show()
 		row.TitleCount:SetText(titleCount)
 		row.TitleCount:Show()
+
 
 		-- Set unconditionally, like everything else on a pooled row: a recycled frame that
 		-- kept the previous outfit's dot would be wrong while looking entirely right.
@@ -1607,9 +1814,7 @@ function MainWindowUI.Attach(Addon, deps)
 			self.clearRow.Name:SetPoint("RIGHT", frame.NewCategoryButton, "LEFT", -4, 0)
 			self.clearRow.MenuButton:Hide()
 			self.clearRow.LockOverlay:Hide()
-			-- "Show equipped gear" is not an outfit, so it has no mount slot and nothing
-			-- to measure.
-			self.clearRow.MountButton:Hide()
+			-- "Show equipped gear" is not an outfit, so it has no companion entries.
 			self.clearRow.TitleButton:Hide()
 			self.clearRow.LintDot:Hide()
 			self.clearRow:SetAttribute("type", "outfit")
