@@ -25,7 +25,6 @@ local HELP = {
 	{ "state", "print what Mogtrot can see, for a bug report" },
 	{ "probe", "dump what this client build actually exposes" },
 	{ "probe render", "show one outfit on four differently-set bodies" },
-	{ "probe form", "try every way of rendering your other form" },
 	{ "inspect", "capture the appearance list of the player you target" },
 }
 
@@ -129,10 +128,6 @@ SlashCmdList.MOGTROT = function(msg)
 	end
 	if cmd == "probe render" then
 		Diagnostics.ProbeRender(Addon, deps)
-		return
-	end
-	if cmd == "probe form" then
-		Diagnostics.ProbeForm(Addon, deps)
 		return
 	end
 	if cmd == "inspect" then

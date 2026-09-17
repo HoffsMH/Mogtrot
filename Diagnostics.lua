@@ -364,6 +364,114 @@ local inspectTicker
 -- Rough draft: inspect the targeted player and report their appearance list.
 -- The client answers asynchronously, so this polls on the same cadence Mogsnap
 -- proved, and stops as soon as a slot carries a real appearance.
+-- One outfit on differently set bodies, plus the test that separates "display
+-- IDs do not work" from "player display IDs do not work".
+function Diagnostics.ProbeRender(Addon, _deps)
+	local render = ns.ProbeRenderUI
+	if type(render) ~= "table" then
+		Addon:Warn("probe render unavailable: the render module is not loaded.")
+		return
+	end
+	if InCombatLockdown() then
+		Addon:Warn("probe render unavailable during combat.")
+		return
+	end
+
+	local info = C_PlayerInfo
+	local outfits = C_TransmogOutfitInfo
+	local outfitID = outfits and outfits.GetActiveOutfitID
+		and select(2, pcall(outfits.GetActiveOutfitID)) or nil
+	local own = outfitID and MogtrotCharDB and MogtrotCharDB.looks
+		and MogtrotCharDB.looks[outfitID] or nil
+	local list = TransmogListFromLook(own)
+
+	local function Dress(actor, onStatus)
+		return render.DressWhenLoaded(actor, list, onStatus)
+	end
+	local function SetUnitBody(actor, unit, autoDress)
+		if type(actor.SetModelByUnit) ~= "function" then return false end
+		local sheathe, hide, bow = false, false, false
+		return (pcall(actor.SetModelByUnit, actor, unit, sheathe, autoDress,
+			hide, UseNativeForm(unit), bow))
+	end
+
+	-- A live player has no static display row, which is why their own id
+	-- renders bare. A mount does have one and its id is readable, so this
+	-- separates the two cases without hardcoding a guessed number.
+	local function AnyStaticDisplayID()
+		local journal = C_MountJournal
+		if not (journal and journal.GetMountIDs
+			and journal.GetAllCreatureDisplayIDsForMountID) then
+			return nil
+		end
+		local okIDs, mounts = pcall(journal.GetMountIDs)
+		for _, mountID in ipairs(okIDs and mounts or {}) do
+			local okInfo, ids = pcall(journal.GetAllCreatureDisplayIDsForMountID, mountID)
+			if okInfo and type(ids) == "table" and ids[1] then
+				return ids[1], "mount " .. tostring(mountID)
+			end
+		end
+		return nil
+	end
+
+	local ownDisplayID = info and info.GetDisplayID
+		and select(2, pcall(info.GetDisplayID)) or nil
+	local staticID, staticFrom = AnyStaticDisplayID()
+
+	render.Show({
+		formNote = function()
+			return ("your displayID=%s | a static displayID=%s from %s"):format(
+				tostring(ownDisplayID), tostring(staticID), tostring(staticFrom))
+		end,
+		plans = {
+			{
+				title = "1. SetModelByUnit(player)",
+				note = "control",
+				apply = function(actor, onStatus)
+					return SetUnitBody(actor, "player", false) and Dress(actor, onStatus)
+						or "call failed"
+				end,
+			},
+			{
+				title = "2. your own displayID",
+				note = "a player id, expected bare",
+				apply = function(actor)
+					if not ownDisplayID then return "no display ID" end
+					if type(actor.SetModelByCreatureDisplayID) ~= "function" then
+						return "no call"
+					end
+					local ok = pcall(actor.SetModelByCreatureDisplayID, actor,
+						ownDisplayID, true)
+					return ok and "set, undressed on purpose" or "call failed"
+				end,
+			},
+			{
+				title = "3. a static displayID",
+				note = "does this one texture?",
+				apply = function(actor)
+					if not staticID then return "no static display ID found" end
+					if type(actor.SetModelByCreatureDisplayID) ~= "function" then
+						return "no call"
+					end
+					local ok = pcall(actor.SetModelByCreatureDisplayID, actor, staticID, false)
+					return ok and ("%s, id=%d"):format(tostring(staticFrom), staticID)
+						or "call failed"
+				end,
+			},
+			{
+				title = "4. SetModelByUnit(target)",
+				note = "a live body that is not yours",
+				apply = function(actor, onStatus)
+					if not (UnitExists and UnitExists("target")) then return "no target" end
+					return SetUnitBody(actor, "target", false) and Dress(actor, onStatus)
+						or "call failed"
+				end,
+			},
+		},
+	})
+	Addon:Say("probe render open. Panel 3 is the one that matters.")
+end
+
 function Diagnostics.InspectTargetLook(Addon, _deps)
 	local Look = ns.InspectLook
 	if type(Look) ~= "table" then
