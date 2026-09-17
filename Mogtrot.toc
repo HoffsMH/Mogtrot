@@ -20,6 +20,7 @@ SearchPicker.lua
 CopyBox.lua
 ClientProbe.lua
 InspectLook.lua
+RaceBody.lua
 ProbeRenderUI.lua
 OutfitTitles.lua
 OutfitTitlePicker.lua

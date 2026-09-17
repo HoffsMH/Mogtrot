@@ -70,8 +70,15 @@ function CopyBox.Show(title, lines)
 	frame.Title:SetText(title or "Mogtrot")
 	frame.Edit:SetText(table.concat(lines or {}, "\n"))
 	frame:Show()
-	frame.Edit:SetFocus()
-	frame.Edit:HighlightText()
+	-- Taking keyboard focus mid-fight would swallow every keypress, so the
+	-- text waits to be selected until combat drops.
+	if InCombatLockdown() then
+		frame.Hint:SetText("Click the text and Ctrl-A once combat ends.")
+	else
+		frame.Hint:SetText("Ctrl-C copies the selection. Escape closes.")
+		frame.Edit:SetFocus()
+		frame.Edit:HighlightText()
+	end
 	return frame
 end
 

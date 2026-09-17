@@ -472,10 +472,253 @@ function Diagnostics.ProbeRender(Addon, _deps)
 	Addon:Say("probe render open. Panel 3 is the one that matters.")
 end
 
+-- Renders one creature display ID wearing the outfit you are in, so a single
+-- candidate from a race table can be checked by eye before the table ships.
+-- C_AlliedRaces.GetRaceInfoByID answered for neither a core race nor an
+-- allied one, so the ids have to come from outside the client.
+function Diagnostics.ProbeBody(Addon, _deps, displayID)
+	local render = ns.ProbeRenderUI
+	if type(render) ~= "table" then
+		Addon:Warn("probe body unavailable: the render module is not loaded.")
+		return
+	end
+	if InCombatLockdown() then
+		Addon:Warn("probe body unavailable during combat.")
+		return
+	end
+	displayID = tonumber(displayID)
+	if not displayID then
+		Addon:Warn("usage: /mogtrot probe body <creature display ID>")
+		return
+	end
+
+	local outfits = C_TransmogOutfitInfo
+	local outfitID = outfits and outfits.GetActiveOutfitID
+		and select(2, pcall(outfits.GetActiveOutfitID)) or nil
+	local own = outfitID and MogtrotCharDB and MogtrotCharDB.looks
+		and MogtrotCharDB.looks[outfitID] or nil
+	local list = TransmogListFromLook(own)
+
+	local function SetDisplay(actor, dress)
+		if type(actor.SetModelByCreatureDisplayID) ~= "function" then return false end
+		return (pcall(actor.SetModelByCreatureDisplayID, actor, displayID, false)), dress
+	end
+
+	render.Show({
+		formNote = function()
+			local count = 0
+			for _ in pairs(list) do count = count + 1 end
+			return ("display ID %d, dressing %d slot(s) from your active outfit")
+				:format(displayID, count)
+		end,
+		plans = {
+			{
+				title = "1. bare body",
+				note = "is it textured?",
+				apply = function(actor)
+					return SetDisplay(actor) and "set" or "call failed"
+				end,
+			},
+			{
+				title = "2. the same body, dressed",
+				note = "your outfit on it",
+				apply = function(actor, onStatus)
+					if not SetDisplay(actor) then return "call failed" end
+					return render.DressWhenLoaded(actor, list, onStatus)
+				end,
+			},
+			{
+				title = "3. you, for comparison",
+				note = "same outfit, your body",
+				apply = function(actor, onStatus)
+					if type(actor.SetModelByUnit) ~= "function" then return "no call" end
+					local sheathe, hide, bow = false, false, false
+					local ok = pcall(actor.SetModelByUnit, actor, "player", sheathe, false,
+						hide, UseNativeForm("player"), bow)
+					return ok and render.DressWhenLoaded(actor, list, onStatus)
+						or "call failed"
+				end,
+			},
+		},
+	})
+	Addon:Say("probe body %d open.", displayID)
+end
+
+local SECRET_UNITS = { "player", "target", "party1", "party2", "party3", "party4",
+	"raid1", "raid5", "nameplate1", "mouseover" }
+
+-- Every call the documentation marks as going secret under identity
+-- restriction, plus the ones capture depends on. The doc flag says a call CAN
+-- be restricted, not that it is, so this asks the client directly.
+local SECRET_CALLS = {
+	{ "UnitGUID", function(u) return UnitGUID(u) end },
+	{ "UnitName", function(u) return UnitName(u) end },
+	{ "UnitFullName", function(u) return _G.UnitFullName and _G.UnitFullName(u) end },
+	-- The realm arrives as the second return, and the schema stores it apart
+	-- from the name, so it needs checking in its own right.
+	{ "UnitFullName realm", function(u)
+		return _G.UnitFullName and select(2, _G.UnitFullName(u)) end },
+	{ "UnitPVPName", function(u) return _G.UnitPVPName and _G.UnitPVPName(u) end },
+	{ "UnitRace", function(u) return UnitRace(u) end },
+	{ "UnitRace raceID", function(u) return select(3, UnitRace(u)) end },
+	{ "UnitSex", function(u) return UnitSex(u) end },
+	{ "UnitClass", function(u) return UnitClass(u) end },
+	{ "UnitClass classID", function(u) return select(3, UnitClass(u)) end },
+	{ "UnitLevel", function(u) return _G.UnitLevel and _G.UnitLevel(u) end },
+	{ "UnitFactionGroup", function(u)
+		return _G.UnitFactionGroup and _G.UnitFactionGroup(u) end },
+	{ "UnitIsPlayer", function(u) return UnitIsPlayer(u) end },
+	{ "CanInspect", function(u) return _G.CanInspect and _G.CanInspect(u) end },
+	{ "GetInspectSpecialization", function(u)
+		return _G.GetInspectSpecialization and _G.GetInspectSpecialization(u) end },
+	-- Decides which body a two-form race renders in, so it is a schema field
+	-- and belongs in the same census as the rest.
+	{ "WantsAlteredForm", function(u)
+		return C_UnitAuras and C_UnitAuras.WantsAlteredForm
+			and C_UnitAuras.WantsAlteredForm(u) end },
+	{ "GUIDIsPlayer", function(u)
+		local guid = UnitGUID(u)
+		if not guid or (issecretvalue and issecretvalue(guid)) then return nil end
+		return C_PlayerInfo and C_PlayerInfo.GUIDIsPlayer
+			and C_PlayerInfo.GUIDIsPlayer(guid)
+	end },
+}
+
+-- Describes one value without ever comparing or concatenating a secret one,
+-- because doing either is the error this whole check exists to avoid.
+local function Describe(ok, value)
+	if not ok then return "ERROR" end
+	if issecretvalue and issecretvalue(value) then return "SECRET" end
+	if value == nil then return "nil" end
+	if type(value) == "string" then return ("%q"):format(value) end
+	return tostring(value)
+end
+
+-- Reports what this client will actually hand over for each unit, so the
+-- cost of capturing somewhere restricted is measured rather than assumed.
+local function SecretCensus(label)
+	local lines = { "Mogtrot secret probe: " .. tostring(label),
+		"build: " .. tostring(select(1, GetBuildInfo())),
+		"inCombat: " .. tostring(InCombatLockdown() and true or false) }
+
+	local inInstance, instanceType = false, "none"
+	if _G.IsInInstance then
+		local ok, isIn, kind = pcall(_G.IsInInstance)
+		if ok then inInstance, instanceType = isIn, kind or "none" end
+	end
+	lines[#lines + 1] = ("inInstance=%s type=%s"):format(
+		tostring(inInstance), tostring(instanceType))
+
+	for _, unit in ipairs(SECRET_UNITS) do
+		local exists = UnitExists and UnitExists(unit)
+		lines[#lines + 1] = ""
+		if not exists then
+			lines[#lines + 1] = ("== %s: does not exist"):format(unit)
+		else
+			local restricted = "?"
+			if C_Secrets and C_Secrets.ShouldUnitIdentityBeSecret then
+				local ok, secret = pcall(C_Secrets.ShouldUnitIdentityBeSecret, unit)
+				if ok then restricted = tostring(secret) end
+			end
+			lines[#lines + 1] = ("== %s  ShouldUnitIdentityBeSecret=%s")
+				:format(unit, restricted)
+
+			for _, call in ipairs(SECRET_CALLS) do
+				lines[#lines + 1] = ("  %-26s %s"):format(call[1],
+					Describe(pcall(call[2], unit)))
+			end
+
+			local scene = select(2, pcall(CreateFrame, "ModelScene", nil, UIParent,
+				"ModelSceneMixinTemplate"))
+			local actor = scene and scene.CreateActor
+				and select(2, pcall(scene.CreateActor, scene)) or nil
+			local rendered = "no actor"
+			if actor and actor.SetModelByUnit then
+				local ok = pcall(actor.SetModelByUnit, actor, unit, false, true,
+					false, true, false)
+				rendered = ok and "ok" or "ERROR"
+			end
+			if scene then scene:Hide() end
+			lines[#lines + 1] = ("  %-26s %s"):format("SetModelByUnit", rendered)
+		end
+	end
+
+	-- GetInspectItemTransmogInfoList takes no unit: it answers for whoever was
+	-- inspected last. Reporting it per unit made three units look alike when
+	-- only one had been inspected, so it is reported once and labelled.
+	local okList, list = pcall(function()
+		return C_TransmogCollection.GetInspectItemTransmogInfoList()
+	end)
+	local worn = 0
+	if okList and type(list) == "table" then
+		for _, info in pairs(list) do
+			if type(info) == "table" and (info.appearanceID or 0) ~= 0 then
+				worn = worn + 1
+			end
+		end
+	end
+	lines[#lines + 1] = ""
+	lines[#lines + 1] = ("== last completed inspect: %s, %d worn")
+		:format(okList and "ok" or "ERROR", worn)
+	lines[#lines + 1] = "   (not per unit; GetInspectSpecialization is 0 until an"
+	lines[#lines + 1] = "    inspect of that unit finishes, so run /mogtrot inspect first)"
+
+	return lines
+end
+
+local combatWatcher
+
+-- Combat is the one context the probe cannot be typed into, and the likeliest
+-- place for identity restriction to actually fire, given UnitGUID's argument
+-- type is named for PvP. So the census is taken by a listener on the way into
+-- combat and shown on the way out.
+function Diagnostics.ProbeSecret(Addon, _deps, watch)
+	if watch then
+		if not combatWatcher then
+			combatWatcher = CreateFrame("Frame")
+			combatWatcher:SetScript("OnEvent", function(self, event)
+				if event == "PLAYER_REGEN_DISABLED" then
+					-- A frame in, so combat is genuinely established.
+					C_Timer.After(0, function()
+						self.sample = SecretCensus("sampled in combat")
+					end)
+				elseif event == "PLAYER_REGEN_ENABLED" and self.sample then
+					local sample = self.sample
+					self.sample = nil
+					self:UnregisterAllEvents()
+					combatWatcher = nil
+					Addon:Say("combat sample taken, %d lines.", #sample)
+					if ns.CopyBox then
+						ns.CopyBox.Show("Mogtrot secret probe, in combat", sample)
+					end
+				end
+			end)
+		end
+		combatWatcher:RegisterEvent("PLAYER_REGEN_DISABLED")
+		combatWatcher:RegisterEvent("PLAYER_REGEN_ENABLED")
+		Addon:Say("armed. Pull something; the sample opens when combat drops.")
+		return
+	end
+
+	local lines = SecretCensus("now")
+	Addon:Say("secret probe: %d lines. Run /mogtrot inspect on them first.", #lines)
+	if ns.CopyBox then
+		ns.CopyBox.Show("Mogtrot secret probe", lines)
+	else
+		for _, line in ipairs(lines) do print(line) end
+	end
+end
+
 function Diagnostics.InspectTargetLook(Addon, _deps)
 	local Look = ns.InspectLook
 	if type(Look) ~= "table" then
 		Addon:Warn("inspect unavailable: the look module is not loaded.")
+		return
+	end
+	-- Inspecting mid-fight is noise at best, and combat is the context the
+	-- client restricts identity in, so the two rules coincide.
+	if InCombatLockdown() then
+		Addon:Warn("not while you are in combat.")
 		return
 	end
 	-- Inspecting yourself is the only case with a known answer, so it is the
@@ -491,8 +734,31 @@ function Diagnostics.InspectTargetLook(Addon, _deps)
 		return
 	end
 
-	local name = UnitName(unit)
-	local race = UnitRace(unit)
+	-- UnitGUID and UnitName are marked SecretWhenUnitIdentityRestricted, so on
+	-- an instanced map they hand back secret values rather than strings for
+	-- anyone outside your group. Storing or comparing one of those is the
+	-- cooldown-secret trap again, so identity is refused up front rather than
+	-- carried around and blown up on later.
+	-- Under identity restriction the client hands back secret values from
+	-- UnitGUID, UnitRace, UnitSex and UnitClass alike, and SetModelByUnit
+	-- errors outright. The outfit itself stays readable, so capture degrades
+	-- to an anonymous record rather than refusing: the mog is the point, and
+	-- a look seen again unrestricted can be named later.
+	local identified = true
+	if C_Secrets and C_Secrets.ShouldUnitIdentityBeSecret then
+		local ok, secret = pcall(C_Secrets.ShouldUnitIdentityBeSecret, unit)
+		if ok and secret then identified = false end
+	end
+
+	local name = identified and UnitName(unit) or nil
+	local race, raceID, sex
+	if identified then
+		race, _, raceID = UnitRace(unit)
+		sex = UnitSex and UnitSex(unit) or nil
+	end
+	if not identified then
+		Addon:Say("identity is hidden here; capturing the outfit only.")
+	end
 	if inspectTicker then
 		pcall(inspectTicker.Cancel, inspectTicker)
 		inspectTicker = nil
@@ -517,8 +783,9 @@ function Diagnostics.InspectTargetLook(Addon, _deps)
 		local lines = Look.Format(look,
 			("%s the %s - %d worn, %d empty, alteredForm=%s via %s"
 				.. " | you: WantsAlteredForm=%s GetAlternateFormInfo=%s")
-				:format(tostring(name), tostring(race), filled, empty, tostring(altered),
-					tostring(formSource), wantsSelf, inAlternateSelf))
+				:format(tostring(name), tostring(race), filled, empty,
+					tostring(altered), tostring(formSource), wantsSelf,
+					inAlternateSelf))
 		Addon:Say("captured %s: %d worn, %d empty.", tostring(name), filled, empty)
 
 		local render = ns.ProbeRenderUI
@@ -546,10 +813,10 @@ function Diagnostics.InspectTargetLook(Addon, _deps)
 
 		render.Show({
 			formNote = function()
-				return ("%s the %s: %d worn, %d empty, alteredForm=%s"
-					.. " | you: wants=%s inAlt=%s | %d rebuilt")
-					:format(tostring(name), tostring(race), filled, empty,
-						tostring(altered), wantsSelf, inAlternateSelf,
+				return ("%s the %s: raceID=%s sex=%s, %d worn, %d empty,"
+					.. " alteredForm=%s | %d rebuilt")
+					:format(tostring(name), tostring(race), tostring(raceID),
+						tostring(sex), filled, empty, tostring(altered),
 						(function() local n = 0 for _ in pairs(list) do n = n + 1 end return n end)())
 			end,
 			plans = {
@@ -573,6 +840,28 @@ function Diagnostics.InspectTargetLook(Addon, _deps)
 					note = "your body, their outfit",
 					apply = function(actor, onStatus)
 						if not SetBody(actor, "player", false) then return "call failed" end
+						return render.DressWhenLoaded(actor, list, onStatus)
+					end,
+				},
+				{
+					title = "4. a generic " .. tostring(race) .. " body",
+					note = "record and race only, nobody present",
+					apply = function(actor, onStatus)
+						-- The whole point: no unit token anywhere in this path.
+						-- Race plus sex picks a static display row, and the
+						-- record dresses it, which is what replaying a stored
+						-- snap has to do once the wearer is gone.
+						if type(actor.SetModelByCreatureDisplayID) ~= "function" then
+							return "no call"
+						end
+						local body = ns.RaceBody
+						if type(body) ~= "table" then return "no race table" end
+						local displayID, why = body.Lookup(raceID, sex)
+						if not displayID then return tostring(why) end
+						local ok = pcall(actor.SetModelByCreatureDisplayID, actor,
+							displayID, false)
+						if not ok then return "call failed for id " .. tostring(displayID) end
+						onStatus(("id=%d, dressing"):format(displayID))
 						return render.DressWhenLoaded(actor, list, onStatus)
 					end,
 				},

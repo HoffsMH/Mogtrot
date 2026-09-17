@@ -25,6 +25,9 @@ local HELP = {
 	{ "state", "print what Mogtrot can see, for a bug report" },
 	{ "probe", "dump what this client build actually exposes" },
 	{ "probe render", "show one outfit on four differently-set bodies" },
+	{ "probe body <id>", "render one creature display ID wearing your outfit" },
+	{ "probe secret", "what this client will tell you about each unit here" },
+	{ "probe secret watch", "take that census in combat, shown when it drops" },
 	{ "inspect", "capture the appearance list of the player you target" },
 }
 
@@ -128,6 +131,23 @@ SlashCmdList.MOGTROT = function(msg)
 	end
 	if cmd == "probe render" then
 		Diagnostics.ProbeRender(Addon, deps)
+		return
+	end
+	local probeBody = cmd:match("^probe body%s+(%S+)$")
+	if probeBody then
+		Diagnostics.ProbeBody(Addon, deps, probeBody)
+		return
+	end
+	if cmd == "probe body" then
+		Diagnostics.ProbeBody(Addon, deps, nil)
+		return
+	end
+	if cmd == "probe secret" then
+		Diagnostics.ProbeSecret(Addon, deps, false)
+		return
+	end
+	if cmd == "probe secret watch" then
+		Diagnostics.ProbeSecret(Addon, deps, true)
 		return
 	end
 	if cmd == "inspect" then
