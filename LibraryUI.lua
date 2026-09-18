@@ -70,15 +70,12 @@ local lastApply = {}
 --
 -- Keyed by what a body is, not by whose record it was, so two women of the
 -- same race share one and a library of hundreds needs only a handful.
-local pool = {}
-local poolHolder
+local characterPool
 
 -- The one body currently lent to the detail pane, if any. Two bodies for one
 -- record can never be guaranteed to agree, so there is only ever one and it
 -- moves between the wall and the pane.
 -- The twin scene currently parented into the detail pane.
-local paneScene
-
 -- Which body a card is asked to use, by record id. Runtime only: it is a way
 -- of looking, not a fact about the wearer.
 --
@@ -361,26 +358,31 @@ local function IdealBodyKey(record, body)
 	return BodyKey(record, shown, native, record.sex)
 end
 
--- A hidden scene, built once and kept for the session. Frames are never freed
--- in this client, so this is a commitment rather than a cache; it is affordable
--- only because a hidden one draws nothing.
-local function NewEntry()
-	if not poolHolder then
-		poolHolder = CreateFrame("Frame", nil, UIParent)
-		poolHolder:SetSize(1, 1)
-		poolHolder:SetPoint("TOPLEFT", UIParent, "TOPLEFT", -10, 10)
-		poolHolder:Hide()
-	end
-	local scene = CreateFrame("ModelScene", nil, poolHolder, "ModelSceneMixinTemplate")
+-- Distinct bodies are bounded by race, sex and form. The cap only guards
+-- against a pathological account growing this without end.
+local POOL_LIMIT = 60
+
+local function Pool()
+	if characterPool then return characterPool end
+	local holder = CreateFrame("Frame", nil, UIParent)
+	holder:SetSize(1, 1)
+	holder:SetPoint("TOPLEFT", UIParent, "TOPLEFT", -10, 10)
+	holder:Hide()
+	characterPool = ns.CharacterModelPool.New(POOL_LIMIT, holder)
+	return characterPool
+end
+
+local function AttachScene(entry)
+	if not entry or entry.scene then return entry end
+	local holder = Pool():Holder()
+	local scene = CreateFrame("ModelScene", nil, holder, "ModelSceneMixinTemplate")
 	scene:SetSize(CARD_W - 14, CARD_H - 51)
 	scene:SetPoint("TOPLEFT")
-	-- The scene must not take the mouse at all: its own handlers zoom on the
-	-- wheel and pan on a drag, which is neither of those gestures here.
+	-- Its own handlers would turn wall scrolling into zoom and panning.
 	scene:EnableMouse(false)
 	scene:EnableMouseWheel(false)
 	scene:Hide()
-	local entry = { scene = scene }
-	pool[#pool + 1] = entry
+	entry.scene = scene
 	return entry
 end
 
@@ -390,28 +392,17 @@ local function Release(card)
 	if not entry then return end
 	-- Only the card's own entry may be released. If something else has already
 	-- taken it, reparenting it here would tear the scene out of that card.
-	if entry.card ~= nil and entry.card ~= card then
+	local released = Pool():Release(card)
+	if released ~= entry then
 		card.body, card.actor, card.mountActor = nil, nil, nil
 		return
 	end
 	card.body, card.actor, card.mountActor = nil, nil, nil
-	entry.card = nil
-	-- A scene that was holding a mount is not a body scene any more, and its
-	-- actor belongs to a scene layout the next card will replace.
-	if entry.key == nil then
-		entry.actor = nil
-		entry.note = nil
-	end
-	entry.scene:SetParent(poolHolder)
+	entry.scene:SetParent(Pool():Holder())
 	entry.scene:ClearAllPoints()
 	entry.scene:SetPoint("TOPLEFT")
 	entry.scene:Hide()
 end
-
--- How many scenes the pool may hold. Distinct bodies are bounded by race,
--- sex and form, so a large library needs far fewer than it has records. The
--- cap exists only so a pathological account cannot grow this without end.
-local POOL_LIMIT = 60
 
 -- The scene a card should use for this body.
 --
@@ -423,38 +414,8 @@ local POOL_LIMIT = 60
 -- the cap does it fall back to taking a built body, oldest first.
 local function Acquire(card, wantedKey)
 	Release(card)
-
-	local empty, oldest
-	for _, entry in ipairs(pool) do
-		if not entry.card and not entry.pane then
-			if wantedKey and entry.key == wantedKey then
-				entry.card = card
-				card.body = entry
-				entry.scene:SetParent(card)
-				entry.scene:ClearAllPoints()
-				entry.scene:SetPoint("TOPLEFT", 7, -7)
-				entry.scene:SetPoint("BOTTOMRIGHT", -7, 44)
-				entry.scene:Show()
-				return entry
-			end
-			if not entry.key then
-				empty = empty or entry
-			else
-				oldest = oldest or entry
-			end
-		end
-	end
-
-	local entry = empty
-	if not entry then
-		if #pool < POOL_LIMIT then
-			entry = NewEntry()
-		else
-			entry = oldest
-		end
-	end
-	if not entry then entry = NewEntry() end
-	entry.card = card
+	local entry = AttachScene(Pool():Acquire(card, wantedKey))
+	if not entry then return nil end
 	card.body = entry
 	entry.scene:SetParent(card)
 	entry.scene:ClearAllPoints()
@@ -494,6 +455,11 @@ local function Paint(card, record)
 	-- everything on you because one card's right-click menu was used.
 	local keyed = wantRecordBody and not ownBody[record.id] and not Mounted(record)
 	local entry = Acquire(card, keyed and ideal or nil)
+	if not entry then
+		card.actor = nil
+		card.Status:SetText("character model pool full")
+		return
+	end
 	if ownBody[record.id] then entry.key = nil end
 
 	-- A body that is already exactly right is never rebuilt: rebuilding it
@@ -1120,18 +1086,8 @@ function LibraryUI.WarmBody(record, donorUnit)
 	local ideal = IdealBodyKey(record, body)
 	if not ideal then return false end
 
-	local empty
-	for _, entry in ipairs(pool) do
-		if entry.key == ideal then return false end
-		if not entry.card and not entry.pane and not entry.key then
-			empty = empty or entry
-		end
-	end
-	local entry = empty
-	if not entry then
-		if #pool >= POOL_LIMIT then return false end
-		entry = NewEntry()
-	end
+	local entry = AttachScene(Pool():Warm(ideal))
+	if not entry then return false end
 
 	-- Only build when somebody of the right sex is actually there. Without this
 	-- the fallback quietly builds the body on your own unit, produces the wrong
@@ -1167,15 +1123,7 @@ function LibraryUI.WarmBody(record, donorUnit)
 	-- The twin, from the same person while they are still there. Without it the
 	-- detail pane would have to rebuild later from whoever is left, which is a
 	-- different face in the same clothes.
-	local twin
-	for _, other in ipairs(pool) do
-		if other.pane and other.key == ideal then twin = other break end
-		if other.pane and not other.card and not other.key then twin = twin or other end
-	end
-	if not twin and #pool < POOL_LIMIT then
-		twin = NewEntry()
-		twin.pane = true
-	end
+	local twin = AttachScene(Pool():WarmPane(ideal))
 	if twin and twin.key ~= ideal then
 		twin.pane = true
 		local twinActor = render.PreparedActor(twin.scene, record.raceFile, record.sex,
@@ -1216,11 +1164,6 @@ local function Missing(list)
 	local mine = UnitSex and UnitSex("player") or nil
 	if not body then return 0 end
 
-	local have = {}
-	for _, entry in ipairs(pool) do
-		if entry.key then have[entry.key] = true end
-	end
-
 	-- Without knowing your own sex there is no way to tell which records need a
 	-- borrowed body, and answering "none" would declare full fidelity with
 	-- nothing built. Count them all as waiting instead.
@@ -1230,7 +1173,7 @@ local function Missing(list)
 	for _, record in ipairs(list) do
 		if record.sex and record.sex ~= mine and not ownBody[record.id] then
 			local ideal = IdealBodyKey(record, body)
-			if not (ideal and have[ideal]) then waiting = waiting + 1 end
+			if not (ideal and Pool():Find(ideal)) then waiting = waiting + 1 end
 		end
 	end
 	return waiting
@@ -1268,22 +1211,15 @@ function LibraryUI.PaneBody(record, parent, inset)
 	local ideal = IdealBodyKey(record, body)
 	if not ideal then return nil end
 
-	local twin
-	for _, entry in ipairs(pool) do
-		if entry.pane and entry.key == ideal and entry.actor then
-			twin = entry
-			break
-		end
-	end
+	local twin, previous = Pool():BorrowPane(ideal)
 	if not twin then return nil end
 
-	if paneScene and paneScene ~= twin.scene then
-		paneScene:SetParent(poolHolder)
-		paneScene:ClearAllPoints()
-		paneScene:SetPoint("TOPLEFT")
-		paneScene:Hide()
+	if previous and previous ~= twin then
+		previous.scene:SetParent(Pool():Holder())
+		previous.scene:ClearAllPoints()
+		previous.scene:SetPoint("TOPLEFT")
+		previous.scene:Hide()
 	end
-	paneScene = twin.scene
 	twin.scene:SetParent(parent)
 	twin.scene:ClearAllPoints()
 	twin.scene:SetPoint("TOPLEFT", inset.left, -inset.top)
@@ -1315,12 +1251,12 @@ function LibraryUI.BodyIsDeterministic(record)
 end
 
 function LibraryUI.ReturnPaneBody()
-	if not paneScene then return end
-	paneScene:SetParent(poolHolder)
-	paneScene:ClearAllPoints()
-	paneScene:SetPoint("TOPLEFT")
-	paneScene:Hide()
-	paneScene = nil
+	local entry = characterPool and characterPool:ReturnPane()
+	if not entry then return end
+	entry.scene:SetParent(Pool():Holder())
+	entry.scene:ClearAllPoints()
+	entry.scene:SetPoint("TOPLEFT")
+	entry.scene:Hide()
 end
 
 -- Builds a record's body into a scene somebody else owns, and dresses it.
@@ -1352,12 +1288,8 @@ function LibraryUI.RenderInto(scene, record)
 	-- women of the same race. Falls back to the race, then to anybody.
 	local ideal = IdealBodyKey(record, body)
 	local preferRace, wantGUID
-	for _, entry in ipairs(pool) do
-		if ideal and entry.key == ideal then
-			preferRace, wantGUID = entry.donorRace, entry.donorGUID
-			break
-		end
-	end
+	local stored = ideal and Pool():Find(ideal)
+	if stored then preferRace, wantGUID = stored.donorRace, stored.donorGUID end
 
 	local sameDonor
 	if wantGUID then

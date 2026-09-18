@@ -17,6 +17,7 @@ Library.lua
 LibraryText.lua
 FormDefinitions.lua
 DonorBody.lua
+CharacterModelPool.lua
 Addon.lua
 Database.lua
 UI.lua
