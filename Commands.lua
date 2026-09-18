@@ -24,11 +24,15 @@ local HELP = {
 	{ "macro", "check the three action bar macros, for a bug report" },
 	{ "state", "print what Mogtrot can see, for a bug report" },
 	{ "probe", "dump what this client build actually exposes" },
-	{ "probe render", "show one outfit on four differently-set bodies" },
 	{ "probe body <id>", "render one creature display ID wearing your outfit" },
+	{ "probe donors", "which units the library could borrow a body from now" },
+	{ "probe actors", "which bodies the dress-up scene can actually pose" },
+	{ "probe auras", "every aura on the player you target, for form research" },
 	{ "probe secret", "what this client will tell you about each unit here" },
 	{ "probe secret watch", "take that census in combat, shown when it drops" },
 	{ "inspect", "capture the appearance list of the player you target" },
+	{ "snap", "save the look of the player you target into the library" },
+	{ "library", "every look you have captured, four to a row" },
 }
 
 local function ShowHelp()
@@ -129,10 +133,6 @@ SlashCmdList.MOGTROT = function(msg)
 		Diagnostics.ProbeClient(Addon, deps)
 		return
 	end
-	if cmd == "probe render" then
-		Diagnostics.ProbeRender(Addon, deps)
-		return
-	end
 	local probeBody = cmd:match("^probe body%s+(%S+)$")
 	if probeBody then
 		Diagnostics.ProbeBody(Addon, deps, probeBody)
@@ -140,6 +140,18 @@ SlashCmdList.MOGTROT = function(msg)
 	end
 	if cmd == "probe body" then
 		Diagnostics.ProbeBody(Addon, deps, nil)
+		return
+	end
+	if cmd == "probe donors" then
+		Diagnostics.ProbeDonors(Addon, deps)
+		return
+	end
+	if cmd == "probe actors" then
+		Diagnostics.ProbeActors(Addon, deps)
+		return
+	end
+	if cmd == "probe auras" then
+		Diagnostics.ProbeAuras(Addon, deps)
 		return
 	end
 	if cmd == "probe secret" then
@@ -152,6 +164,24 @@ SlashCmdList.MOGTROT = function(msg)
 	end
 	if cmd == "inspect" then
 		Diagnostics.InspectTargetLook(Addon, deps)
+		return
+	end
+	if cmd == "snap" then
+		if ns.SnapCapture then
+			ns.SnapCapture.Target(Addon)
+		else
+			Addon:Warn("capture unavailable: the capture module is not loaded.")
+		end
+		return
+	end
+	if cmd == "library" then
+		if InCombatLockdown() then
+			Addon:Warn("not while you are in combat.")
+		elseif ns.LibraryUI then
+			ns.LibraryUI.Toggle()
+		else
+			Addon:Warn("library unavailable: the library window is not loaded.")
+		end
 		return
 	end
 

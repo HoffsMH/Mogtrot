@@ -3,11 +3,12 @@ if type(ns) ~= "table" then ns = {} end
 
 local Tree = ns.Tree or require("Tree")
 local CategoryColor = ns.CategoryColor or require("CategoryColor")
+local Library = ns.Library or require("Library")
 
 -- Initializes and upgrades the account settings and per-character outfit data
 -- saved by Mogtrot.
 --
--- Targets: account version 2 (generic pin domains), character version 5
+-- Targets: account version 3 (generic pin domains, outfit library), character version 5
 -- (link maps, pin opt-outs, rotations). Migration order matters: version
 -- checks gate everything; legacy records are normalized before keys move;
 -- old keys are deleted only after a successful move; the version field is
@@ -15,7 +16,7 @@ local CategoryColor = ns.CategoryColor or require("CategoryColor")
 -- composition gates on that instead of lazily re-creating nested structures.
 local Database = {}
 
-local ACCOUNT_VERSION = 2
+local ACCOUNT_VERSION = 3
 local CHAR_VERSION = 5
 local DEFAULT_CATEGORIES = { "Tier", "Non-tier sets", "Simple" }
 
@@ -49,6 +50,8 @@ local function InitAccount(account)
 	if account.minimap.hide == nil then account.minimap.hide = false end
 	account.titleFallbackMode = account.titleFallbackMode or "random"
 	EnsurePinDomains(account)
+	-- Additive and self-gating: a library from a newer build is left alone.
+	Library.Migrate(account)
 end
 
 -- Normalizes legacy v1 pin records in place: manual pins become permanent,
@@ -234,6 +237,9 @@ function Database.MigrateOrInit(account, char)
 				and account.pins.mounts.records ~= account.mountPins then
 				accountOK = false
 			end
+		elseif account.version == 2 then
+			-- v2 to v3 only adds the library, so nothing moves and nothing collides.
+			accountOK = true
 		else
 			accountOK = false
 		end

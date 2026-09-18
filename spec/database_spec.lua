@@ -4,7 +4,7 @@ describe("Database.MigrateOrInit", function()
 	it("initializes new account and character data", function()
 		local account, char = Database.MigrateOrInit(nil, nil)
 
-		assert.equal(2, account.version)
+		assert.equal(3, account.version)
 		assert.is_true(account.previewEnabled)
 		assert.is_false(account.hideEmptyCategories)
 		assert.equal("random", account.titleFallbackMode)
@@ -167,9 +167,9 @@ describe("Database.MigrateOrInit v2/v5", function()
 		return copy
 	end
 
-	it("targets account version 2 and character version 5", function()
+	it("targets account version 3 and character version 5", function()
 		local account, char = FreshDomains()
-		assert.equal(2, account.version)
+		assert.equal(3, account.version)
 		assert.equal(5, char.version)
 	end)
 
@@ -220,7 +220,7 @@ describe("Database.MigrateOrInit v2/v5", function()
 			autoPinNewMountDays = 0,
 		}, {})
 
-		assert.equal(2, account.version)
+		assert.equal(3, account.version)
 		assert.equal(records, account.pins.mounts.records)
 		assert.is_false(account.pins.mounts.autoNew)
 		assert.equal(0, account.pins.mounts.days)
@@ -341,6 +341,7 @@ describe("Database.MigrateOrInit v2/v5", function()
 		assert.same(expectedAccount, migratedAccount)
 		assert.same(expectedChar, migratedChar)
 		assert.is_nil(migratedAccount.pins)
+		assert.is_nil(migratedAccount.library)
 		assert.is_nil(migratedChar.pinOptOut)
 		assert.is_nil(migratedChar.rotations)
 		assert.is_nil(migratedChar.battlePets)
@@ -370,13 +371,13 @@ describe("Database.MigrateOrInit v2/v5", function()
 			mountPins = records,
 			pins = { mounts = { records = records } },
 		}, {})
-		assert.equal(2, account.version)
+		assert.equal(3, account.version)
 		assert.equal(records, account.pins.mounts.records)
 
 		local again = Database.MigrateOrInit(account, {})
 		assert.equal(account, again)
 		assert.equal(records, again.pins.mounts.records)
-		assert.equal(2, again.version)
+		assert.equal(3, again.version)
 	end)
 	it("keeps the v2 chain: color normalization and numeric mount conversion before v5", function()
 		local cats = { [7] = { id = 7, name = "Kept", color = { r = 2 } } }
@@ -423,5 +424,54 @@ describe("Database.MigrateOrInit v2/v5", function()
 		assert.equal(noPinnedShuffle, char.noPinnedShuffle)
 		assert.equal(existing, char.pinOptOut.mounts)
 		assert.equal(4, char.version)
+	end)
+end)
+
+-- The outfit library arrives at account version 3, additively: no other store
+-- moves, and a character never sees it.
+describe("Database.MigrateOrInit library", function()
+	it("gives a fresh account an empty library", function()
+		local account = Database.MigrateOrInit(nil, nil)
+		assert.is_table(account.library)
+		assert.equal(1, account.library.version)
+		assert.equal(1, account.library.nextID)
+		assert.same({}, account.library.records)
+	end)
+
+	it("adds the library to a version 2 account and leaves its data alone", function()
+		local records = { [2747] = { acquiredAt = 1000 } }
+		local account = Database.MigrateOrInit({
+			version = 2,
+			previewEnabled = false,
+			pins = { mounts = { autoNew = false, days = 3, records = records } },
+		}, {})
+		assert.equal(3, account.version)
+		assert.is_table(account.library)
+		assert.equal(records, account.pins.mounts.records)
+		assert.is_false(account.pins.mounts.autoNew)
+		assert.equal(3, account.pins.mounts.days)
+		assert.is_false(account.previewEnabled)
+	end)
+
+	it("keeps an existing library's records across a reload", function()
+		local account = Database.MigrateOrInit(nil, nil)
+		account.library.records[1] = { id = 1, source = "snap", look = "1:5,0,0" }
+		account.library.nextID = 2
+		local again = Database.MigrateOrInit(account, {})
+		assert.equal(2, again.library.nextID)
+		assert.equal("snap", again.library.records[1].source)
+	end)
+
+	it("does not touch a library written by a newer build", function()
+		local future = { version = 99, nextID = 8, records = { [7] = { kept = true } } }
+		local account = Database.MigrateOrInit({ version = 2, library = future }, {})
+		assert.equal(future, account.library)
+		assert.equal(99, account.library.version)
+		assert.is_true(account.library.records[7].kept)
+	end)
+
+	it("keeps the library off the character store", function()
+		local _, char = Database.MigrateOrInit(nil, nil)
+		assert.is_nil(char.library)
 	end)
 end)

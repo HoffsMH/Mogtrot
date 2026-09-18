@@ -74,7 +74,7 @@ visual kit.
 `/mogtrot state` prints what Mogtrot can see. Include that, and whatever
 BugSack shows, if anything.
 
-⚠️ Note that WoW blames whichever addon tainted the execution path, which is not
+(caution) Note that WoW blames whichever addon tainted the execution path, which is not
 always the addon at fault - an error naming Mogtrot may belong to something else,
 and the reverse happens too. The stack trace is more informative than the name.
 

@@ -1,0 +1,49 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Everything that can fail without loading the game. Run it before handing work
+# back: the suite, a parse of every file, and the luacheck codes that catch
+# mistakes a passing suite cannot see.
+#
+# Redefinition is the one worth gating on. A function defined twice in one file
+# is not an error in Lua: the later definition wins, so the file reads correctly
+# and stale code runs. Six of those accumulated in one session before anything
+# noticed.
+
+cd "$(dirname "${BASH_SOURCE[0]}")/.."
+
+busted_bin=/usr/lib/luarocks/rocks-5.1/busted/2.3.0-1/bin/busted
+if [[ ! -f $busted_bin ]]; then
+  echo "check: busted not found at $busted_bin" >&2
+  exit 2
+fi
+
+echo "== specs =="
+lua5.1 "$busted_bin"
+
+echo
+echo "== syntax =="
+luac5.1 -p ./*.lua
+echo "every file parses"
+
+echo
+echo "== redefinitions =="
+report=$(mktemp)
+trap 'rm -f "$report"' EXIT
+luacheck . --codes --no-color > "$report" 2>&1 || true
+
+# 411 variable redefined, 412 argument redefined, 413 loop variable redefined.
+if command grep -q -E '\(W41[123]\)' "$report"; then
+  echo "a name is defined twice; the later definition silently wins:" >&2
+  command grep -E '\(W41[123]\)' "$report" >&2
+  exit 1
+fi
+echo "no redefinitions"
+
+echo
+echo "== luacheck errors =="
+if command grep -q -E '[0-9]+ errors' "$report" && ! command grep -q '0 errors' "$report"; then
+  tail -40 "$report" >&2
+  exit 1
+fi
+tail -1 "$report"

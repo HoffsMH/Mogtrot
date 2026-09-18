@@ -3,10 +3,13 @@ if type(ns) ~= "table" then ns = {} end -- luacheck: ignore 331/ns
 
 -- Race and sex to a creature display ID that renders a plain, textured body.
 --
--- Needed because a stored outfit has to be shown on some body once its wearer
--- is gone, and a live player's own display ID renders as an untextured
--- silhouette: a player has no static display row to composite from. A static
--- creature row does, so a record can be replayed on a body of the right race.
+-- The fallback body for a stored outfit once its wearer is gone. A live
+-- player's own display ID renders as an untextured silhouette; these static
+-- rows render the race correctly, but they are creature models, so they wear
+-- only attachments. A helm and weapons appear and every composited piece is
+-- dropped, with each slot still reporting success. Armor needs a player-type
+-- model, so the library sets the body with SetModelByUnit and its race
+-- override first and falls back to these rows.
 --
 -- Every entry is a gearless base body, not a named NPC. The obvious-looking
 -- source is wrong twice over: ChrRaces lost its display columns after 8.0, and
@@ -61,6 +64,34 @@ RaceBody.bodies = {
 	[86] = { male = 140493, female = 140492 }, -- Haranir, Alliance
 	[91] = { male = 140503, female = 140502 }, -- Haranir, Horde
 }
+
+-- The races that have a second body to stand in. Everyone else has one form,
+-- so recording which form they were in says nothing and a stored false reads
+-- as "was transformed", which is worse than not recording it.
+RaceBody.alternateForms = {
+	[22] = true, -- Worgen, worgen and human
+	[52] = true, -- Dracthyr, Alliance
+	[70] = true, -- Dracthyr, Horde
+	[75] = true, -- Visage, Alliance
+	[76] = true, -- Visage, Horde
+}
+
+-- Dracthyr visage has a race ID of its own, which is what makes it reachable:
+-- asking for race 75 in its native form is a humanoid body, where asking for
+-- race 52 in its altered form asks the client to alter the viewer, not the
+-- subject. Worgen have no second race ID, so their human form is not here.
+RaceBody.visageRaces = {
+	[52] = 75, -- Dracthyr, Alliance
+	[70] = 76, -- Dracthyr, Horde
+}
+
+function RaceBody.VisageRace(raceID)
+	return RaceBody.visageRaces[raceID]
+end
+
+function RaceBody.HasAlternateForm(raceID)
+	return RaceBody.alternateForms[raceID] == true
+end
 
 -- Returns displayID, or nil plus a reason. A miss is expected the patch a new
 -- playable race ships, so the caller must degrade rather than guess: never

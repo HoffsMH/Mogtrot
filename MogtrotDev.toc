@@ -12,6 +12,11 @@
 StartupGuard.lua
 CategoryColor.lua
 Tree.lua
+LookCodec.lua
+Library.lua
+LibraryText.lua
+FormDefinitions.lua
+DonorBody.lua
 Addon.lua
 Database.lua
 UI.lua
@@ -21,6 +26,9 @@ ClientProbe.lua
 InspectLook.lua
 RaceBody.lua
 ProbeRenderUI.lua
+LibraryUI.lua
+LibraryDetailUI.lua
+SnapCapture.lua
 OutfitTitles.lua
 OutfitTitlePicker.lua
 OutfitTitleController.lua

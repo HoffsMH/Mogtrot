@@ -316,20 +316,9 @@ function Diagnostics.ProbeClient(Addon, _deps)
 end
 
 local function TransmogListFromLook(look)
-	local list = {}
-	if type(look) ~= "table" or not (ItemUtil and ItemUtil.CreateItemTransmogInfo) then
-		return list
-	end
-	for slotID, entry in pairs(look) do
-		local empty = (entry[1] or 0) == 0 and (entry[2] or 0) == 0
-			and (entry[3] or 0) == 0
-		if type(slotID) == "number" and type(entry) == "table" and not empty then
-			local ok, info = pcall(ItemUtil.CreateItemTransmogInfo,
-				entry[1], entry[2], entry[3])
-			if ok and info then list[slotID] = info end
-		end
-	end
-	return list
+	local render = ns.ProbeRenderUI
+	if type(render) ~= "table" then return {} end
+	return render.TransmogList(look)
 end
 
 -- The boolean SetModelByUnit wants for usePlayerNativeForm.
@@ -360,122 +349,6 @@ local INSPECT_INTERVAL = 0.5
 local INSPECT_ATTEMPTS = 10
 
 local inspectTicker
-
--- Rough draft: inspect the targeted player and report their appearance list.
--- The client answers asynchronously, so this polls on the same cadence Mogsnap
--- proved, and stops as soon as a slot carries a real appearance.
--- One outfit on differently set bodies, plus the test that separates "display
--- IDs do not work" from "player display IDs do not work".
-function Diagnostics.ProbeRender(Addon, _deps)
-	local render = ns.ProbeRenderUI
-	if type(render) ~= "table" then
-		Addon:Warn("probe render unavailable: the render module is not loaded.")
-		return
-	end
-	if InCombatLockdown() then
-		Addon:Warn("probe render unavailable during combat.")
-		return
-	end
-
-	local info = C_PlayerInfo
-	local outfits = C_TransmogOutfitInfo
-	local outfitID = outfits and outfits.GetActiveOutfitID
-		and select(2, pcall(outfits.GetActiveOutfitID)) or nil
-	local own = outfitID and MogtrotCharDB and MogtrotCharDB.looks
-		and MogtrotCharDB.looks[outfitID] or nil
-	local list = TransmogListFromLook(own)
-
-	local function Dress(actor, onStatus)
-		return render.DressWhenLoaded(actor, list, onStatus)
-	end
-	local function SetUnitBody(actor, unit, autoDress)
-		if type(actor.SetModelByUnit) ~= "function" then return false end
-		local sheathe, hide, bow = false, false, false
-		return (pcall(actor.SetModelByUnit, actor, unit, sheathe, autoDress,
-			hide, UseNativeForm(unit), bow))
-	end
-
-	-- A live player has no static display row, which is why their own id
-	-- renders bare. A mount does have one and its id is readable, so this
-	-- separates the two cases without hardcoding a guessed number.
-	local function AnyStaticDisplayID()
-		local journal = C_MountJournal
-		if not (journal and journal.GetMountIDs
-			and journal.GetAllCreatureDisplayIDsForMountID) then
-			return nil
-		end
-		local okIDs, mounts = pcall(journal.GetMountIDs)
-		for _, mountID in ipairs(okIDs and mounts or {}) do
-			local okInfo, ids = pcall(journal.GetAllCreatureDisplayIDsForMountID, mountID)
-			if okInfo and type(ids) == "table" and ids[1] then
-				return ids[1], "mount " .. tostring(mountID)
-			end
-		end
-		return nil
-	end
-
-	local ownDisplayID = info and info.GetDisplayID
-		and select(2, pcall(info.GetDisplayID)) or nil
-	local staticID, staticFrom = AnyStaticDisplayID()
-
-	render.Show({
-		formNote = function()
-			return ("your displayID=%s | a static displayID=%s from %s"):format(
-				tostring(ownDisplayID), tostring(staticID), tostring(staticFrom))
-		end,
-		plans = {
-			{
-				title = "1. SetModelByUnit(player)",
-				note = "control",
-				apply = function(actor, onStatus)
-					return SetUnitBody(actor, "player", false) and Dress(actor, onStatus)
-						or "call failed"
-				end,
-			},
-			{
-				title = "2. your own displayID",
-				note = "a player id, expected bare",
-				apply = function(actor)
-					if not ownDisplayID then return "no display ID" end
-					if type(actor.SetModelByCreatureDisplayID) ~= "function" then
-						return "no call"
-					end
-					local ok = pcall(actor.SetModelByCreatureDisplayID, actor,
-						ownDisplayID, true)
-					return ok and "set, undressed on purpose" or "call failed"
-				end,
-			},
-			{
-				title = "3. a static displayID",
-				note = "does this one texture?",
-				apply = function(actor)
-					if not staticID then return "no static display ID found" end
-					if type(actor.SetModelByCreatureDisplayID) ~= "function" then
-						return "no call"
-					end
-					local ok = pcall(actor.SetModelByCreatureDisplayID, actor, staticID, false)
-					return ok and ("%s, id=%d"):format(tostring(staticFrom), staticID)
-						or "call failed"
-				end,
-			},
-			{
-				title = "4. SetModelByUnit(target)",
-				note = "a live body that is not yours",
-				apply = function(actor, onStatus)
-					if not (UnitExists and UnitExists("target")) then return "no target" end
-					return SetUnitBody(actor, "target", false) and Dress(actor, onStatus)
-						or "call failed"
-				end,
-			},
-		},
-	})
-	Addon:Say("probe render open. Panel 3 is the one that matters.")
-end
-
--- Renders one creature display ID wearing the outfit you are in, so a single
--- candidate from a race table can be checked by eye before the table ships.
--- C_AlliedRaces.GetRaceInfoByID answered for neither a core race nor an
--- allied one, so the ids have to come from outside the client.
 function Diagnostics.ProbeBody(Addon, _deps, displayID)
 	local render = ns.ProbeRenderUI
 	if type(render) ~= "table" then
@@ -895,7 +768,174 @@ function Diagnostics.InspectTargetLook(Addon, _deps)
 		end
 	end)
 end
+function Diagnostics.ProbeAuras(Addon, _deps)
+	local auras = C_UnitAuras
+	if not (auras and auras.GetAuraDataByIndex) then
+		Addon:Warn("this client exposes no aura list.")
+		return
+	end
 
+	local unit = "player"
+	if UnitExists and UnitExists("target") and UnitIsPlayer and UnitIsPlayer("target") then
+		unit = "target"
+	else
+		Addon:Say("no player targeted; listing your own auras.")
+	end
+
+	local forms = ns.FormDefinitions
+	local lines = {}
+	local name = UnitName and UnitName(unit)
+	if name and issecretvalue and issecretvalue(name) then name = nil end
+	lines[#lines + 1] = ("auras on %s"):format(tostring(name))
+	local _, raceFile = UnitRace(unit)
+	lines[#lines + 1] = ("race=%s sex=%s class=%s"):format(tostring(raceFile),
+		tostring(UnitSex and UnitSex(unit)), tostring(select(2, UnitClass(unit))))
+	lines[#lines + 1] = ""
+
+	for _, filter in ipairs({ "HELPFUL", "HARMFUL" }) do
+		lines[#lines + 1] = filter
+		local found = 0
+		for index = 1, 60 do
+			local ok, aura = pcall(auras.GetAuraDataByIndex, unit, index, filter)
+			if not ok or not aura then break end
+			found = found + 1
+			local spellID = aura.spellId
+			local known = forms and spellID and forms.Lookup(spellID)
+			lines[#lines + 1] = ("  %-8s %s%s"):format(tostring(spellID),
+				tostring(aura.name),
+				known and ("   <- known form: " .. known.kind) or "")
+		end
+		if found == 0 then lines[#lines + 1] = "  none" end
+		lines[#lines + 1] = ""
+	end
+
+	Addon:Say("aura probe: %d lines.", #lines)
+	if ns.CopyBox then
+		ns.CopyBox.Show("Mogtrot auras: " .. tostring(name), lines)
+	else
+		for _, line in ipairs(lines) do print(line) end
+	end
+end
+
+-- Every actor tag the dress-up scene defines, read off the mixin's own
+-- tag-to-actor map. Which tags exist decides whether a record can be shown on
+-- the right body at the right scale: a tag that is missing falls back to an
+-- actor built for some other race, and armour ends up floating around a model
+-- scaled for something else.
+function Diagnostics.ProbeActors(Addon, _deps)
+	if InCombatLockdown() then
+		Addon:Warn("not while you are in combat.")
+		return
+	end
+
+	local scene = Diagnostics.actorScene
+	if not scene then
+		scene = CreateFrame("ModelScene", nil, UIParent, "ModelSceneMixinTemplate")
+		scene:SetSize(1, 1)
+		scene:SetPoint("TOPLEFT", UIParent, "TOPLEFT", -10, 10)
+		scene:Hide()
+		Diagnostics.actorScene = scene
+	end
+
+	local SCENE_ID = 596
+	local ok = pcall(scene.TransitionToModelSceneID, scene, SCENE_ID,
+		CAMERA_TRANSITION_TYPE_IMMEDIATE, CAMERA_MODIFICATION_TYPE_DISCARD, true)
+	if not ok then
+		Addon:Warn("could not build model scene %d.", SCENE_ID)
+		return
+	end
+
+	local tags = {}
+	for tag in pairs(scene.tagToActor or {}) do
+		if type(tag) == "string" then tags[#tags + 1] = tag end
+	end
+	table.sort(tags)
+
+	local lines = { ("model scene %d defines %d actor tag(s)"):format(SCENE_ID, #tags), "" }
+	for _, tag in ipairs(tags) do lines[#lines + 1] = "  " .. tag end
+
+	local _, raceFile = UnitRace("player")
+	lines[#lines + 1] = ""
+	lines[#lines + 1] = ("you are %s sex=%s"):format(tostring(raceFile),
+		tostring(UnitSex and UnitSex("player")))
+
+	Addon:Say("actor probe: %d tag(s) in scene %d.", #tags, SCENE_ID)
+	if ns.CopyBox then
+		ns.CopyBox.Show(("Mogtrot actors: scene %d"):format(SCENE_ID), lines)
+	else
+		for _, line in ipairs(lines) do print(line) end
+	end
+end
+
+
+function Diagnostics.ProbeDonors(Addon, _deps)
+	local donors = ns.DonorBody
+	if type(donors) ~= "table" then
+		Addon:Warn("probe donors unavailable: the donor module is not loaded.")
+		return
+	end
+
+	local mine = UnitSex and UnitSex("player") or nil
+	local lines = { ("you are sex=%s; a record of the other sex needs somebody"
+		.. " below to lend a body"):format(tostring(mine)), "" }
+
+	local found, players = 0, 0
+	local bySex = {}
+	for _, token in ipairs(donors.Tokens()) do
+		local exists = UnitExists and UnitExists(token)
+		if exists then
+			found = found + 1
+			local isPlayer = UnitIsPlayer and UnitIsPlayer(token) or false
+			local secret = false
+			if C_Secrets and C_Secrets.ShouldUnitIdentityBeSecret then
+				local known, hidden = pcall(C_Secrets.ShouldUnitIdentityBeSecret, token)
+				secret = known and hidden or false
+			end
+			local ok, sex = pcall(UnitSex, token)
+			if not ok or (issecretvalue and issecretvalue(sex)) then sex = nil end
+			if secret then sex = nil end
+			local name = UnitName and UnitName(token)
+			if name and issecretvalue and issecretvalue(name) then name = nil end
+			if isPlayer then
+				players = players + 1
+				if sex then bySex[sex] = (bySex[sex] or 0) + 1 end
+			end
+			lines[#lines + 1] = ("  %-12s %-22s %s sex=%s%s"):format(token,
+				tostring(name), isPlayer and "player" or "npc", tostring(sex),
+				secret and "  identity restricted, cannot donate" or "")
+		end
+	end
+	if found == 0 then lines[#lines + 1] = "  nothing resolves at all" end
+
+	lines[#lines + 1] = ""
+	lines[#lines + 1] = ("%d token(s) resolve, %d of them players: %d male, %d female")
+		:format(found, players, bySex[2] or 0, bySex[3] or 0)
+
+	for _, sex in ipairs({ 2, 3 }) do
+		local pick = donors.Find(sex, function(token)
+			if not (UnitExists and UnitExists(token)) then return false end
+			if not (UnitIsPlayer and UnitIsPlayer(token)) then return true, false end
+			if C_Secrets and C_Secrets.ShouldUnitIdentityBeSecret then
+				local known, hidden = pcall(C_Secrets.ShouldUnitIdentityBeSecret, token)
+				if known and hidden then return true, true, nil end
+			end
+			local ok, unitSex = pcall(UnitSex, token)
+			if not ok or (issecretvalue and issecretvalue(unitSex)) then
+				return true, true, nil
+			end
+			return true, true, unitSex
+		end)
+		lines[#lines + 1] = ("a %s body would come from: %s"):format(
+			sex == 2 and "male" or "female", tostring(pick))
+	end
+
+	Addon:Say("donor probe: %d token(s) resolve, %d player(s).", found, players)
+	if ns.CopyBox then
+		ns.CopyBox.Show("Mogtrot donors", lines)
+	else
+		for _, line in ipairs(lines) do print(line) end
+	end
+end
 function Diagnostics.Handle(Addon, deps, cmd)
 	local Macro = deps.Macro
 	local AccountMacroCount = deps.accountMacroCount
@@ -904,7 +944,7 @@ function Diagnostics.Handle(Addon, deps, cmd)
 		Addon:Warn("debug output %s.", MogtrotDB.debug and "on" or "off")
 		return
 	end
-	
+
 	local nudge = cmd:match("^nudge%s+(-?[%d%.]+)$")
 	if MogtrotDB.debug and nudge then
 		MogtrotDB.cardNudge = tonumber(nudge) or 0
@@ -912,8 +952,24 @@ function Diagnostics.Handle(Addon, deps, cmd)
 		Addon:RepaintMountCards()
 		return
 	end
-	
-	
+
+
+	-- The library's mounted cards are framed by pulling the camera in by a
+	-- fraction of the scene's own distance. The right fraction is a matter of
+	-- looking at it, so it is tunable in game rather than guessed in a file.
+	local mountZoom = cmd:match("^mountzoom%s+([%d%.]+)$")
+	if MogtrotDB.debug and mountZoom then
+		local value = tonumber(mountZoom)
+		if not value or value <= 0.05 or value > 3 then
+			Addon:Warn("mount zoom wants a number between 0.05 and 3.")
+			return
+		end
+		MogtrotDB.mountZoom = value
+		Addon:Debug("mount zoom = %s (smaller is closer)", tostring(value))
+		if ns.LibraryUI then ns.LibraryUI.Refresh() end
+		return
+	end
+
 	local why = cmd:match("^why%s+(.+)$")
 	if MogtrotDB.debug and why then
 		local index = ns.MountIndex.Build(MogtrotCharDB)
@@ -933,13 +989,13 @@ function Diagnostics.Handle(Addon, deps, cmd)
 		if shown == 0 then Addon:Debug("no collected mount matching '%s'", why) end
 		return
 	end
-	
-	
+
+
 	if cmd == "macro" then
 		for _, command in ipairs(Macro.ORDER) do
 			Addon:Say("wanted %s: %s", command, (Macro.Body(command):gsub("\n", " | ")))
 		end
-	
+
 		local count = AccountMacroCount()
 		local found = {}
 		for index = 1, count do
@@ -955,7 +1011,7 @@ function Diagnostics.Handle(Addon, deps, cmd)
 				end
 			end
 		end
-	
+
 		for _, command in ipairs(Macro.ORDER) do
 			if not found[command] then
 				Addon:Say("no %s macro among %d general macros", command, count)
@@ -963,9 +1019,13 @@ function Diagnostics.Handle(Addon, deps, cmd)
 		end
 		return
 	end
-	
+
 	return false
 end
+
+-- The form read is hard-won and the capture path needs the same answer, so it
+-- is published rather than repeated.
+Diagnostics.UseNativeForm = UseNativeForm
 
 ns.Diagnostics = Diagnostics
 return Diagnostics

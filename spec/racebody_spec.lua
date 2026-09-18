@@ -72,3 +72,48 @@ describe("RaceBody", function()
 		end
 	end)
 end)
+
+describe("RaceBody.HasAlternateForm", function()
+	it("knows the races with a second body", function()
+		assert.is_true(RaceBody.HasAlternateForm(22))
+		assert.is_true(RaceBody.HasAlternateForm(52))
+		assert.is_true(RaceBody.HasAlternateForm(70))
+		assert.is_true(RaceBody.HasAlternateForm(75))
+		assert.is_true(RaceBody.HasAlternateForm(76))
+	end)
+
+	it("says no for a race that has only one form", function()
+		assert.is_false(RaceBody.HasAlternateForm(2))
+		assert.is_false(RaceBody.HasAlternateForm(1))
+		assert.is_false(RaceBody.HasAlternateForm(6))
+	end)
+
+	it("says no rather than erroring on a race it does not know", function()
+		assert.is_false(RaceBody.HasAlternateForm(nil))
+		assert.is_false(RaceBody.HasAlternateForm(9999))
+		assert.is_false(RaceBody.HasAlternateForm("worgen"))
+	end)
+end)
+
+describe("RaceBody.VisageRace", function()
+	it("maps each Dracthyr race to its visage race", function()
+		assert.equal(75, RaceBody.VisageRace(52))
+		assert.equal(76, RaceBody.VisageRace(70))
+	end)
+
+	it("has no second race for a Worgen, whose human form shares race 22", function()
+		assert.is_nil(RaceBody.VisageRace(22))
+	end)
+
+	it("answers nothing for a race with one body", function()
+		assert.is_nil(RaceBody.VisageRace(2))
+		assert.is_nil(RaceBody.VisageRace(nil))
+	end)
+
+	it("keeps a body for every visage race it names", function()
+		for _, visage in pairs(RaceBody.visageRaces) do
+			assert.is_number(RaceBody.Lookup(visage, RaceBody.MALE))
+			assert.is_number(RaceBody.Lookup(visage, RaceBody.FEMALE))
+		end
+	end)
+end)
