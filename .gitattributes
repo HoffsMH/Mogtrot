@@ -6,6 +6,7 @@
 .pkgmeta export-ignore
 .github export-ignore
 CONTRIBUTING.md export-ignore
+DevCommands.lua export-ignore
 MogtrotDev.toc export-ignore
 scripts export-ignore
 spec export-ignore

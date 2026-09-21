@@ -121,7 +121,7 @@ done
 if grep -Eq '^Mogtrot/(spec/|scripts/|\.github/|\.busted$|\.luacheckrc$|\.pkgmeta$)' "$entries"; then
 	die "archive contains development files"
 fi
-if grep -Eq '^Mogtrot/(CONTRIBUTING.md|MogtrotDev.toc)$' "$entries"; then
+if grep -Eq '^Mogtrot/(CONTRIBUTING.md|DevCommands.lua|MogtrotDev.toc)$' "$entries"; then
 	die "archive contains development-only files"
 fi
 if grep -Ev '^Mogtrot/' "$entries" | grep -q .; then

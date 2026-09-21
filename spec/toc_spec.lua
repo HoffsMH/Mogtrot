@@ -20,6 +20,11 @@ local function Listed(path)
 	return order, seen
 end
 
+-- Files the release build must not contain. A probe answers a question about
+-- the client rather than doing anything for a player, so it belongs to whoever
+-- is working on the addon and not to whoever installed it.
+local DEV_ONLY = { ["DevCommands.lua"] = true }
+
 local function SourceFiles()
 	local names = {}
 	local pipe = assert(io.popen("ls *.lua"))
@@ -37,13 +42,35 @@ describe("TOC", function()
 
 	it("lists every module in the release build", function()
 		for _, name in ipairs(SourceFiles()) do
-			assert.is_true(releaseSet[name] == true,
-				name .. " is not listed in Mogtrot.toc")
+			if not DEV_ONLY[name] then
+				assert.is_true(releaseSet[name] == true,
+					name .. " is not listed in Mogtrot.toc")
+			end
+		end
+	end)
+
+	it("keeps the development-only modules out of the release build", function()
+		for name in pairs(DEV_ONLY) do
+			assert.is_true(releaseSet[name] ~= true,
+				name .. " is development-only and must not be in Mogtrot.toc")
+			assert.is_true(devSet[name] == true,
+				name .. " is missing from MogtrotDev.toc")
 		end
 	end)
 
 	it("loads the same files in the same order in both builds", function()
-		assert.same(release, dev)
+		local shared = {}
+		for _, name in ipairs(dev) do
+			if not DEV_ONLY[name] then shared[#shared + 1] = name end
+		end
+		assert.same(release, shared)
+	end)
+
+	it("loads the development commands after the module they read", function()
+		local position = {}
+		for index, name in ipairs(dev) do position[name] = index end
+		assert.is_true(position["Diagnostics.lua"] < position["DevCommands.lua"],
+			"DevCommands.lua reads ns.Diagnostics and must load after it")
 	end)
 
 	it("lists nothing that is not on disk", function()
