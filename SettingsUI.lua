@@ -194,7 +194,7 @@ function Addon:RegisterSettings()
 			.. "Blizzard's addon compartment when hidden.")
 
 	local autoPinSetting = Settings.RegisterProxySetting(category, "MOGTROT_AUTO_PIN_MOUNTS",
-		Settings.VarType.Boolean, "Automatically pin new mounts", true,
+		Settings.VarType.Boolean, "Auto-pin new mounts", true,
 		function()
 			local domain = MountPinDomain()
 			if not domain then return true end
@@ -211,7 +211,7 @@ function Addon:RegisterSettings()
 
 	local autoPinHearthstonesSetting = Settings.RegisterProxySetting(category,
 		"MOGTROT_AUTO_PIN_HEARTHSTONES", Settings.VarType.Boolean,
-		"Automatically pin new hearthstones", true,
+		"Auto-pin new hearthstones", true,
 		function()
 			local domain = HearthstonePinDomain()
 			if not domain then return true end
@@ -243,7 +243,7 @@ function Addon:RegisterSettings()
 		end
 		layout:AddInitializer(Settings.CreateElementInitializer(
 			"MogtrotPinDaysSettingTemplate", {
-				name = "Pins default to expiring in",
+				name = "Mount pins expire in",
 				tooltip = "Used for future automatic and manual pins. 0 never expires.",
 				getText = GetPinDays,
 				setText = SetPinDays,
@@ -277,7 +277,7 @@ function Addon:RegisterSettings()
 		local function GetHearthstonePinDays()
 			local domain = HearthstonePinDomain()
 			if domain and domain.days ~= nil then return tostring(domain.days) end
-			return "7"
+			return "0"
 		end
 		local function SetHearthstonePinDays(value)
 			local days = SettingsUI.ParsePinDays(value)
@@ -289,7 +289,7 @@ function Addon:RegisterSettings()
 		end
 		layout:AddInitializer(Settings.CreateElementInitializer(
 			"MogtrotPinDaysSettingTemplate", {
-				name = "Hearthstone pins default to expiring in",
+				name = "Hearthstone pins expire in",
 				tooltip = "Used for future hearthstone pins. 0 never expires.",
 				getText = GetHearthstonePinDays,
 				setText = SetHearthstonePinDays,
