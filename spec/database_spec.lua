@@ -183,9 +183,12 @@ describe("Database.MigrateOrInit v2/v5", function()
 		assert.not_equal(pins.mounts, pins.hearthstones)
 		for _, domain in pairs(pins) do
 			assert.is_true(domain.autoNew)
-			assert.equal(7, domain.days)
 			assert.same({}, domain.records)
 		end
+		-- A mount pin is a shortcut that goes stale; a hearthstone pin says
+		-- which stone belongs with a look, which does not.
+		assert.equal(7, pins.mounts.days)
+		assert.equal(0, pins.hearthstones.days)
 		assert.is_nil(account.mountPins)
 		assert.is_nil(account.autoPinNewMounts)
 		assert.is_nil(account.autoPinNewMountDays)

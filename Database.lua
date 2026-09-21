@@ -21,13 +21,19 @@ local CHAR_VERSION = 5
 local DEFAULT_CATEGORIES = { "Tier", "Non-tier sets", "Simple" }
 
 -- Only absent values fall back to defaults: false and 0 are caller choices.
-local function DefaultPinDomain(domain)
+-- A mount pin is a shortcut you refresh; a hearthstone pin is a choice about
+-- which stone belongs with a look, and that does not go stale, so it never
+-- expires unless somebody asks it to.
+local MOUNT_PIN_DAYS = 7
+local HEARTHSTONE_PIN_DAYS = 0
+
+local function DefaultPinDomain(domain, days)
 	if domain == nil then
-		return { autoNew = true, days = 7, records = {} }
+		return { autoNew = true, days = days, records = {} }
 	end
 	if domain.records == nil then domain.records = {} end
 	if domain.autoNew == nil then domain.autoNew = true end
-	if domain.days == nil then domain.days = 7 end
+	if domain.days == nil then domain.days = days end
 	return domain
 end
 
@@ -37,8 +43,8 @@ local function EnsurePinDomains(account)
 		pins = {}
 		account.pins = pins
 	end
-	pins.mounts = DefaultPinDomain(pins.mounts)
-	pins.hearthstones = DefaultPinDomain(pins.hearthstones)
+	pins.mounts = DefaultPinDomain(pins.mounts, MOUNT_PIN_DAYS)
+	pins.hearthstones = DefaultPinDomain(pins.hearthstones, HEARTHSTONE_PIN_DAYS)
 	return pins
 end
 
