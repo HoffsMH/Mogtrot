@@ -249,6 +249,35 @@ function Addon:RegisterSettings()
 				setText = SetPinDays,
 			}))
 
+		local function GetHearthstonePinDays()
+			local domain = HearthstonePinDomain()
+			if domain and domain.days ~= nil then return tostring(domain.days) end
+			return "0"
+		end
+		local function SetHearthstonePinDays(value)
+			local days = SettingsUI.ParsePinDays(value)
+			if days == nil then return false end
+			local domain = HearthstonePinDomain()
+			if not domain then return false end
+			domain.days = days
+			return true
+		end
+		layout:AddInitializer(Settings.CreateElementInitializer(
+			"MogtrotPinDaysSettingTemplate", {
+				name = "Hearthstone pins expire in",
+				tooltip = "Used for future hearthstone pins. 0 never expires.",
+				getText = GetHearthstonePinDays,
+				setText = SetHearthstonePinDays,
+			}))
+	end
+
+	self:RegisterFallbackSetting(category)
+	self:RegisterTitleFallbackSetting(category, layout)
+
+	-- Last, because it is the only row here that is not a pin. The two pin
+	-- expiries belong beside each other, and an archive horizon sitting
+	-- between them read as a third one.
+	if Settings.CreateElementInitializer then
 		-- Archiving a snapshot is one click with no confirmation, and a
 		-- snapshot of a stranger cannot be captured again, so how long an
 		-- accident stays recoverable is the user's call rather than ours.
@@ -274,30 +303,7 @@ function Addon:RegisterSettings()
 				getText = GetArchiveDays,
 				setText = SetArchiveDays,
 			}))
-		local function GetHearthstonePinDays()
-			local domain = HearthstonePinDomain()
-			if domain and domain.days ~= nil then return tostring(domain.days) end
-			return "0"
-		end
-		local function SetHearthstonePinDays(value)
-			local days = SettingsUI.ParsePinDays(value)
-			if days == nil then return false end
-			local domain = HearthstonePinDomain()
-			if not domain then return false end
-			domain.days = days
-			return true
-		end
-		layout:AddInitializer(Settings.CreateElementInitializer(
-			"MogtrotPinDaysSettingTemplate", {
-				name = "Hearthstone pins expire in",
-				tooltip = "Used for future hearthstone pins. 0 never expires.",
-				getText = GetHearthstonePinDays,
-				setText = SetHearthstonePinDays,
-			}))
 	end
-
-	self:RegisterFallbackSetting(category)
-	self:RegisterTitleFallbackSetting(category, layout)
 
 	Settings.RegisterAddOnCategory(category)
 	frame.SettingsButton:Enable()
