@@ -205,17 +205,31 @@ local function SummonRefusalText(plan, outfitName)
 	return "no outfit is active, so there is no mount set to draw from."
 end
 
+-- Where to change it is a thing you learn once. What just happened is worth
+-- saying every time, so the hint is said once a session and the reason is not.
+local toldWhereToChangeFallback = false
+
+function SummonController.ResetFallbackHint()
+	toldWhereToChangeFallback = false
+end
+
+local function FallbackHint()
+	if toldWhereToChangeFallback then return "" end
+	toldWhereToChangeFallback = true
+	return " Mogtrot's settings panel changes that, or /mogtrot fallback."
+end
+
 local function SummonCauseText(plan, outfitName)
 	if plan.cause == "nomounts" then
-		return ("no mounts linked to '%s', so this is %s. /mogtrot fallback changes that.")
-			:format(outfitName, FallbackDid(plan))
+		return ("no mounts linked to '%s', so this is %s.%s")
+			:format(outfitName, FallbackDid(plan), FallbackHint())
 	end
 	if plan.cause == "unsuitable" then
-		return ("no mount linked to '%s' can fly here, so this is %s. "
-			.. "/mogtrot fallback changes that."):format(outfitName, FallbackDid(plan))
+		return ("no mount linked to '%s' can fly here, so this is %s.%s")
+			:format(outfitName, FallbackDid(plan), FallbackHint())
 	end
-	return ("no outfit is active, so this is %s. /mogtrot fallback changes that.")
-		:format(FallbackDid(plan))
+	return ("no outfit is active, so this is %s.%s")
+		:format(FallbackDid(plan), FallbackHint())
 end
 
 local function MountIDsText(ids)
