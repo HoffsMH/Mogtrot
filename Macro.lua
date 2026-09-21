@@ -124,13 +124,23 @@ end
 
 -- OPEN and LEAST have fixed icons Mogtrot owns, so a macro the user renamed or
 -- a client that substituted its fallback icon gets corrected on the next
--- refresh. The summon macro's icon comes from a runtime spell texture and stays
--- with whatever the user sets, and commands without a fixedIcon (summon, and
--- any command not yet defined) are never forced.
-function Macro.IconToApply(command, currentIcon)
+-- refresh.
+--
+-- SUMMON and HEARTH own no constant: what they should show depends on what the
+-- active outfit is linked to, which only the caller can read. It arrives as
+-- wantedIcon, and a command with a fixed icon ignores it, so a caller can pass
+-- one for every command without deciding which kind it is.
+--
+-- Either way an icon already correct returns nil, because the only consumer
+-- writes with EditMacro and there is no reason to write what is already there.
+function Macro.IconToApply(command, currentIcon, wantedIcon)
 	local fixed = Macro.FixedIcon(command)
-	if fixed and currentIcon ~= fixed then
-		return fixed
+	if fixed then
+		if currentIcon ~= fixed then return fixed end
+		return nil
+	end
+	if wantedIcon and currentIcon ~= wantedIcon then
+		return wantedIcon
 	end
 	return nil
 end

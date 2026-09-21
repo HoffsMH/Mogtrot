@@ -203,3 +203,33 @@ describe("OutfitLinks", function()
 		end)
 	end)
 end)
+
+describe("OutfitLinks.Representative", function()
+	local OutfitLinks = assert(loadfile("OutfitLinks.lua"))("Mogtrot", {})
+
+	it("picks the lowest linked id, which is what a row already shows", function()
+		local store = { [1] = { [303] = true, [64] = true, [1512] = true } }
+		local id, count = OutfitLinks.Representative(store, 1)
+		assert.equal(64, id)
+		assert.equal(3, count)
+	end)
+
+	it("reports one link as itself", function()
+		local id, count = OutfitLinks.Representative({ [1] = { [42] = true } }, 1)
+		assert.equal(42, id)
+		assert.equal(1, count)
+	end)
+
+	it("has nothing to represent an outfit with no links", function()
+		local id, count = OutfitLinks.Representative({}, 1)
+		assert.is_nil(id)
+		assert.equal(0, count)
+	end)
+
+	it("orders string ids without comparing them to numbers", function()
+		local store = { [1] = { ["toy:b"] = true, ["toy:a"] = true } }
+		local id, count = OutfitLinks.Representative(store, 1)
+		assert.equal("toy:a", id)
+		assert.equal(2, count)
+	end)
+end)

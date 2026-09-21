@@ -376,3 +376,27 @@ describe("Macro.IconToApply", function()
 		assert.is_nil(Macro.IconToApply("hearth", 136243))
 	end)
 end)
+
+describe("Macro.IconToApply with a wanted icon", function()
+	it("gives a command with no constant the icon it was handed", function()
+		assert.equals(999, Macro.IconToApply("summon", 136243, 999))
+		assert.equals(888, Macro.IconToApply("hearth", 136243, 888))
+	end)
+
+	it("writes nothing when the handed icon is already showing", function()
+		assert.is_nil(Macro.IconToApply("summon", 999, 999))
+		assert.is_nil(Macro.IconToApply("hearth", 888, 888))
+	end)
+
+	it("still writes nothing when nothing was handed", function()
+		assert.is_nil(Macro.IconToApply("summon", 136243, nil))
+		assert.is_nil(Macro.IconToApply("hearth", 136243, nil))
+	end)
+
+	-- A caller can pass a wanted icon for every command without first working
+	-- out which kind it is, so a command that owns its icon must ignore one.
+	it("lets a fixed icon win over a handed one", function()
+		assert.equals(2869702, Macro.IconToApply("open", 136243, 999))
+		assert.is_nil(Macro.IconToApply("open", 2869702, 999))
+	end)
+end)

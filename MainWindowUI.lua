@@ -629,10 +629,11 @@ function MainWindowUI.Attach(Addon, deps)
 			ACCOUNT_MACRO_CAP)
 	end
 
-	function Addon.UpdateMacroIcon(_self, slot, command)
+	function Addon.UpdateMacroIcon(self, slot, command)
 		if InCombatLockdown() then return false end
 		local currentIcon = select(2, GetMacroInfo(slot))
-		local icon = Macro.IconToApply(command, currentIcon)
+		local wanted = self.WantedMacroIcon and self:WantedMacroIcon(command) or nil
+		local icon = Macro.IconToApply(command, currentIcon, wanted)
 		if not icon then return false end
 		EditMacro(slot, nil, icon, nil)
 		return true
@@ -642,11 +643,15 @@ function MainWindowUI.Attach(Addon, deps)
 	-- fallback icon, so the refresh runs on login and after combat, not only when
 	-- the user re-drags a handle.
 	function Addon:UpdateOwnedMacroIcons()
-		local openSlot = Macro.Find(AccountMacroCount(), AccountMacroBody, Macro.OPEN)
-		if openSlot then self:UpdateMacroIcon(openSlot, Macro.OPEN) end
-
-		local leastSlot = Macro.Find(AccountMacroCount(), AccountMacroBody, Macro.LEAST)
-		if leastSlot then self:UpdateMacroIcon(leastSlot, Macro.LEAST) end
+		if InCombatLockdown() then return end
+		-- Every command, not only the two with constants: summon and
+		-- hearthstone have no fixed icon and are exactly the ones that need
+		-- re-reading when the outfit moves.
+		local count = AccountMacroCount()
+		for _, command in ipairs(Macro.ORDER) do
+			local slot = Macro.Find(count, AccountMacroBody, command)
+			if slot then self:UpdateMacroIcon(slot, command) end
+		end
 	end
 
 	-- A macro index for the cursor, or nil and a reason. Reuse before create: the
@@ -1792,12 +1797,8 @@ function MainWindowUI.Attach(Addon, deps)
 		row:SetAlpha(1)
 		row.Highlight:Hide()
 
-		local mounts = MogtrotCharDB.mounts[outfitID]
-		local firstMountID, mountCount = nil, 0
-		for mountID in pairs(mounts or {}) do
-			mountCount = mountCount + 1
-			if not firstMountID or mountID < firstMountID then firstMountID = mountID end
-		end
+		local firstMountID, mountCount =
+			ns.OutfitLinks.Representative(MogtrotCharDB.mounts, outfitID)
 
 		row.MountButton.outfitID = outfitID
 		row.MountButton:Show()
