@@ -16,7 +16,12 @@
 			<EditBox parentKey="Days" inherits="InputBoxTemplate" autoFocus="false" numeric="true" letters="5">
 				<Size x="48" y="24"/>
 				<Anchors>
-					<Anchor point="LEFT" relativePoint="CENTER" x="-15"/>
+					<!-- Blizzard puts every control in one column: its checkbox,
+					     slider and checkbox-with-control templates all anchor
+					     LEFT to the row's CENTER at -80. Matching that number
+					     is what keeps this row in line with the rows around it
+					     rather than starting its own column. -->
+					<Anchor point="LEFT" relativePoint="CENTER" x="-80"/>
 				</Anchors>
 				<Scripts>
 					<OnTextChanged>self:GetParent():OnTextChanged(self, userInput)</OnTextChanged>

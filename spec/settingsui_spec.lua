@@ -113,3 +113,17 @@ describe("SettingsUI", function()
 		assert.is_false(MogtrotDB.pins.mounts.autoNew)
 	end)
 end)
+
+describe("SettingsUI layout", function()
+	it("puts the pin-days control in Blizzard's own control column", function()
+		local file = assert(io.open("SettingsUI.xml", "r"))
+		local body = file:read("*a")
+		file:close()
+		-- Blizzard's SettingsCheckboxControlMixin, slider and checkbox-with-
+		-- control mixins all anchor LEFT to the row's CENTER at -80. A row that
+		-- picks its own offset starts a second column, which is visible in the
+		-- panel and invisible everywhere else.
+		local offset = body:match('<Anchor point="LEFT" relativePoint="CENTER" x="(%-?%d+)"/>')
+		assert.equal("-80", offset)
+	end)
+end)
