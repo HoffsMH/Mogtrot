@@ -1019,6 +1019,13 @@ local function BuildCard(card)
 	-- clickable, which is worse than absent.
 	card.Archive:SetNormalAtlas("common-search-clearbutton")
 	card.Archive:SetHighlightAtlas("common-search-clearbutton", "ADD")
+	-- Red because this is the only control on a card that takes something
+	-- away. The grey x is tinted rather than swapped for another atlas so it
+	-- keeps the shape and the hit area it already had.
+	local archiveNormal = card.Archive:GetNormalTexture()
+	if archiveNormal then archiveNormal:SetVertexColor(0.9, 0.2, 0.2) end
+	local archiveHighlight = card.Archive:GetHighlightTexture()
+	if archiveHighlight then archiveHighlight:SetVertexColor(1, 0.4, 0.4) end
 	card.Archive:SetScript("OnEnter", function(self)
 		GameTooltip:SetOwner(self, "ANCHOR_LEFT")
 		GameTooltip:SetText("Archive this snapshot")
