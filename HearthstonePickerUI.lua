@@ -147,12 +147,10 @@ function HearthstonePickerUI.Attach(Addon, deps)
 		-- the card paints its own background and border, as mount cards do.
 		card.Bg = card:CreateTexture(nil, "BACKGROUND")
 		card.Bg:SetAllPoints()
-		card.Bg:SetColorTexture(0, 0, 0, 0.55)
 
 		card.Edges = {}
 		for _, edge in ipairs({ "TOP", "BOTTOM", "LEFT", "RIGHT" }) do
 			local line = card:CreateTexture(nil, "BORDER")
-			line:SetColorTexture(0.3, 0.3, 0.3, 1)
 			if edge == "TOP" or edge == "BOTTOM" then
 				line:SetHeight(1)
 				line:SetPoint(edge .. "LEFT")
@@ -165,15 +163,26 @@ function HearthstonePickerUI.Attach(Addon, deps)
 			card.Edges[#card.Edges + 1] = line
 		end
 
+		-- A tint alone reads too close to the hover highlight. The border is
+		-- what makes a chosen card unmistakable, so this matches the mount
+		-- card exactly rather than approximately.
+		function card:SetCardColors(r, g, b, a, er, eg, eb)
+			self.Bg:SetColorTexture(r, g, b, a)
+			for _, line in ipairs(self.Edges) do
+				line:SetColorTexture(er, eg, eb, 1)
+			end
+		end
+
 		card.Hover = card:CreateTexture(nil, "BACKGROUND")
 		card.Hover:SetAllPoints()
 		card.Hover:SetColorTexture(1, 1, 1, 0.08)
 		card.Hover:Hide()
 
-		card.Selected = card:CreateTexture(nil, "BACKGROUND")
-		card.Selected:SetAllPoints()
-		card.Selected:SetColorTexture(0.4, 0.8, 1, 0.18)
-		card.Selected:Hide()
+		-- Pin state is readable while pairing outfits, not only in pin mode,
+		-- which is how a mount card carries it.
+		card.FallbackStar = card:CreateTexture(nil, "OVERLAY")
+		card.FallbackStar:SetSize(14, 14)
+		card.FallbackStar:SetPoint("TOPRIGHT", -4, -4)
 
 		card.Icon = card:CreateTexture(nil, "ARTWORK")
 		card.Icon:SetSize(64, 64)
@@ -467,15 +476,12 @@ function HearthstonePickerUI.Attach(Addon, deps)
 		card.owned = row.owned == true
 
 		card:SetSize(CARD_W, CARD_H)
-		for _, line in ipairs(card.Edges or {}) do
-			line:SetColorTexture(0.3, 0.3, 0.3, 1)
-		end
+		card:SetCardColors(0.05, 0.05, 0.06, 0.9, 0.3, 0.3, 0.3)
 		card.Icon:SetTexture(row.icon or FALLBACK_ICON)
 		card.Icon:SetDesaturated(not card.owned)
 		card.Name:SetText(card.itemName)
 		card.KindBadge:SetText(row.kind == "toy" and "toy" or "item")
 		card.Hover:Hide()
-		card.Selected:Hide()
 		card.PinRow:Hide()
 		card.PinState:SetText(nil)
 		card.Cooldown:SetText(nil)
@@ -490,12 +496,19 @@ function HearthstonePickerUI.Attach(Addon, deps)
 
 		card.Cooldown:SetText(card.owned and CooldownText(row) or nil)
 		card:SetAlpha(card.owned and 1 or 0.45)
+
+		local isPinned = paint.pinned[row.itemID] and true or false
+		card.FallbackStar:SetAtlas(isPinned and "auctionhouse-icon-favorite"
+			or "auctionhouse-icon-favorite-off", false)
+		card.FallbackStar:SetShown(card.owned)
+
 		if not card.owned then return end
 
 		if card.pinMode then
-			local isPinned = paint.pinned[row.itemID] and true or false
 			card.PinState:SetText(isPinned and "pinned" or "not pinned")
-			card.Selected:SetShown(isPinned)
+			if isPinned then
+				card:SetCardColors(0.18, 0.14, 0.02, 0.9, 1, 0.82, 0)
+			end
 			if paint.domain and isPinned
 				and type(PinOperations.DaysRemaining) == "function" then
 				local days = PinOperations.DaysRemaining(paint.domain, row.itemID, Now())
@@ -508,9 +521,10 @@ function HearthstonePickerUI.Attach(Addon, deps)
 				end
 			end
 		else
-			card.Selected:SetShown(paint.linked
-				and paint.linked[row.itemID] and true or false)
-			card.PinState:SetText(paint.pinned[row.itemID] and "pinned" or nil)
+			if paint.linked and paint.linked[row.itemID] then
+				card:SetCardColors(0.18, 0.14, 0.02, 0.9, 1, 0.82, 0)
+			end
+			card.PinState:SetText(isPinned and "pinned" or nil)
 		end
 	end
 
