@@ -145,7 +145,12 @@ local function Card_OnEnter(self)
 	end
 
 	GameTooltip:AddLine(" ")
-	GameTooltip:AddLine("Left-click to link or unlink it from this outfit", 0.6, 0.6, 0.6)
+	if mountPicker and mountPicker.mode == "pins" then
+		GameTooltip:AddLine("Click to pin or unpin this mount", 0.6, 0.6, 0.6)
+	else
+		GameTooltip:AddLine("Left-click to link or unlink it from this outfit",
+			0.6, 0.6, 0.6)
+	end
 	GameTooltip:AddLine("Shift-left-click to mount it", 0.6, 0.6, 0.6)
 	GameTooltip:AddLine("Right-click for mount options", 0.6, 0.6, 0.6)
 	if self.isPinned then
@@ -195,6 +200,14 @@ local function Card_OnClick(self, button)
 		ShowMountCardMenu(self)
 	elseif button == "LeftButton" and IsShiftKeyDown() then
 		SummonMountFromCard(self.mountID)
+	elseif button == "LeftButton" and mountPicker and mountPicker.mode == "pins" then
+		-- In pin mode the whole card is the pin, the same as its star. Falling
+		-- through to the outfit link here is what made a click in the middle of
+		-- a card do nothing while you were choosing pinned mounts.
+		Addon:ToggleMountPin(self.mountID)
+		if (mountPicker.filter.chosenMode or "all") ~= "all" then
+			Addon:RefreshMountPicker()
+		end
 	elseif button == "LeftButton" and self.outfitID then
 		Addon:ToggleOutfitMount(self.outfitID, self.mountID)
 		if (mountPicker.filter.chosenMode or "all") ~= "all" then
