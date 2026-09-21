@@ -60,6 +60,40 @@ describe("command dispatch", function()
 		end
 	end)
 
+	it("dispatches only development functions that DevCommands defines", function()
+		local body = Read("DevCommands.lua")
+		local defined = Defined("DevCommands.lua", "DevCommands")
+		local seen = 0
+		for name in body:gmatch("DevCommands%.(%u[%w_]*)%s*%(") do
+			seen = seen + 1
+			assert.is_true(defined[name] == true,
+				"DevCommands.lua calls DevCommands." .. name
+					.. ", which is not defined")
+		end
+		assert.is_true(seen > 0)
+	end)
+
+	it("lists every development command in the development help", function()
+		local body = Read("DevCommands.lua")
+		local help = {}
+		for entry in body:gmatch('{ "([^"]+)", "[^"]*" }') do
+			help[entry] = true
+		end
+		local seen = 0
+		for cmd in body:gmatch('if cmd == "([^"]+)" then') do
+			seen = seen + 1
+			local listed = help[cmd] == true
+			if not listed then
+				for entry in pairs(help) do
+					if entry:sub(1, #cmd + 1) == cmd .. " " then listed = true end
+				end
+			end
+			assert.is_true(listed,
+				"/mogtrot " .. cmd .. " is dispatched but not in the development help")
+		end
+		assert.is_true(seen > 0)
+	end)
+
 	it("lists every command it dispatches in its own help", function()
 		local body = Read("Commands.lua")
 		local help = {}

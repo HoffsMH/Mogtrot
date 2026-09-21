@@ -56,6 +56,7 @@ MountPickerUI.lua
 SettingsUI.lua
 SettingsUI.xml
 Diagnostics.lua
+DevCommands.lua
 Commands.lua
 MountCollection.lua
 SummonController.lua
