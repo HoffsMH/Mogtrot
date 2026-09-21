@@ -100,6 +100,23 @@ function CharacterModelPool:Find(wantedKey)
 	end
 end
 
+-- How many bodies carry each key, held or free.
+--
+-- Find answers whether one exists anywhere, which is the wrong question for
+-- anyone deciding whether more need building: Acquire will not hand over a
+-- body another card is standing in, so two cards wanting one key need two
+-- bodies. Counting existence instead of supply declares the work finished
+-- while a card is still waiting for its own.
+function CharacterModelPool:CountByKey()
+	local counts = {}
+	for _, entry in ipairs(self.entries) do
+		if entry.key ~= nil then
+			counts[entry.key] = (counts[entry.key] or 0) + 1
+		end
+	end
+	return counts
+end
+
 function CharacterModelPool:FindPane(wantedKey)
 	for _, entry in ipairs(self.entries) do
 		if entry.pane and entry.key == wantedKey and entry.actor then return entry end

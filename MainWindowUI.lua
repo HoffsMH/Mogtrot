@@ -3,6 +3,18 @@ local ADDON_NAME, ns = ...
 -- Builds and paints the outfit list window where users organise and wear outfits.
 local MainWindowUI = {}
 
+MainWindowUI.LibraryIcon = "Interface\\QuestFrame\\UI-QuestLog-BookIcon"
+MainWindowUI.SettingsLabel = ""
+MainWindowUI.SettingsTooltip = "Mogtrot settings"
+
+function MainWindowUI.OpenLibrary(libraryUI)
+	if type(libraryUI) ~= "table" or type(libraryUI.Toggle) ~= "function" then
+		return false
+	end
+	libraryUI.Toggle()
+	return true
+end
+
 local function CaseInsensitive(a, b)
 	return strlower(a) < strlower(b)
 end
@@ -22,14 +34,17 @@ function MainWindowUI.Attach(Addon, deps)
 	local ClearOutfitTitles = deps.clearOutfitTitles
 	-- Companion pickers are optional at composition time; their entries appear in
 	-- the outfit menu only when Core supplies the callbacks.
-	local OpenBattlePetPicker = deps.openBattlePetPicker
-	local CountOutfitBattlePets = deps.countOutfitBattlePets
 	local OpenHearthstonePicker = deps.openHearthstonePicker
 	local CountOutfitHearthstones = deps.countOutfitHearthstones
 	local hearthstoneController = deps.hearthstoneController
-	local hearthstoneIcon = C_Item and C_Item.GetItemIconByID
-		and C_Item.GetItemIconByID(6948)
-		or nil
+	-- Item data arrives asynchronously, so this can be nil on a cold cache and
+	-- has to be asked for again later rather than trusted from load time.
+	local HEARTHSTONE_ITEM_ID = 6948
+	local function HearthstoneIcon()
+		return C_Item and C_Item.GetItemIconByID
+			and C_Item.GetItemIconByID(HEARTHSTONE_ITEM_ID) or nil
+	end
+	local hearthstoneIcon = HearthstoneIcon()
 	assert(type(OpenTitlePicker) == "function", "MainWindowUI requires openTitlePicker")
 	assert(type(CountOutfitTitles) == "function", "MainWindowUI requires countOutfitTitles")
 	assert(type(CopyOutfitTitles) == "function", "MainWindowUI requires copyOutfitTitles")
@@ -364,14 +379,6 @@ function MainWindowUI.Attach(Addon, deps)
 				companionShown = true
 			end
 
-			if type(OpenBattlePetPicker) == "function" then
-				local count = type(CountOutfitBattlePets) == "function"
-					and CountOutfitBattlePets(outfitID) or nil
-				root:CreateButton(CompanionText("Battle pets", count),
-					function() OpenBattlePetPicker(outfitID) end)
-				companionShown = true
-			end
-
 			if companionShown then root:CreateDivider() end
 
 			root:CreateButton("Move to...", function()
@@ -579,9 +586,20 @@ function MainWindowUI.Attach(Addon, deps)
 	-- the default cog instead. Spell textures are fileIDs already, and these are the
 	-- icons the created macros use on the action bar. The fixed OPEN/LEAST icons
 	-- live in Macro.DEFS; only the summon icon is a runtime texture.
+	-- CreateMacro throws a usage error on a nil icon rather than defaulting,
+	-- so nothing may reach it unanswered. The two commands with no fixed icon
+	-- of their own are answered here: the mount macro wears the random
+	-- favourite's spell texture, and the hearth macro wears whichever
+	-- hearthstone the client will name, because which one it uses is not
+	-- fixed.
+	local MACRO_FALLBACK_ICON = "INTERFACE\\ICONS\\INV_MISC_QUESTIONMARK"
+
 	local function MacroIcon(command)
 		if command == Macro.SUMMON then
 			return C_Spell.GetSpellTexture(RANDOM_FAVOURITE_SPELL_ID)
+		end
+		if command == Macro.HEARTH then
+			return HearthstoneIcon() or hearthstoneIcon
 		end
 		return Macro.FixedIcon(command)
 	end
@@ -655,7 +673,10 @@ function MainWindowUI.Attach(Addon, deps)
 		local body = Macro.Body(command)
 		-- Argument order is Blizzard's own: name, icon, body, perCharacter
 		-- (Blizzard_MacroIconSelector.lua:109).
-		local index = CreateMacro(name, MacroIcon(command), body, perCharacter)
+		-- Never nil: a missing icon is a usage error, not a default, and it
+		-- takes the whole drag down with it.
+		local index = CreateMacro(name, MacroIcon(command) or MACRO_FALLBACK_ICON,
+			body, perCharacter)
 		if not index then return nil, "failed" end
 
 		-- Trust nothing about what the client stored. CreateMacro's argument order has
@@ -686,9 +707,10 @@ function MainWindowUI.Attach(Addon, deps)
 	-- with no gesture to learn. Same button, different command behind it, so the shape
 	-- lives in one place.
 	local MACRO_DRAG_SIZE = 20
+	local macroDragControls = {}
 
-	local function CreateMacroDrag(command, title, description)
-		local button = CreateFrame("Button", nil, frame)
+	local function CreateMacroDrag(parent, command, title, description)
+		local button = CreateFrame("Button", nil, parent)
 		button:SetSize(MACRO_DRAG_SIZE, MACRO_DRAG_SIZE)
 		button:RegisterForDrag("LeftButton")
 
@@ -734,29 +756,36 @@ function MainWindowUI.Attach(Addon, deps)
 
 			PickupMacro(index)
 		end)
+		macroDragControls[command] = button
 
+		return button
+	end
+
+	function Addon:CreateMacroDrag(parent, command, title, description)
+		local button = CreateMacroDrag(parent, command, title, description)
+		if self.UpdateMacroDragControls then self:UpdateMacroDragControls() end
 		return button
 	end
 
 	-- Drag to a bar for a macro that opens the window. Worth having over a plain
 	-- keybinding because /click on the secure toggle is legal in combat.
-	frame.MacroDrag = CreateMacroDrag(Macro.OPEN, "Macro for the action bar",
+	frame.MacroDrag = CreateMacroDrag(frame, Macro.OPEN, "Macro for the action bar",
 		"Drag to a bar. Makes one general macro that opens this window, and reuses "
 		.. "that same one every time after.")
 	frame.MacroDrag:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -UI.Pad, -(UI.Pad + 18))
 
 	-- The same summon the keybinding does, on a bar.
-	frame.SummonDrag = CreateMacroDrag(Macro.SUMMON, "Mount macro for the action bar",
+	frame.SummonDrag = CreateMacroDrag(frame, Macro.SUMMON, "Mount macro for the action bar",
 		"Drag to a bar. Makes one general macro that summons a mount for the outfit "
 		.. "you are wearing - the same thing the summon keybinding does.")
 	frame.SummonDrag:SetPoint("TOPRIGHT", frame.MacroDrag, "TOPLEFT", -4, 0)
 
-	frame.LeastDrag = CreateMacroDrag(Macro.LEAST,
+	frame.LeastDrag = CreateMacroDrag(frame, Macro.LEAST,
 		"Least-worn outfit macro for the action bar",
 		"Drag to a bar. Each click chooses from the least-worn 20% of your outfits "
 		.. "(at least five), excluding Unsorted and the outfit you are wearing.")
 	frame.LeastDrag:SetPoint("TOPRIGHT", frame.SummonDrag, "TOPLEFT", -4, 0)
-	frame.HearthDrag = CreateMacroDrag(Macro.HEARTH, "Hearthstone macro for the action bar",
+	frame.HearthDrag = CreateMacroDrag(frame, Macro.HEARTH, "Hearthstone macro for the action bar",
 		"Drag to a bar. Each click chooses a usable linked or pinned hearthstone.")
 	frame.HearthDrag:SetPoint("TOPRIGHT", frame.LeastDrag, "TOPLEFT", -4, 0)
 
@@ -777,7 +806,8 @@ function MainWindowUI.Attach(Addon, deps)
 	end
 
 	frame.SettingsButton = CreateFrame("Button", nil, frame)
-	StyleHeaderControl(frame.SettingsButton, 64, "GM-icon-settings", "Settings")
+	StyleHeaderControl(frame.SettingsButton, MainWindow.HeaderControlIconSize + 4,
+		"GM-icon-settings", MainWindowUI.SettingsLabel)
 	frame.SettingsButton.Icon:SetTexture("Interface\\WorldMap\\GEAR_64GREY")
 	frame.SettingsButton.Icon:SetTexCoord(0, 1, 0, 1)
 	frame.SettingsButton.Icon:SetSize(MainWindow.HeaderControlIconSize,
@@ -795,10 +825,31 @@ function MainWindowUI.Attach(Addon, deps)
 	frame.SettingsButton:SetScript("OnEnter", function(self)
 		HeaderControlEnter(self)
 		GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-		GameTooltip:SetText("Mogtrot settings")
+		GameTooltip:SetText(MainWindowUI.SettingsTooltip)
 		GameTooltip:Show()
 	end)
 	frame.SettingsButton:SetScript("OnLeave", function(self)
+		HeaderControlLeave(self)
+	end)
+
+	frame.LibraryButton = CreateFrame("Button", nil, frame)
+	StyleHeaderControl(frame.LibraryButton, 55, "GlyphIcon-Spellbook", "Library")
+	frame.LibraryButton.Icon:SetTexture(MainWindowUI.LibraryIcon)
+	frame.LibraryButton.Icon:SetTexCoord(0, 1, 0, 1)
+	frame.LibraryButton:SetPoint("RIGHT", frame.SettingsButton, "LEFT",
+		-MainWindow.HeaderControlGap, 0)
+	frame.LibraryButton:SetScript("OnClick", function()
+		MainWindowUI.OpenLibrary(ns.LibraryUI)
+	end)
+	frame.LibraryButton:SetScript("OnEnter", function(self)
+		HeaderControlEnter(self)
+		GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+		GameTooltip:SetText("Outfit library")
+		GameTooltip:AddLine("Action: Open outfit library", 0.6, 0.6, 0.6)
+		GameTooltip:AddLine("Texture: " .. MainWindowUI.LibraryIcon, 0.6, 0.6, 0.6)
+		GameTooltip:Show()
+	end)
+	frame.LibraryButton:SetScript("OnLeave", function(self)
 		HeaderControlLeave(self)
 	end)
 
@@ -811,10 +862,13 @@ function MainWindowUI.Attach(Addon, deps)
 	function Addon:UpdateMacroDragControls()
 		local forceShown = self:MacroDragControlsShown()
 		local placed = ActionBarCommands()
-		local openShown = forceShown or not placed[Macro.OPEN]
-		local summonShown = forceShown or not placed[Macro.SUMMON]
-		local leastShown = forceShown or not placed[Macro.LEAST]
-		local hearthShown = forceShown or not placed[Macro.HEARTH]
+		for command, button in pairs(macroDragControls) do
+			button:SetShown(Macro.DragShown(forceShown, placed, command))
+		end
+		local openShown = Macro.DragShown(forceShown, placed, Macro.OPEN)
+		local summonShown = Macro.DragShown(forceShown, placed, Macro.SUMMON)
+		local leastShown = Macro.DragShown(forceShown, placed, Macro.LEAST)
+		local hearthShown = Macro.DragShown(forceShown, placed, Macro.HEARTH)
 		frame.MacroDrag:SetShown(openShown)
 		frame.SummonDrag:SetShown(summonShown)
 		frame.LeastDrag:SetShown(leastShown)
@@ -848,7 +902,11 @@ function MainWindowUI.Attach(Addon, deps)
 		if MogtrotDB then Addon:UpdateMacroDragControls() end
 	end)
 	if frame.SearchBox.Instructions then
-		frame.SearchBox.Instructions:SetText("Search outfits and categories")
+		-- The box's right edge is the leftmost macro handle, so it narrows as
+		-- handles are placed. Wrapped placeholder text spills out of the box
+		-- rather than clipping, so the hint is short and wrapping is off.
+		frame.SearchBox.Instructions:SetText("Search outfits")
+		frame.SearchBox.Instructions:SetWordWrap(false)
 	end
 	frame.SearchBox:HookScript("OnTextChanged", function(self)
 		local text = strtrim(self:GetText() or "")
@@ -1252,7 +1310,7 @@ function MainWindowUI.Attach(Addon, deps)
 	local blizzardListButton = CreateFrame("Button", "MogtrotBlizzardList", frame,
 		"SecureHandlerClickTemplate")
 	StyleHeaderControl(blizzardListButton, 68, "lootroll-icon-transmog", "Blizzard")
-	blizzardListButton:SetPoint("RIGHT", frame.SettingsButton, "LEFT",
+	blizzardListButton:SetPoint("RIGHT", frame.LibraryButton, "LEFT",
 		-MainWindow.HeaderControlGap, 0)
 	blizzardListButton:RegisterForClicks("AnyUp")
 	frame.PinsButton:SetPoint("RIGHT", blizzardListButton, "LEFT",
@@ -1287,7 +1345,8 @@ function MainWindowUI.Attach(Addon, deps)
 	local function LayoutTitleBar()
 		local rightControls = frame.CloseButton:GetWidth()
 			+ frame.PinsButton:GetWidth() + blizzardListButton:GetWidth()
-			+ frame.SettingsButton:GetWidth() + MainWindow.HeaderControlGap * 3 + 3
+			+ frame.LibraryButton:GetWidth() + frame.SettingsButton:GetWidth()
+			+ MainWindow.HeaderControlGap * 4 + 3
 			+ UI.CloseButtonInset
 		local available = MainWindow.Width - UI.Pad - rightControls
 		frame.Title:SetWidth(math.max(20, math.min(frame.Title:GetStringWidth(), available)))

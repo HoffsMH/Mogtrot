@@ -22,7 +22,6 @@ end
 describe("Addon namespace", function()
 	local PICKERS = {
 		"HearthstonePickerUI.lua",
-		"BattlePetPickerUI.lua",
 		"MountPickerUI.lua",
 	}
 
@@ -42,6 +41,5 @@ describe("Addon namespace", function()
 	it("reads sources that actually define something", function()
 		assert.is_true(next(Definitions("Core.lua", ":")) ~= nil)
 		assert.is_true(next(Definitions("HearthstonePickerUI.lua", "%.")) ~= nil)
-		assert.is_true(next(Definitions("BattlePetPickerUI.lua", "%.")) ~= nil)
 	end)
 end)

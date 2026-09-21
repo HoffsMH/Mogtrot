@@ -72,13 +72,25 @@ local function MountPinOptedOut(outfitID)
 	return optOut.mounts[outfitID] and true or false
 end
 
-function Addon:FallbackMode()
-	local mode = MogtrotDB.fallbackMode
-	return (mode and FALLBACK_MODES[mode]) and mode or "random"
-end
-
 local function LiteMountFallbackAvailable()
 	return _G.LiteMount ~= nil
+end
+
+-- Pins first, because somebody who has pinned mounts meant those ones. With
+-- nothing pinned it costs nothing: MountPick carries on to the random rungs.
+local DEFAULT_FALLBACK_MODE = "pinned"
+
+function Addon:FallbackMode()
+	local mode = MogtrotDB.fallbackMode
+	if not (mode and FALLBACK_MODES[mode]) then return DEFAULT_FALLBACK_MODE end
+	-- LiteMount is enabled per character. Where it is absent the settings
+	-- dropdown never offers the option, and Blizzard's dropdown labels a value
+	-- it cannot find "Custom". Report what will actually happen instead. The
+	-- stored choice is left alone, so it returns with LiteMount.
+	if mode == "litemount" and not LiteMountFallbackAvailable() then
+		return DEFAULT_FALLBACK_MODE
+	end
+	return mode
 end
 
 local function LiteMountFallbackReady()

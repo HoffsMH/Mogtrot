@@ -48,9 +48,6 @@ local PICKER_BACKDROP = {
 	tile = true, tileSize = 16, edgeSize = 16,
 	insets = { left = 4, right = 4, top = 4, bottom = 4 },
 }
-local HEADER_BUTTON_BACKDROP = {
-	edgeFile = "Interface\\Buttons\\WHITE8X8", edgeSize = 1,
-}
 
 local FALLBACK_ICON = "Interface\\Icons\\INV_Misc_QuestionMark"
 
@@ -345,51 +342,25 @@ function HearthstonePickerUI.Attach(Addon, deps)
 		picker.HeaderRow:SetPoint("RIGHT", picker.CloseButton, "LEFT", -8, 0)
 		picker.HeaderRow:SetHeight(PICKER_HEADER_CONTROL_H)
 
-		picker.HeaderPrefix = picker.HeaderRow:CreateFontString(nil, "OVERLAY",
-			"GameFontNormal")
-		picker.HeaderPrefix:SetPoint("LEFT", 0, 0)
-
-		picker.HeaderClick = CreateFrame("Button", nil, picker.HeaderRow, "BackdropTemplate")
-		picker.HeaderClick:SetSize(210, PICKER_HEADER_CONTROL_H)
-		picker.HeaderClick:SetPoint("LEFT", picker.HeaderPrefix, "RIGHT", 6, 0)
-		picker.HeaderClick:SetBackdrop(HEADER_BUTTON_BACKDROP)
-		picker.HeaderClick:SetBackdropBorderColor(1, 0.82, 0, 1)
-		picker.HeaderClick:SetScript("OnClick", ChoosePickerOutfit)
-		picker.HeaderClick:SetScript("OnEnter", function(self)
-			GameTooltip:SetOwner(self, "ANCHOR_TOP")
-			if picker.mode == "pins" then
-				GameTooltip:SetText("Switch to outfit")
-			else
-				GameTooltip:SetText("Choose another outfit")
-				GameTooltip:AddLine("Click to select an outfit.", 0.6, 0.6, 0.6)
-			end
-			GameTooltip:Show()
-		end)
-		picker.HeaderClick:SetScript("OnLeave", GameTooltip_Hide)
-
-		picker.HeaderName = picker.HeaderClick:CreateFontString(nil, "OVERLAY",
-			"GameFontNormal")
-		picker.HeaderName:SetPoint("CENTER", 10, 0)
-		picker.HeaderIcon = picker.HeaderClick:CreateTexture(nil, "ARTWORK")
-		picker.HeaderIcon:SetSize(22, 22)
-		picker.HeaderIcon:SetPoint("RIGHT", picker.HeaderName, "LEFT", -5, 0)
-		picker.HeaderIcon:SetTexCoord(0.07, 0.93, 0.07, 0.93)
-
-		picker.HeaderCount = picker.HeaderRow:CreateFontString(nil, "OVERLAY",
-			"GameFontNormal")
-		picker.HeaderCount:SetPoint("LEFT", picker.HeaderClick, "RIGHT", 6, 0)
-
-		picker.ModeButton = CreateFrame("Button", nil, picker.HeaderRow, "BackdropTemplate")
-		picker.ModeButton:SetSize(120, PICKER_HEADER_CONTROL_H)
-		picker.ModeButton:SetPoint("LEFT", picker.HeaderCount, "RIGHT", 6, 0)
-		picker.ModeButton:SetBackdrop(HEADER_BUTTON_BACKDROP)
-		picker.ModeButton:SetBackdropBorderColor(1, 0.82, 0, 1)
-		picker.ModeButton.Text = picker.ModeButton:CreateFontString(nil, "OVERLAY",
-			"GameFontNormal")
-		picker.ModeButton.Text:SetPoint("CENTER")
-		picker.ModeButton:SetScript("OnClick", function()
-			if picker.mode == "pins" then ChoosePickerOutfit() else SetPinMode() end
-		end)
+		-- The same sentence the mount window wears, from the same component,
+		-- so the two can never drift and either can be switched out of.
+		picker.PaintHeader = ns.PairingHeaderUI.New(picker.HeaderRow,
+			PICKER_HEADER_CONTROL_H, function(action, segment)
+				if action == "outfit" then return ChoosePickerOutfit() end
+				if action == "mode" then
+					if picker.mode == "pins" then return ChoosePickerOutfit() end
+					return SetPinMode()
+				end
+				if action ~= "domain" then return end
+				ns.PairingHeaderUI.ShowDomainMenu(segment, function(choice)
+					if choice == "hearthstones" then return end
+					if picker.mode == "pins" then
+						if Addon.OpenMountPins then Addon:OpenMountPins() end
+					elseif Addon.OpenMountPicker then
+						Addon:OpenMountPicker(picker.outfitID)
+					end
+				end)
+			end)
 
 		picker.SearchBox = CreateFrame("EditBox", nil, picker, "SearchBoxTemplate")
 		picker.SearchBox:SetSize(220, 20)
@@ -474,20 +445,14 @@ function HearthstonePickerUI.Attach(Addon, deps)
 		local pinnedCount = 0
 		for _ in pairs(pinned or {}) do pinnedCount = pinnedCount + 1 end
 
-		if picker.mode == "pins" then
-			picker.HeaderPrefix:SetText("Pinned hearthstones:")
-			picker.HeaderName:SetText(tostring(pinnedCount))
-			picker.HeaderIcon:SetAtlas("auctionhouse-icon-favorite", false)
-			picker.HeaderCount:SetText("chosen  -")
-			picker.ModeButton.Text:SetText("Switch to outfit")
-		else
-			local info = OutfitMap()[picker.outfitID]
-			picker.HeaderPrefix:SetText("Hearthstones for")
-			picker.HeaderName:SetText(info and info.name or "Outfit")
-			picker.HeaderIcon:SetTexture(info and info.icon or nil)
-			picker.HeaderCount:SetText(("  %d chosen  -"):format(chosen))
-			picker.ModeButton.Text:SetText("Switch to pins")
-		end
+		local info = OutfitMap()[picker.outfitID]
+		picker.PaintHeader({
+			domain = "hearthstones",
+			mode = picker.mode,
+			outfitName = info and info.name,
+			outfitIcon = info and info.icon,
+			chosen = picker.mode == "pins" and pinnedCount or chosen,
+		})
 	end
 
 	-- Paint state lives on the picker so the pooled initializer can read it
@@ -604,6 +569,13 @@ function HearthstonePickerUI.Attach(Addon, deps)
 
 	local function OpenPicker(outfitID, mode)
 		if InCombatLockdown() then return end
+
+		-- One pairing window at a time: mounts and hearthstones are two views
+		-- of the same question, and two of them open at once is two answers.
+		if Addon.ClosePicker then Addon:ClosePicker() end
+		-- The library is the other full-size window about these outfits, so
+		-- it closes too rather than sitting underneath.
+		if ns.LibraryUI and ns.LibraryUI.Hide then ns.LibraryUI.Hide() end
 
 		local picker = EnsureHearthPicker()
 		picker.outfitID = outfitID

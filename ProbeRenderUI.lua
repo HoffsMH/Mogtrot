@@ -17,6 +17,7 @@ local DRESS_UP_SCENE_ID = 596
 -- INVSLOT_MAINHAND, repeated rather than read: this module is required by the
 -- specs, where the client's constants do not exist.
 local MAINHAND_SLOT = 16
+local OUTFIT_SLOTS = { 1, 3, 4, 5, 6, 7, 8, 9, 10, 15, 16, 17, 19 }
 
 local PANEL_W, PANEL_H = 260, 380
 local GAP = 12
@@ -152,24 +153,69 @@ function ProbeRenderUI.TransmogList(look)
 	return list
 end
 
--- The order slots are applied in, and whether each one drags its child items
--- along. Both come from Blizzard's own dress-up: ascending slot order, and
--- child items ignored everywhere except the main hand, whose child is the
--- off-hand a two-hander occupies. Leaving child items live on every slot lets
--- each call re-evaluate the whole set, so a later slot silently undoes an
--- earlier one and most of the outfit never appears.
+-- The order slots are applied in, whether each drags its child items along,
+-- and where the actor's hand memory is reset.
+--
+-- Armour ascending, then the off hand, then the main hand. Blizzard:
+-- "offhand is processed first and mainhand might override offhand". Their
+-- shop and Perks previews use that order, and so does Plumber.
+--
+-- An actor keeps a running idea of which hand to fill next, which is why
+-- `ResetNextHandSlot` exists: "Since we are manually setting the 2 items in
+-- each hand, reset the actors sense of what hand to put stuff into". Without
+-- it the second weapon lands in the hand the first one already took, and one
+-- of the two is silently dropped. Every Blizzard path that fills both hands
+-- calls it; the one that does not is `DressUpItemTransmogInfoList`, which is
+-- where this loop was copied from, and it has the same fault.
+--
+-- Child items are ignored everywhere except the main hand, whose child is the
+-- off-hand a two-hander occupies. Leaving them live on every slot lets each
+-- call re-evaluate the whole set, so a later slot silently undoes an earlier
+-- one and most of the outfit never appears.
+local OFFHAND_SLOT = 17
+
 function ProbeRenderUI.ApplyPlan(transmogList)
 	local plan = {}
 	if type(transmogList) ~= "table" then return plan end
-	local slots = {}
+	local armour, weapons = {}, {}
 	for slot in pairs(transmogList) do
-		if type(slot) == "number" then slots[#slots + 1] = slot end
+		if slot == MAINHAND_SLOT or slot == OFFHAND_SLOT then
+			weapons[#weapons + 1] = slot
+		elseif type(slot) == "number" then
+			armour[#armour + 1] = slot
+		end
 	end
-	table.sort(slots)
-	for _, slot in ipairs(slots) do
-		plan[#plan + 1] = { slot = slot, ignoreChildItems = slot ~= MAINHAND_SLOT }
+	table.sort(armour)
+	-- Descending, so the off hand goes on before the main hand.
+	table.sort(weapons, function(a, b) return a > b end)
+
+	for _, slot in ipairs(armour) do
+		plan[#plan + 1] = { slot = slot, ignoreChildItems = true }
+	end
+	-- With both hands filled the main hand goes on last, and letting it
+	-- re-evaluate its children there undoes the off-hand just applied.
+	-- Blizzard's own two-weapon preview passes true for both for this reason.
+	-- A lone main hand still keeps its children, whose child is the off-hand a
+	-- two-hander occupies.
+	local bothHands = #weapons > 1
+	for index, slot in ipairs(weapons) do
+		plan[#plan + 1] = {
+			slot = slot,
+			ignoreChildItems = bothHands or slot ~= MAINHAND_SLOT,
+			resetHands = index == 1 or nil,
+			hand = slot == MAINHAND_SLOT and "MAINHANDSLOT" or "SECONDARYHANDSLOT",
+		}
 	end
 	return plan
+end
+
+function ProbeRenderUI.ClearUnspecifiedSlots(actor, transmogList, slots)
+	if type(actor) ~= "table" and type(actor) ~= "userdata" then return end
+	if type(actor.UndressSlot) ~= "function" then return end
+	local dressed = type(transmogList) == "table" and transmogList or {}
+	for _, slot in ipairs(slots or OUTFIT_SLOTS) do
+		if dressed[slot] == nil then pcall(actor.UndressSlot, actor, slot) end
+	end
 end
 
 -- The scene's own camera, which is what a mounted scene has to be turned by:
@@ -299,14 +345,60 @@ function ProbeRenderUI.Seat(mount, rider, animID, kitID)
 	return (pcall(mount.AttachToMount, mount, rider, animID, kitID))
 end
 
+-- Whether each slot the look asked for is actually on the body.
+--
+-- ItemTryOnReason answers "accepted", not "drawn", so a wall of ok tells you
+-- nothing about what the viewer can see. IsSlotVisible is the observable for
+-- armour, and it has settled that once before: eleven slots reported success
+-- on a body that drew none of them.
+--
+-- (caution) It answers nothing useful for a weapon. Measured: a body plainly
+-- holding a dagger reported both weapon slots invisible while every armour
+-- slot reported visible. Armour is composited into the body texture and a
+-- weapon is an attachment, so there is nothing of a weapon in the composite
+-- for the call to find. Weapon slots are left unanswered rather than
+-- answered wrongly, because a confident wrong answer is what sent the last
+-- two diagnoses down the wrong path.
+local WEAPON_SLOTS = { [16] = true, [17] = true, [18] = true }
+
+function ProbeRenderUI.SlotVisibility(actor, transmogList)
+	local visible = {}
+	if type(transmogList) ~= "table" then return visible end
+	if not (actor and type(actor.IsSlotVisible) == "function") then return visible end
+	for slot in pairs(transmogList) do
+		if type(slot) == "number" and not WEAPON_SLOTS[slot] then
+			local ok, drawn = pcall(actor.IsSlotVisible, actor, slot)
+			visible[slot] = ok and drawn or false
+		end
+	end
+	return visible
+end
+
 -- Collects the ItemTryOnReason per slot. A call that does not error still
 -- reports why the slot was refused, and a refusal is the difference between
 -- a slot applied and a slot the viewer can see.
 local function ApplySlots(actor, transmogList)
 	local reasons = {}
 	for _, step in ipairs(ProbeRenderUI.ApplyPlan(transmogList)) do
-		local ok, reason = pcall(actor.SetItemTransmogInfo, actor,
-			transmogList[step.slot], step.slot, step.ignoreChildItems)
+		if step.resetHands and type(actor.ResetNextHandSlot) == "function" then
+			pcall(actor.ResetNextHandSlot, actor)
+		end
+		local info = transmogList[step.slot]
+		local ok, reason
+		-- A weapon is named into its hand rather than handed to
+		-- SetItemTransmogInfo, which Blizzard say "will automatically handle
+		-- whether the player can dual wield" and therefore drops one of two
+		-- on a class that cannot. TryOn takes the hand outright, and carries
+		-- the illusion in the same call. This is the Dressing Room set
+		-- panel's route.
+		if step.hand and type(actor.TryOn) == "function" and info
+			and (info.appearanceID or 0) > 0 then
+			ok, reason = pcall(actor.TryOn, actor, info.appearanceID, step.hand,
+				(info.illusionID or 0) > 0 and info.illusionID or nil)
+		else
+			ok, reason = pcall(actor.SetItemTransmogInfo, actor, info, step.slot,
+				step.ignoreChildItems)
+		end
 		reasons[step.slot] = ok and reason or nil
 	end
 	return reasons
@@ -336,6 +428,7 @@ local function DressWhenLoaded(actor, transmogList, onStatus)
 		if actor.mogtrotSettled == token then return end
 		pcall(actor.SetAutoDress, actor, false)
 		pcall(actor.Undress, actor)
+		ProbeRenderUI.ClearUnspecifiedSlots(actor, transmogList)
 		local reasons = ApplySlots(actor, transmogList)
 		local Probe = ns.ClientProbe
 		local text, retryable = "applied", 0
@@ -347,7 +440,9 @@ local function DressWhenLoaded(actor, transmogList, onStatus)
 			for _ in pairs(transmogList) do applied = applied + 1 end
 			settled = pending == 0 and (tally["ok"] or 0) >= applied
 		end
-		if settled then actor.mogtrotSettled = token end
+		local lateEnough = reason ~= "immediate" and reason ~= "on load"
+			and reason ~= "retry 0.1s" and reason ~= "retry 0.5s"
+		if settled and lateEnough then actor.mogtrotSettled = token end
 		if onStatus then
 			-- The reasons themselves ride along: a caller that wants to say
 			-- which slot was refused cannot get that back out of the text.

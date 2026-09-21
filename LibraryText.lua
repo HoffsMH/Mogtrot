@@ -2,6 +2,7 @@ local _, ns = ...
 if type(ns) ~= "table" then ns = {} end -- luacheck: ignore 331/ns
 
 local LookCodec = ns.LookCodec or require("LookCodec")
+local Library = ns.Library or require("Library")
 
 -- How a library record reads: the two lines on its card, and the full dump
 -- behind More info. Pure, so what the window says is testable without a
@@ -15,6 +16,11 @@ local SEXES = { [2] = "male", [3] = "female" }
 -- client refused to give one.
 function LibraryText.Title(record)
 	if type(record) ~= "table" then return "" end
+	if record.source == "mine"
+		and (record.origin == "outfit" or record.origin == "customSet")
+		and type(record.originName) == "string" and record.originName ~= "" then
+		return record.originName
+	end
 	if type(record.name) == "string" and record.name ~= "" then
 		if type(record.realm) == "string" and record.realm ~= "" then
 			return record.name .. "-" .. record.realm
@@ -23,6 +29,13 @@ function LibraryText.Title(record)
 	end
 	if record.originName then return tostring(record.originName) end
 	return ("Look #%s"):format(tostring(record.id or "?"))
+end
+
+function LibraryText.CardTitle(record, className, colorCode)
+	local title = LibraryText.Title(record)
+	if type(className) ~= "string" or className == "" then return title end
+	if type(colorCode) ~= "string" or colorCode == "" then return title end
+	return ("%s | |c%s%s|r"):format(title, colorCode, className)
 end
 
 function LibraryText.Pieces(record)
@@ -35,8 +48,27 @@ function LibraryText.Pieces(record)
 end
 
 -- The body the card is showing, plus how much of an outfit is on it.
-function LibraryText.Subtitle(record)
+-- className is injected because naming a class is a client lookup and this
+-- module stays pure. Snapshots only: one of your own already wears its class
+-- on the card title.
+function LibraryText.Subtitle(record, className)
 	if type(record) ~= "table" then return "" end
+	if record.source == "mine"
+		and (record.origin == "outfit" or record.origin == "customSet") then
+		local owner = record.name or "Unknown character"
+		if record.realm and record.realm ~= "" then owner = owner .. "-" .. record.realm end
+		-- Both of these hold an empty look, and saying "0 pieces" for either
+		-- hides the only difference that matters: whether there is anything to
+		-- go and fetch.
+		if Library.IsUnscanned(record) then
+			return ("%s, not captured yet"):format(owner)
+		end
+		if Library.IsEmptyOutfit(record) then
+			return ("%s, nothing set"):format(owner)
+		end
+		local pieces = LibraryText.Pieces(record)
+		return ("%s, %d piece%s"):format(owner, pieces, pieces == 1 and "" or "s")
+	end
 	local body = record.raceFile or (record.raceID and ("race " .. record.raceID))
 	local sex = SEXES[record.sex]
 	local who
@@ -46,6 +78,9 @@ function LibraryText.Subtitle(record)
 		who = tostring(body)
 	else
 		who = "body unknown"
+	end
+	if type(className) == "string" and className ~= "" then
+		who = ("%s %s"):format(who, className)
 	end
 	local pieces = LibraryText.Pieces(record)
 	return ("%s, %d piece%s"):format(who, pieces, pieces == 1 and "" or "s")

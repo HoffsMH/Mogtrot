@@ -19,6 +19,22 @@ local function NewPreview()
 end
 
 describe("OutfitPreviewRender", function()
+	it("clears every preview slot omitted from a partial look", function()
+		local cleared, applied = {}, {}
+		local model = {
+			SetAutoDress = function() end,
+			Undress = function() end,
+			UndressSlot = function(_, slot) cleared[#cleared + 1] = slot end,
+			SetItemTransmogInfo = function(_, info, slot)
+				applied[#applied + 1] = { info, slot }
+			end,
+		}
+		OutfitPreviewRender.ApplyLook(model, { [5] = { 101, 0, 0 } },
+			function(a, b, c) return { a, b, c } end, { 3, 5, 6 })
+		assert.same({ 3, 6 }, cleared)
+		assert.same({ { { 101, 0, 0 }, 5 } }, applied)
+	end)
+
 	it("reloads and dresses repeated requests for the same outfit", function()
 		local preview = NewPreview()
 		local applied = {}

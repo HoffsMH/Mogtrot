@@ -38,7 +38,6 @@ local function EnsurePinDomains(account)
 		account.pins = pins
 	end
 	pins.mounts = DefaultPinDomain(pins.mounts)
-	pins.battlePets = DefaultPinDomain(pins.battlePets)
 	pins.hearthstones = DefaultPinDomain(pins.hearthstones)
 	return pins
 end
@@ -49,6 +48,9 @@ local function InitAccount(account)
 	account.minimap = account.minimap or {}
 	if account.minimap.hide == nil then account.minimap.hide = false end
 	account.titleFallbackMode = account.titleFallbackMode or "random"
+	-- How long an archived snapshot is kept. Zero never expires, which is how
+	-- somebody who keeps everything says so.
+	if account.archiveDays == nil then account.archiveDays = 30 end
 	EnsurePinDomains(account)
 	-- Additive and self-gating: a library from a newer build is left alone.
 	Library.Migrate(account)
@@ -125,7 +127,6 @@ local function InitCharacter(char)
 	char.roots = char.roots or {}
 	char.assign = char.assign or {}
 
-	if char.battlePets == nil then char.battlePets = {} end
 	if char.hearthstones == nil then char.hearthstones = {} end
 	local optOut = char.pinOptOut
 	if optOut == nil then
@@ -133,14 +134,12 @@ local function InitCharacter(char)
 		char.pinOptOut = optOut
 	end
 	optOut.mounts = optOut.mounts or {}
-	optOut.battlePets = optOut.battlePets or {}
 	optOut.hearthstones = optOut.hearthstones or {}
 	local rotations = char.rotations
 	if rotations == nil then
 		rotations = {}
 		char.rotations = rotations
 	end
-	rotations.battlePets = rotations.battlePets or {}
 	rotations.hearthstones = rotations.hearthstones or {}
 end
 

@@ -15,12 +15,13 @@ local INSPECT_TIMEOUT = 5
 
 local waiter
 
-local function Cancel()
+local function Cancel(clearInspect)
 	if not waiter then return end
 	waiter:UnregisterAllEvents()
 	waiter:SetScript("OnEvent", nil)
 	waiter:SetScript("OnUpdate", nil)
 	waiter = nil
+	if clearInspect and ClearInspectPlayer then pcall(ClearInspectPlayer) end
 end
 
 local function Get(fn, ...)
@@ -241,8 +242,7 @@ function SnapCapture.Target(Addon)
 	else
 		Addon:Say("no player targeted; capturing you.")
 	end
-
-	Cancel()
+	Cancel(true)
 
 	-- Identity is read now, from the unit actually being pointed at, and the
 	-- GUID is held for the rest of the capture. Reading it when the answer
@@ -297,16 +297,17 @@ function SnapCapture.Target(Addon)
 	waiter:SetScript("OnUpdate", function(_self, delta)
 		elapsed = elapsed + delta
 		if elapsed < INSPECT_TIMEOUT then return end
-		Cancel()
+		Cancel(true)
 		Addon:Warn("no answer about %s in %d seconds; stay in range and try again.",
 			tostring(facts.name), INSPECT_TIMEOUT)
 	end)
 	waiter:SetScript("OnEvent", function(_self, _event, inspecteeGUID)
 		if pinnedGUID and inspecteeGUID ~= pinnedGUID then return end
-		Cancel()
+		Cancel(false)
 
 		local ok, list = pcall(C_TransmogCollection.GetInspectItemTransmogInfoList)
 		local look, filled = Look.FromTransmogList(ok and list or nil)
+		if ClearInspectPlayer then pcall(ClearInspectPlayer) end
 		if filled == 0 then
 			Addon:Warn("%s answered with nothing worn.", tostring(facts.name))
 			return

@@ -1,6 +1,9 @@
 -- The account-wide library: its migration, its dedup, and what it refuses.
 local Library = require("Library")
 
+-- Saved variables hand an integer 0 back as -0, and tostring tells them apart.
+local NEGATIVE_ZERO = loadstring("return -0")()
+
 describe("Library", function()
 	local function Snap(look, raceID, sex)
 		return { source = "snap", look = look or "1:5,0,0",
@@ -56,6 +59,67 @@ describe("Library", function()
 			account.library.nextID = 5
 			Library.Migrate(account)
 			assert.equal(5, account.library.nextID)
+		end)
+
+		it("keeps two characters' outfits sharing one ID through the migration", function()
+			local account = { library = { version = 2, nextID = 3, records = {
+				[1] = { id = 1, source = "mine", origin = "outfit",
+					originID = 7, guid = "Player-1", look = "1:10,0,0" },
+				[2] = { id = 2, source = "mine", origin = "outfit",
+					originID = 7, guid = "Player-2", look = "1:10,0,0" },
+			} } }
+			local library = Library.Migrate(account)
+			assert.is_table(library.records[1])
+			assert.is_table(library.records[2])
+		end)
+
+		it("collapses one character's outfit duplicated by a signed zero", function()
+			local account = { library = { version = 3, nextID = 3, records = {
+				[1] = { id = 1, source = "mine", origin = "outfit",
+					originID = 0, guid = "Player-1", look = "1:10,0,0" },
+				[2] = { id = 2, source = "mine", origin = "outfit",
+					originID = NEGATIVE_ZERO, guid = "Player-1", look = "1:10,0,0" },
+			} } }
+			local library = Library.Migrate(account)
+			assert.is_table(library.records[1])
+			assert.is_nil(library.records[2])
+		end)
+
+		it("drops custom sets so each character rebuilds its own", function()
+			local account = { library = { version = 3, nextID = 4, records = {
+				[1] = { id = 1, source = "mine", origin = "customSet",
+					originID = 7, guid = "Player-1", look = "1:10,0,0" },
+				[2] = { id = 2, source = "mine", origin = "outfit",
+					originID = 7, guid = "Player-1", look = "1:11,0,0" },
+				[3] = { id = 3, source = "snap", look = "1:12,0,0",
+					raceID = 1, sex = 2 },
+			} } }
+			local library = Library.Migrate(account)
+			assert.is_nil(library.records[1])
+			assert.is_table(library.records[2])
+			assert.is_table(library.records[3])
+		end)
+
+		-- The sync used to mirror every outfit whether or not anything had
+		-- read it, which filled the wall with cards that could only say
+		-- "wear this once". It no longer writes them; these clears the ones
+		-- it already wrote. An outfit read and found empty is not one of
+		-- them and stays.
+		it("drops outfits that were mirrored before anything read them", function()
+			local account = { library = { version = 4, nextID = 5, records = {
+				[1] = { id = 1, source = "mine", origin = "outfit", originID = 1,
+					guid = "P1", look = "", scanned = false },
+				[2] = { id = 2, source = "mine", origin = "outfit", originID = 2,
+					guid = "P1", look = "", scanned = true },
+				[3] = { id = 3, source = "mine", origin = "outfit", originID = 3,
+					guid = "P1", look = "1:9,0,0", scanned = true },
+				[4] = { id = 4, source = "snap", look = "1:8,0,0", raceID = 1, sex = 2 },
+			} } }
+			local library = Library.Migrate(account)
+			assert.is_nil(library.records[1])
+			assert.is_table(library.records[2])
+			assert.is_table(library.records[3])
+			assert.is_table(library.records[4])
 		end)
 
 		it("refuses anything that is not an account store", function()
@@ -201,6 +265,137 @@ describe("Library", function()
 			assert.is_false(Library.Delete(nil, 1))
 		end)
 	end)
+
+	-- An outfit nobody has read and an outfit that assigns nothing both store an
+	-- empty look, so only the flag tells them apart.
+	describe("scan state", function()
+		local function Outfit(look, scanned)
+			return { source = "mine", origin = "outfit", originID = 1,
+				guid = "P1", look = look, scanned = scanned }
+		end
+
+		it("accepts the scanned flag as a known field", function()
+			assert.is_true(Library.Validate(Outfit("", false)))
+		end)
+
+		it("calls an empty look nobody has read unscanned", function()
+			assert.is_true(Library.IsUnscanned(Outfit("", false)))
+			assert.is_false(Library.IsEmptyOutfit(Outfit("", false)))
+		end)
+
+		it("calls an empty look that was read empty", function()
+			assert.is_true(Library.IsEmptyOutfit(Outfit("", true)))
+			assert.is_false(Library.IsUnscanned(Outfit("", true)))
+		end)
+
+		-- A record written before the flag existed almost always came from an
+		-- ingest that did run, because the ingest is what created it. Reading
+		-- the absence as "never read" labels every genuinely empty outfit as
+		-- missing and puts a wall of them in front of the user.
+		it("treats a record written before the flag as read and empty", function()
+			assert.is_false(Library.IsUnscanned(Outfit("", nil)))
+			assert.is_true(Library.IsEmptyOutfit(Outfit("", nil)))
+		end)
+
+		it("calls an outfit with pieces neither", function()
+			assert.is_false(Library.IsUnscanned(Outfit("1:9,0,0", true)))
+			assert.is_false(Library.IsEmptyOutfit(Outfit("1:9,0,0", true)))
+		end)
+
+		it("says nothing about a custom set or a snapshot", function()
+			assert.is_false(Library.IsUnscanned({ source = "mine",
+				origin = "customSet", originID = 1, guid = "P1", look = "" }))
+			assert.is_false(Library.IsEmptyOutfit({ source = "snap", look = "" }))
+		end)
+	end)
+
+	-- The window opens on this order, and the reason it exists is to put the
+	-- capture you just took at the top.
+	describe("Sorted", function()
+		it("puts a brand new record first", function()
+			local library = Library.New()
+			Library.Add(library, Snap("1:1,0,0"), 100)
+			Library.Add(library, Snap("1:2,0,0"), 200)
+			assert.equal(2, Library.Sorted(library)[1].id)
+		end)
+
+		it("lifts a record seen again above newer ones", function()
+			local library = Library.New()
+			Library.Add(library, Snap("1:1,0,0"), 100)
+			Library.Add(library, Snap("1:2,0,0"), 200)
+			Library.Add(library, Snap("1:1,0,0"), 300)
+			local sorted = Library.Sorted(library)
+			assert.equal(1, sorted[1].id)
+			assert.equal(2, sorted[2].id)
+		end)
+
+		-- A login sync stamps every mirrored outfit at once, so the tie has to
+		-- break on something stable or the wall reshuffles for no reason.
+		it("breaks a tie on the newer id", function()
+			local library = Library.New()
+			Library.Add(library, Snap("1:1,0,0"), 100)
+			Library.Add(library, Snap("1:2,0,0"), 100)
+			local sorted = Library.Sorted(library)
+			assert.equal(2, sorted[1].id)
+			assert.equal(1, sorted[2].id)
+		end)
+	end)
+
+	describe("custom sets", function()
+		local function Set(guid, customSetID)
+			return { source = "mine", origin = "customSet", originID = customSetID,
+				guid = guid, look = "1:10,0,0" }
+		end
+
+		it("keeps character-local custom set IDs separate by owner", function()
+			local library = Library.New()
+			Library.Add(library, Set("Player-1", 7), 10)
+			local id, isNew = Library.Add(library, Set("Player-2", 7), 10)
+			assert.equal(2, id)
+			assert.is_true(isNew)
+		end)
+
+		it("keys a set ID of zero the same however its sign survived saving", function()
+			assert.equal(Library.KeyOf(Set("Player-1", 0)),
+				Library.KeyOf(Set("Player-1", NEGATIVE_ZERO)))
+		end)
+	end)
+
+	describe("mirrored outfits", function()
+		local function Outfit(guid, outfitID, look)
+			return { source = "mine", origin = "outfit", originID = outfitID,
+				guid = guid, look = look or "1:9,0,0" }
+		end
+
+		it("keeps character-local outfit IDs separate by owner", function()
+			local library = Library.New()
+			Library.Add(library, Outfit("Player-1", 4), 10)
+			local id, isNew = Library.Add(library, Outfit("Player-2", 4), 10)
+			assert.equal(2, id)
+			assert.is_true(isNew)
+		end)
+
+		it("keeps a mirror separate from an identical snapshot", function()
+			local library = Library.New()
+			Library.Add(library, Snap("1:9,0,0", 11, 3), 10)
+			local id = Library.Add(library, Outfit("Player-1", 4), 10)
+			assert.equal(2, id)
+		end)
+
+		it("updates mutable fields while retaining identity and saved time", function()
+			local library = Library.New()
+			Library.Add(library, Outfit("Player-1", 4), 10)
+			local changed = Outfit("Player-1", 4, "1:12,0,0")
+			changed.originName = "Renamed"
+			local id, isNew = Library.Upsert(library, changed, 20)
+			assert.equal(1, id)
+			assert.is_false(isNew)
+			assert.equal(10, library.records[id].savedAt)
+			assert.equal(20, library.records[id].updatedAt)
+			assert.equal("Renamed", library.records[id].originName)
+			assert.equal("1:12,0,0", library.records[id].look)
+		end)
+	end)
 end)
 
 describe("Library.Snap", function()
@@ -253,5 +448,63 @@ describe("Library.Snap", function()
 		local record = Library.Snap({ look = "1:5,0,0", favourite = true }, 1)
 		assert.is_table(record)
 		assert.is_nil(record.favourite)
+	end)
+end)
+
+-- Archiving is a single unconfirmed click, and a snapshot is the one record
+-- here that cannot be read back from the client. So archiving never destroys
+-- anything: it moves the record aside and starts a clock.
+describe("Library archive", function()
+	local function Snap(look)
+		return { source = "snap", look = look or "1:5,0,0", raceID = 6, sex = 2 }
+	end
+
+	local DAY = 86400
+
+	it("moves a record out of the wall and stamps when", function()
+		local library = Library.New()
+		local id = Library.Add(library, Snap(), 100)
+		assert.is_true(Library.Archive(library, id, 500))
+		assert.is_nil(library.records[id])
+		assert.equal(1, #library.archive)
+		assert.equal(500, library.archive[1].archivedAt)
+		assert.equal("1:5,0,0", library.archive[1].look)
+	end)
+
+	it("refuses to archive something that is not there", function()
+		local library = Library.New()
+		assert.is_false(Library.Archive(library, 99, 500))
+	end)
+
+	-- Time only moves forward, so appending keeps the list ordered and
+	-- eviction never has to sort or decode anything but the front.
+	it("keeps the archive oldest first", function()
+		local library = Library.New()
+		Library.Archive(library, Library.Add(library, Snap("1:1,0,0"), 10), 100)
+		Library.Archive(library, Library.Add(library, Snap("1:2,0,0"), 20), 200)
+		assert.equal(100, library.archive[1].archivedAt)
+		assert.equal(200, library.archive[2].archivedAt)
+	end)
+
+	it("evicts only what is older than the window", function()
+		local library = Library.New()
+		Library.Archive(library, Library.Add(library, Snap("1:1,0,0"), 1), 0)
+		Library.Archive(library, Library.Add(library, Snap("1:2,0,0"), 2), 20 * DAY)
+		local dropped = Library.EvictArchived(library, 30, 40 * DAY)
+		assert.equal(1, dropped)
+		assert.equal(1, #library.archive)
+		assert.equal(20 * DAY, library.archive[1].archivedAt)
+	end)
+
+	it("keeps everything when the window is zero", function()
+		local library = Library.New()
+		Library.Archive(library, Library.Add(library, Snap(), 1), 0)
+		assert.equal(0, Library.EvictArchived(library, 0, 999 * DAY))
+		assert.equal(1, #library.archive)
+	end)
+
+	it("survives an archive that is not there yet", function()
+		assert.equal(0, Library.EvictArchived(Library.New(), 30, 100))
+		assert.equal(0, Library.EvictArchived(nil, 30, 100))
 	end)
 end)

@@ -2,6 +2,12 @@
 local LibraryText = require("LibraryText")
 
 describe("LibraryText", function()
+	it("names mirrored outfits and identifies their owner", function()
+		local record = { source = "mine", origin = "outfit", originName = "Crimson",
+			name = "Alpha", realm = "Aegwynn", look = "1:5,0,0" }
+		assert.equal("Crimson", LibraryText.Title(record))
+		assert.equal("Alpha-Aegwynn, 1 piece", LibraryText.Subtitle(record))
+	end)
 	local function Record(over)
 		local r = {
 			id = 3, source = "snap", look = "1:5,0,0;16:9,0,4",
@@ -37,6 +43,63 @@ describe("LibraryText", function()
 
 		it("does not read an empty name as a name", function()
 			assert.equal("Look #3", LibraryText.Title(Record({ name = "" })))
+		end)
+
+		it("adds a class-colored class name to a card title", function()
+			assert.equal("Thunderhoof-Aegwynn | |cffaad372Hunter|r",
+				LibraryText.CardTitle(Record(), "Hunter", "ffaad372"))
+		end)
+
+		it("keeps the ordinary title when class details are unavailable", function()
+			assert.equal("Thunderhoof-Aegwynn", LibraryText.CardTitle(Record()))
+		end)
+	end)
+
+	-- The pane title row has buttons on it and a long name already crowds
+	-- them, so the class goes on the full-width line below instead.
+	describe("class on a snapshot subtitle", function()
+		local function Snap()
+			return { source = "snap", raceFile = "NightElf", sex = 3,
+				look = "1:5,0,0" }
+		end
+
+		it("names the class after the body", function()
+			assert.equal("NightElf female Rogue, 1 piece",
+				LibraryText.Subtitle(Snap(), "Rogue"))
+		end)
+
+		it("reads the same as before when the class is unknown", function()
+			assert.equal("NightElf female, 1 piece", LibraryText.Subtitle(Snap()))
+			assert.equal("NightElf female, 1 piece", LibraryText.Subtitle(Snap(), ""))
+		end)
+
+		-- One of mine already carries its class on the card title.
+		it("leaves my own records alone", function()
+			assert.equal("Alpha-Aegwynn, 1 piece", LibraryText.Subtitle({
+				source = "mine", origin = "outfit", name = "Alpha",
+				realm = "Aegwynn", look = "1:5,0,0", scanned = true }, "Rogue"))
+		end)
+	end)
+
+	describe("an outfit with no pieces", function()
+		local function Outfit(look, scanned)
+			return { source = "mine", origin = "outfit", originName = "Red",
+				name = "Alpha", realm = "Aegwynn", look = look, scanned = scanned }
+		end
+
+		it("says an unread outfit has not been captured", function()
+			assert.equal("Alpha-Aegwynn, not captured yet",
+				LibraryText.Subtitle(Outfit("", false)))
+		end)
+
+		it("says an outfit read as empty sets nothing", function()
+			assert.equal("Alpha-Aegwynn, nothing set",
+				LibraryText.Subtitle(Outfit("", true)))
+		end)
+
+		it("still counts pieces where there are some", function()
+			assert.equal("Alpha-Aegwynn, 1 piece",
+				LibraryText.Subtitle(Outfit("1:5,0,0", true)))
 		end)
 	end)
 

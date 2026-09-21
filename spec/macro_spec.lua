@@ -33,6 +33,10 @@ describe("Macro.Body", function()
 		assert.equals("#mogtrot:least\n/click MogtrotLeastWorn", Macro.Body("least"))
 	end)
 
+	it("runs the library capture command", function()
+		assert.equals("#mogtrot:snap\n/mogtrot snap", Macro.Body("snap"))
+	end)
+
 	it("stays on the dispatcher when a fallback route is supplied", function()
 		assert.equals("#mogtrot:summon\n/click MogtrotSummon",
 			Macro.Body("summon", "litemount"))
@@ -96,6 +100,17 @@ describe("Macro.DEFS", function()
 	it("uses the documented hearth macro name and target", function()
 		assert.equals("Mogtrot Hearth", Macro.DEFS.hearth.name)
 		assert.equals("MogtrotHearthstone", Macro.DEFS.hearth.target)
+	end)
+
+	it("gives library capture a camera icon", function()
+		assert.equals("Mogtrot Snap", Macro.DEFS.snap.name)
+		assert.is_number(Macro.DEFS.snap.fixedIcon)
+	end)
+
+	it("hides a placed library capture handle", function()
+		assert.is_false(Macro.DragShown(false, { snap = true }, Macro.SNAP))
+		assert.is_true(Macro.DragShown(false, {}, Macro.SNAP))
+		assert.is_true(Macro.DragShown(true, { snap = true }, Macro.SNAP))
 	end)
 
 	it("keeps every name inside the 16-character cap", function()

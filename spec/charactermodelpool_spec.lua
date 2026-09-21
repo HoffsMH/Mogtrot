@@ -102,3 +102,43 @@ describe("CharacterModelPool", function()
 		assert.is_nil(pool:Acquire({}, "second"))
 	end)
 end)
+
+-- Two cards wanting the same body cannot share one: Acquire only hands over an
+-- entry nothing else holds. So counting whether a key exists at all overstates
+-- what is available, and the wall that relies on that count decides it has
+-- nothing left to build while a card is still waiting.
+describe("CharacterModelPool:CountByKey", function()
+	local function Pool(limit)
+		return CharacterModelPool.New(limit or 4, {})
+	end
+
+	it("counts nothing for an empty pool", function()
+		assert.same({}, Pool():CountByKey())
+	end)
+
+	it("counts one entry per key it carries", function()
+		local pool = Pool()
+		local a = pool:Acquire("cardA", nil)
+		a.key = "elf|female"
+		local b = pool:Acquire("cardB", nil)
+		b.key = "orc|male"
+		assert.same({ ["elf|female"] = 1, ["orc|male"] = 1 }, pool:CountByKey())
+	end)
+
+	it("counts two bodies built for the same key separately", function()
+		local pool = Pool()
+		pool:Acquire("cardA", nil).key = "elf|female"
+		pool:Acquire("cardB", nil).key = "elf|female"
+		assert.same({ ["elf|female"] = 2 }, pool:CountByKey())
+	end)
+
+	-- Find answers yes for a body another card is already standing in, which
+	-- is the whole difference.
+	it("counts a held body the same as a free one", function()
+		local pool = Pool()
+		local held = pool:Acquire("cardA", nil)
+		held.key = "elf|female"
+		assert.is_table(pool:Find("elf|female"))
+		assert.equal(1, pool:CountByKey()["elf|female"])
+	end)
+end)

@@ -6,7 +6,8 @@ local _, ns = ...
 -- item tables back. Selection is keyed on the item table itself, so an item is free
 -- to carry no id at all.
 --
---   items   = { { name, path, note, noteDim, divider, preselected, ...caller's keys... } }
+--   items   = { { name, icon, iconAtlas, tag, tagColor, path, note, noteDim,
+--                divider, preselected, ...caller's keys... } }
 --   buttons = { { text, width, danger, tipTitle, tipBody, onClick(chosen) } }
 --   onChoose(item) selects one item immediately instead of showing a confirm button
 --
@@ -16,7 +17,9 @@ local PAD = 10
 local ROW_H = 34
 local HEADER_H = 60
 local FOOTER_H = 40
-local WIDTH = 380
+-- Narrow enough that a list of short names does not sit in a field of empty
+-- space, wide enough for "name - category" without clipping.
+local WIDTH = 320
 -- Only the window height: the ScrollBox derives everything else from its own rect.
 local VISIBLE_ROWS = 10
 
@@ -96,6 +99,11 @@ local function BuildRow(row)
 
 	row:RegisterForClicks("LeftButtonUp")
 
+	row.Icon = row:CreateTexture(nil, "ARTWORK")
+	row.Icon:SetSize(18, 18)
+	row.Icon:SetTexCoord(0.07, 0.93, 0.07, 0.93)
+	row.Icon:Hide()
+
 	row.Selected = row:CreateTexture(nil, "BACKGROUND")
 	row.Selected:SetAllPoints()
 	row.Selected:SetColorTexture(1, 0.82, 0, 0.14)
@@ -155,6 +163,24 @@ local function PaintRow(row, item)
 	local left = pickerWindow.multiSelect and 28 or 10
 	local hasPath = item.path ~= nil and item.path ~= ""
 
+	-- An icon shifts the name right rather than overlapping it, and a row
+	-- without one reads exactly as it did before.
+	row.Icon:ClearAllPoints()
+	row.Icon:SetPoint("LEFT", row, "LEFT", left, 0)
+	-- An atlas and a file id need different setters, so the caller says which
+	-- it has rather than this guessing from the value's type.
+	if item.iconAtlas then
+		row.Icon:SetAtlas(item.iconAtlas, false)
+		row.Icon:Show()
+		left = left + 18 + 6
+	elseif item.icon then
+		row.Icon:SetTexture(item.icon)
+		row.Icon:Show()
+		left = left + 18 + 6
+	else
+		row.Icon:Hide()
+	end
+
 	row.Name:ClearAllPoints()
 	if hasPath then
 		row.Name:SetPoint("TOPLEFT", row, "TOPLEFT", left, -5)
@@ -168,7 +194,22 @@ local function PaintRow(row, item)
 		row.Name:SetPoint("RIGHT", row, "RIGHT", -92, 0)
 	end
 	row.Path:SetShown(hasPath)
-	row.Name:SetText(item.name or "")
+	local label = item.name or ""
+	if type(item.tag) == "string" and item.tag ~= "" then
+		local color = item.tagColor
+		local tag = item.tag
+		if type(color) == "table" and color.r and color.g and color.b then
+			tag = ("|cff%02x%02x%02x%s|r"):format(color.r * 255, color.g * 255,
+				color.b * 255, tag)
+		end
+		label = ("%s - %s"):format(label, tag)
+	end
+	row.Name:SetText(label)
+	if item.nameColor then
+		row.Name:SetTextColor(item.nameColor[1], item.nameColor[2], item.nameColor[3])
+	else
+		row.Name:SetTextColor(row.Name:GetFontObject():GetTextColor())
+	end
 
 	row.Note:SetText(item.note or "")
 	if item.noteDim then
@@ -243,6 +284,15 @@ local function Button_OnEnter(self)
 		GameTooltip:AddLine(self.tipBody, 0.8, 0.8, 0.8, true)
 	end
 	GameTooltip:Show()
+end
+
+-- Applies to the rows the search is showing, not the whole list: typing a name
+-- and checking everything is the point of having both.
+local function SetAllFiltered(selected)
+	for _, item in ipairs(FilteredItems()) do
+		pickerWindow.selectedItems[item] = selected or nil
+	end
+	RepaintRows()
 end
 
 local function AcquireButton(index)
@@ -324,6 +374,24 @@ local function EnsureWindow()
 	window.Title:SetJustifyH("LEFT")
 	window.Title:SetWordWrap(false)
 
+	local function BulkButton(label, selected)
+		local button = CreateFrame("Button", nil, window, "UIPanelButtonTemplate")
+		button:SetSize(80, 20)
+		button:SetText(label)
+		button:SetScript("OnClick", function() SetAllFiltered(selected) end)
+		button:SetScript("OnEnter", Button_OnEnter)
+		button:SetScript("OnLeave", GameTooltip_Hide)
+		button.tipBody = "Applies to whatever the search is showing."
+		button:Hide()
+		return button
+	end
+	window.UncheckAll = BulkButton(UNCHECK_ALL or "Uncheck All", false)
+	window.UncheckAll:SetPoint("RIGHT", window.CloseButton, "LEFT", -2, 0)
+	window.UncheckAll.tipTitle = UNCHECK_ALL or "Uncheck All"
+	window.CheckAll = BulkButton(CHECK_ALL or "Check All", true)
+	window.CheckAll:SetPoint("RIGHT", window.UncheckAll, "LEFT", -4, 0)
+	window.CheckAll.tipTitle = CHECK_ALL or "Check All"
+
 	window.SearchBox = CreateFrame("EditBox", nil, window, "SearchBoxTemplate")
 	window.SearchBox:SetHeight(20)
 	window.SearchBox:SetAutoFocus(false)
@@ -404,6 +472,10 @@ function ns.OpenSearchPicker(config)
 		onClose()
 	end
 
+	-- Above whatever opened it, or the click looks like it did nothing. A
+	-- caller in a higher strata has to say so; Raise settles the rest.
+	win:SetFrameStrata(config.strata or "HIGH")
+
 	win.items = config.items or {}
 	win.multiSelect = config.multi == true
 	win.onChoose = config.onChoose
@@ -420,8 +492,18 @@ function ns.OpenSearchPicker(config)
 	-- The picker owns the list it is handed for as long as it is open, so the
 	-- lowercased haystack goes on the item rather than into a parallel table.
 	for _, item in ipairs(win.items) do
-		item.search = strlower((item.name or "") .. " " .. (item.path or ""))
+		item.search = strlower((item.name or "") .. " " .. (item.tag or "")
+			.. " " .. (item.path or ""))
 	end
+
+	-- Bulk selection only makes sense where more than one item can be held, and
+	-- the title yields the room rather than the window growing a second row.
+	local bulk = win.multiSelect and config.bulkSelect == true
+	win.CheckAll:SetShown(bulk)
+	win.UncheckAll:SetShown(bulk)
+	win.Title:ClearAllPoints()
+	win.Title:SetPoint("TOPLEFT", PAD, -PAD)
+	win.Title:SetPoint("RIGHT", bulk and win.CheckAll or win.CloseButton, "LEFT", -4, 0)
 
 	win.Title:SetText(config.title or "")
 	win.EmptyMessage:SetText(config.emptyText or "Nothing matches.")
@@ -433,6 +515,7 @@ function ns.OpenSearchPicker(config)
 	LayoutButtons(config.buttons or {})
 
 	win:Show()
+	win:Raise()
 	if config.onOpen then config.onOpen(win) end
 	RefreshItems()
 	win.SearchBox:SetFocus()

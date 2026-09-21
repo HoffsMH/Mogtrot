@@ -15,6 +15,7 @@ Macro.OPEN = "open"
 Macro.SUMMON = "summon"
 Macro.LEAST = "least"
 Macro.HEARTH = "hearth"
+Macro.SNAP = "snap"
 -- Per command: the named button the body clicks, and the macro's name. MogtrotToggle
 -- is the secure toggle, MogtrotSummon calls the same function as the summon
 -- keybinding, and MogtrotLeastWorn chooses and wears an underused outfit.
@@ -27,6 +28,7 @@ Macro.DEFS = {
 	[Macro.SUMMON] = { target = "MogtrotSummon", name = "Mogtrot Mount" },
 	[Macro.LEAST] = { target = "MogtrotLeastWorn", name = "Mogtrot Least", fixedIcon = 237285 },
 	[Macro.HEARTH] = { target = "MogtrotHearthstone", name = "Mogtrot Hearth" },
+	[Macro.SNAP] = { body = "/mogtrot snap", name = "Mogtrot Snap", fixedIcon = 134442 },
 }
 
 -- Fixed order, so anything listing the macros reads the same way every time.
@@ -40,7 +42,7 @@ end
 function Macro.Body(command)
 	local def = Macro.DEFS[command]
 	if not def then return nil end
-	return Macro.PREFIX .. command .. "\n/click " .. def.target
+	return Macro.PREFIX .. command .. "\n" .. (def.body or "/click " .. def.target)
 end
 
 -- The icon Mogtrot owns for a command, or nil when the macro's icon is
@@ -114,6 +116,10 @@ function Macro.ActionBarCommands(slotCount, getActionInfo, getBody)
 		end
 	end
 	return found
+end
+
+function Macro.DragShown(forceShown, placed, command)
+	return forceShown or not placed[command]
 end
 
 -- OPEN and LEAST have fixed icons Mogtrot owns, so a macro the user renamed or

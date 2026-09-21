@@ -95,6 +95,7 @@ describe("SettingsUI", function()
 		})
 		addon:RegisterSettings()
 
+		-- Mount pins, hearthstone pins, and archive retention.
 		assert.equal(3, #templates)
 		assert.equal("MogtrotPinDaysSettingTemplate", templates[1].template)
 		assert.equal("11", templates[1].data.getText())

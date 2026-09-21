@@ -57,6 +57,220 @@ function Diagnostics.ShowState(Addon, deps)
 	Addon:Say(Addon:SummonFallbackText())
 end
 
+function Diagnostics.ProbeLibraryTransfer(Addon, _deps)
+	local transmog = _G.TransmogFrame
+	local detail = _G.MogtrotLibraryDetail
+	local button = detail and detail.Transfer
+	local outfits = C_TransmogOutfitInfo
+	local outfitID = outfits and outfits.GetCurrentlyViewedOutfitID
+		and outfits.GetCurrentlyViewedOutfitID() or nil
+	local lines = {
+		("TransmogFrame exists=%s shown=%s outfit=%s"):format(
+			tostring(transmog ~= nil),
+			tostring(transmog and transmog:IsShown() or false), tostring(outfitID)),
+		("detail exists=%s shown=%s top=%s bottom=%s height=%s"):format(
+			tostring(detail ~= nil), tostring(detail and detail:IsShown() or false),
+			tostring(detail and detail:GetTop()), tostring(detail and detail:GetBottom()),
+			tostring(detail and detail:GetHeight())),
+		("transfer exists=%s shown=%s top=%s bottom=%s outfit=%s status=%s"):format(
+			tostring(button ~= nil), tostring(button and button:IsShown() or false),
+			tostring(button and button:GetTop()), tostring(button and button:GetBottom()),
+			tostring(button and button.outfitID),
+			tostring(button and button.mogtrotStatus)),
+	}
+	local sync = Addon.OutfitLibrarySyncState and Addon.OutfitLibrarySyncState()
+	local cached, mirrored = 0, 0
+	for _ in pairs(MogtrotCharDB and MogtrotCharDB.looks or {}) do cached = cached + 1 end
+	for _, record in pairs(MogtrotDB and MogtrotDB.library
+		and MogtrotDB.library.records or {}) do
+		if record.source == "mine" and record.origin == "outfit"
+			and sync and record.guid == sync.ownerGUID then
+			mirrored = mirrored + 1
+		end
+	end
+	lines[#lines + 1] =
+		("sync owner=%s api=%s cached=%d mirrored=%d missing=%s pruned=%s last=%s")
+		:format(tostring(sync and sync.ownerGUID), tostring(sync and sync.apiCount),
+			cached, mirrored, tostring(sync and sync.missing),
+			tostring(sync and sync.pruned), tostring(sync and sync.syncedAt))
+	for _, missing in ipairs(sync and sync.missingOutfits or {}) do
+		lines[#lines + 1] = ("sync missing outfit=%s name=%s"):format(
+			tostring(missing.outfitID), tostring(missing.name))
+	end
+	local customSync = Addon.CustomSetLibrarySyncState
+		and Addon.CustomSetLibrarySyncState()
+	local customMirrored = 0
+	for _, record in pairs(MogtrotDB and MogtrotDB.library
+		and MogtrotDB.library.records or {}) do
+		if record.source == "mine" and record.origin == "customSet"
+			and customSync and record.guid == customSync.ownerGUID then
+			customMirrored = customMirrored + 1
+		end
+	end
+	lines[#lines + 1] =
+		("custom sync owner=%s api=%s mirrored=%d missing=%s pruned=%s last=%s reason=%s")
+		:format(tostring(customSync and customSync.ownerGUID),
+			tostring(customSync and customSync.apiCount), customMirrored,
+			tostring(customSync and customSync.missing),
+			tostring(customSync and customSync.pruned),
+			tostring(customSync and customSync.syncedAt),
+			tostring(customSync and customSync.reason))
+	for _, missing in ipairs(customSync and customSync.missingSets or {}) do
+		lines[#lines + 1] = ("custom sync missing set=%s name=%s"):format(
+			tostring(missing.customSetID), tostring(missing.name))
+	end
+	local slots = {}
+	for slotID in pairs(detail and detail.Slots or {}) do slots[#slots + 1] = slotID end
+	table.sort(slots)
+	for _, slotID in ipairs(slots) do
+		local icon = detail.Slots[slotID]
+		local entry = icon.entry
+		if entry and not entry.empty then
+			local info = C_TransmogCollection and C_TransmogCollection.GetSourceInfo
+				and C_TransmogCollection.GetSourceInfo(entry.source) or nil
+			local red, green, blue = icon.Texture:GetVertexColor()
+			lines[#lines + 1] =
+				("slot=%d source=%s collected=%s marked=%s color=%.2f,%.2f,%.2f")
+				:format(slotID, tostring(entry.source),
+					tostring(info and info.isCollected), tostring(entry.uncollected),
+					red or -1, green or -1, blue or -1)
+		end
+	end
+	local layerProbe = ns.LibraryUI and ns.LibraryUI.LayerProbe
+		and ns.LibraryUI.LayerProbe() or nil
+	local function AddLayer(label, data)
+		lines[#lines + 1] = ("layer %s strata=%s level=%s fixedStrata=%s fixedLevel=%s")
+			:format(label, tostring(data and data.strata), tostring(data and data.level),
+				tostring(data and data.fixedStrata), tostring(data and data.fixedLevel))
+	end
+	AddLayer("transmog", transmog and {
+		strata = transmog:GetFrameStrata(), level = transmog:GetFrameLevel(),
+		fixedStrata = transmog:HasFixedFrameStrata(),
+		fixedLevel = transmog:HasFixedFrameLevel(),
+	} or nil)
+	AddLayer("library", layerProbe and layerProbe.window)
+	AddLayer("card", layerProbe and layerProbe.card)
+	AddLayer("scene", layerProbe and layerProbe.scene)
+	for _, line in ipairs(lines) do Addon:Say(line) end
+	if ns.CopyBox then ns.CopyBox.Show("Mogtrot library transfer probe", lines) end
+end
+
+function Diagnostics.ProbeOutfitIngest(Addon, _deps, requestedID)
+	if requestedID then
+		local captured = Addon.ingestDiagnostics and Addon.ingestDiagnostics[requestedID]
+		if not captured then
+			Addon:Warn("no scan-time diagnostic for outfit %d; press the ingest button first.",
+				requestedID)
+			return
+		end
+		local names = { [0] = "unassigned", [1] = "assigned", [2] = "equipped",
+			[3] = "hidden", [4] = "disabled" }
+		local lines = { ("scan-time outfit=%d"):format(requestedID) }
+		for _, entry in ipairs(captured) do
+			lines[#lines + 1] = ("slot=%d display=%s api=%s stored=%s"):format(
+				entry.slotID, names[entry.displayType] or tostring(entry.displayType),
+				tostring(entry.apiID), tostring(entry.storedID))
+		end
+		for _, line in ipairs(lines) do Addon:Say(line) end
+		if ns.CopyBox then ns.CopyBox.Show("Mogtrot scan-time ingest probe", lines) end
+		return
+	end
+	local capturedIDs = {}
+	for outfitID in pairs(Addon.ingestDiagnostics or {}) do
+		capturedIDs[#capturedIDs + 1] = outfitID
+	end
+	if #capturedIDs > 0 then
+		table.sort(capturedIDs)
+		local labels = {}
+		for _, outfitID in ipairs(capturedIDs) do
+			local info = Addon.outfitsByID and Addon.outfitsByID[outfitID]
+			labels[#labels + 1] = ("%d=%s"):format(outfitID,
+				info and info.name or "?")
+		end
+		local lines = { ("scan-time diagnostics: %d outfit(s)"):format(#capturedIDs),
+			table.concat(labels, ", ") }
+		for _, line in ipairs(lines) do Addon:Say(line) end
+		if ns.CopyBox then ns.CopyBox.Show("Mogtrot scan-time ingest IDs", lines) end
+		return
+	end
+	local frame = _G.TransmogFrame
+	local preview = frame and frame.CharacterPreview
+	local pool = preview and preview.CharacterAppearanceSlotFramePool
+	local outfitID = C_TransmogOutfitInfo.GetCurrentlyViewedOutfitID()
+	if not pool or not outfitID or outfitID == 0 then
+		Addon:Warn("open Transmog and select the outfit that imported incorrectly.")
+		return
+	end
+
+	local displayNames = { [0] = "unassigned", [1] = "assigned", [2] = "equipped",
+		[3] = "hidden", [4] = "disabled" }
+	local stored = MogtrotCharDB.looks and MogtrotCharDB.looks[outfitID] or {}
+	local lines = { ("outfit=%s sweep=%s"):format(tostring(outfitID),
+		tostring(Addon.sweep ~= nil)) }
+	for slotFrame in pool:EnumerateActive() do
+		local location = slotFrame:GetTransmogLocation()
+		local slotID = location and location:GetSlotID()
+		local info = slotFrame:GetSlotInfo()
+		if slotID and info then
+			local held = stored[slotID]
+			lines[#lines + 1] = ("slot=%d display=%s api=%s stored=%s"):format(
+				slotID, displayNames[info.displayType] or tostring(info.displayType),
+				tostring(info.transmogID), tostring(held and held[1]))
+		end
+	end
+	for _, line in ipairs(lines) do Addon:Say(line) end
+	if ns.CopyBox then ns.CopyBox.Show("Mogtrot outfit ingest probe", lines) end
+end
+
+function Diagnostics.ProbeLayer(Addon, _deps)
+	if InCombatLockdown() then
+		Addon:Warn("not while you are in combat.")
+		return
+	end
+	local root = Diagnostics.layerProbe
+	if root then
+		root:SetShown(not root:IsShown())
+		return
+	end
+
+	root = CreateFrame("Frame", "MogtrotLayerProbe", UIParent, "BackdropTemplate")
+	root:SetSize(300, 420)
+	root:SetPoint("CENTER")
+	root:SetFrameStrata("TOOLTIP")
+	root:SetFrameLevel(9999)
+	root:SetToplevel(true)
+	root:SetFlattensRenderLayers(true)
+	root:SetIsFrameBuffer(true)
+	root:SetMovable(true)
+	root:SetClampedToScreen(true)
+	root:EnableMouse(true)
+	root:RegisterForDrag("LeftButton")
+	root:SetScript("OnDragStart", root.StartMoving)
+	root:SetScript("OnDragStop", root.StopMovingOrSizing)
+	root:SetBackdrop({
+		bgFile = "Interface\\Buttons\\WHITE8X8",
+		edgeFile = "Interface\\Buttons\\WHITE8X8", edgeSize = 1,
+	})
+	root:SetBackdropColor(0, 0, 0, 0.85)
+	root:SetBackdropBorderColor(1, 0, 0, 1)
+
+	local scene = CreateFrame("ModelScene", nil, root, "ModelSceneMixinTemplate")
+	scene:SetPoint("TOPLEFT", 2, -2)
+	scene:SetPoint("BOTTOMRIGHT", -2, 2)
+	scene:EnableMouse(false)
+	scene:EnableMouseWheel(false)
+	local sceneID = 596
+	local transitioned = pcall(scene.TransitionToModelSceneID, scene, sceneID,
+		CAMERA_TRANSITION_TYPE_IMMEDIATE, CAMERA_MODIFICATION_TYPE_DISCARD, true)
+	local actor = transitioned and scene.GetPlayerActor and scene:GetPlayerActor() or nil
+	local dressed = actor and actor.SetModelByUnit
+		and pcall(actor.SetModelByUnit, actor, "player", false, true) or false
+
+	Diagnostics.layerProbe = root
+	Addon:Say("layer probe open: scene=%s actor=%s dressed=%s; drag the red border.",
+		tostring(transitioned), tostring(actor ~= nil), tostring(dressed))
+end
+
 local PROBE_WIDGETS = { "DressUpModel", "PlayerModel", "CinematicModel" }
 
 local function Try(fn, ...)
@@ -936,6 +1150,54 @@ function Diagnostics.ProbeDonors(Addon, _deps)
 		for _, line in ipairs(lines) do print(line) end
 	end
 end
+-- What the client says about each appearance a stored look holds. Written
+-- because a look can render wrong without anything in it looking wrong: a
+-- hide visual, a source the player may not display, and a real piece all
+-- arrive as the same plain number.
+function Diagnostics.ProbeLook(Addon, _deps, requestedID)
+	local outfitID = requestedID or (C_TransmogOutfitInfo
+		and C_TransmogOutfitInfo.GetActiveOutfitID and C_TransmogOutfitInfo.GetActiveOutfitID())
+	local look = outfitID and MogtrotCharDB.looks and MogtrotCharDB.looks[outfitID]
+	if not look then
+		Addon:Warn("no stored look for outfit %s; wear it once, or name one with /mogt probe look <id>.",
+			tostring(outfitID))
+		return
+	end
+
+	local slots = {}
+	for slotID in pairs(look) do
+		if type(slotID) == "number" then slots[#slots + 1] = slotID end
+	end
+	table.sort(slots)
+
+	local info = Addon.outfitsByID and Addon.outfitsByID[outfitID]
+	local lines = { ("look outfit=%d name=%s"):format(outfitID,
+		tostring(info and info.name or "?")) }
+	for _, slotID in ipairs(slots) do
+		local entry = look[slotID]
+		local id = type(entry) == "table" and entry[1] or nil
+		local label = ("%-10s %-7s"):format(ns.LibraryText.SlotName(slotID), tostring(id))
+		if type(id) ~= "number" or id <= 0 then
+			lines[#lines + 1] = label .. "empty"
+		else
+			local source = C_TransmogCollection and C_TransmogCollection.GetSourceInfo
+				and select(2, pcall(C_TransmogCollection.GetSourceInfo, id)) or nil
+			if type(source) ~= "table" then
+				lines[#lines + 1] = label .. "no source info"
+			else
+				lines[#lines + 1] = ("%sitem=%s hide=%s display=%s valid=%s %s"):format(
+					label, tostring(source.itemID), tostring(source.isHideVisual),
+					tostring(source.canDisplayOnPlayer),
+					tostring(source.isValidSourceForPlayer),
+					tostring(source.name or source.useError or ""))
+			end
+		end
+	end
+
+	for _, line in ipairs(lines) do Addon:Say(line) end
+	if ns.CopyBox then ns.CopyBox.Show("Mogtrot stored look probe", lines) end
+end
+
 function Diagnostics.Handle(Addon, deps, cmd)
 	local Macro = deps.Macro
 	local AccountMacroCount = deps.accountMacroCount

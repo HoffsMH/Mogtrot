@@ -4,9 +4,8 @@ local _, ns = ...
 -- own race.
 --
 -- A card is a portrait. Left-click opens the detail pane on it, right-click
--- offers More info, Delete, and the two ways of showing a body. The outfits and
--- custom sets you own are deliberately not ingested, so what shows up here is
--- only what has been captured.
+-- offers More info, Delete, and the two ways of showing a body. Snapshots and
+-- mirrored Blizzard outfits share the wall and can be filtered by source.
 --
 -- The grid is Blizzard's scroll box, the same one the mount picker uses, so
 -- the wheel and the bar behave here the way they do there. Dragging a card
@@ -17,9 +16,10 @@ local LibraryUI = {}
 local COLS = 4
 local CARD_W, CARD_H = 210, 320
 local GAP, MARGIN = 10, 14
-local HEADER, FOOTER = 52, 12
+local HEADER, FOOTER = 110, 12
 local BAR_GUTTER, BAR_GAP = 14, 6
 local ROWS_SHOWN = 2
+local LIBRARY_STRATA = "DIALOG"
 
 -- Degrees of yaw per pixel dragged, slow enough to stop on a detail.
 local TURN_PER_PIXEL = 0.6
@@ -55,6 +55,133 @@ local yaw = 0
 -- What the last render of each record reported, per slot. Runtime only: it
 -- describes this client's answer now, not the record.
 local lastApply = {}
+-- Whether each slot was drawn, as opposed to accepted.
+local lastVisible = {}
+-- The line the card printed, kept whole. The card truncates it, and the half
+-- that falls off the end is the half that says why.
+local lastNote = {}
+
+-- A decision note says what the code chose, not what the client drew, so it
+-- reads innocent whenever the choice was right and the draw was not.
+--
+-- This is the readback. A body key already names a race, a form and a sex, and
+-- each of those is a different model file, so one key must only ever be one
+-- file. A key seen carrying two is proof that some card rendered a body other
+-- than the one it asked for, and it holds without knowing a single file ID in
+-- advance: the wall calibrates itself from its own first correct render.
+local bodySeen = {}
+
+local function NoteBody(recordID, key, actor)
+	if type(key) ~= "string" or actor == nil then return end
+	if type(actor.GetModelFileID) ~= "function" then return end
+	local ok, fileID = pcall(actor.GetModelFileID, actor)
+	if not ok or fileID == nil then return end
+	local loaded = true
+	if type(actor.IsLoaded) == "function" then
+		local gotLoaded, value = pcall(actor.IsLoaded, actor)
+		loaded = (not gotLoaded) or value ~= false
+	end
+	local seen = bodySeen[key]
+	if not seen then
+		seen = { files = {}, order = {} }
+		bodySeen[key] = seen
+	end
+	local file = seen.files[fileID]
+	if not file then
+		file = { count = 0, firstRecord = recordID, loaded = loaded }
+		seen.files[fileID] = file
+		seen.order[#seen.order + 1] = fileID
+	end
+	file.count = file.count + 1
+	file.lastRecord = recordID
+end
+
+-- Every key the wall has drawn, and every model file each was drawn with.
+--
+-- The naive rule, "a file under more than one key is suspect", is wrong in
+-- both directions. A model loads asynchronously, so a sample can catch a
+-- placeholder that then shows up under every key at once. And a wrongly drawn
+-- body is a real body, so it appears under its own key as well as the one it
+-- leaked into, which a "more than one key" rule would discount as noise: it
+-- would hide precisely the thing being hunted.
+--
+-- Sex is the discriminator. A file drawn under two keys that disagree about
+-- sex cannot be right for both, whatever else it is. Two keys that differ
+-- only by faction race ID are the same body and are left alone.
+local PLACEHOLDER_KEYS = 4
+
+local function KeySex(key)
+	return select(3, strsplit("|", key))
+end
+
+function LibraryUI.BodyAudit()
+	local keys = {}
+	for key in pairs(bodySeen) do keys[#keys + 1] = key end
+	table.sort(keys)
+
+	local where = {}
+	for _, key in ipairs(keys) do
+		for _, fileID in ipairs(bodySeen[key].order) do
+			where[fileID] = where[fileID] or {}
+			table.insert(where[fileID], key)
+		end
+	end
+
+	local placeholder, leaked = {}, {}
+	for fileID, holders in pairs(where) do
+		if #holders >= PLACEHOLDER_KEYS then
+			placeholder[fileID] = #holders
+		elseif #holders > 1 then
+			local sex = KeySex(holders[1])
+			for _, key in ipairs(holders) do
+				if KeySex(key) ~= sex then leaked[fileID] = holders break end
+			end
+		end
+	end
+
+	-- A pipe is WoW's escape prefix, so a raw key prints as nonsense: the "|t"
+	-- in "|true" is eaten as a texture and "|N" starts a new line.
+	local function Show(text) return (tostring(text):gsub("|", "||")) end
+
+	local lines, anomalies = { "body key -> model files actually drawn" }, 0
+	for _, key in ipairs(keys) do
+		local seen, parts, bad = bodySeen[key], {}, false
+		for _, fileID in ipairs(seen.order) do
+			if not placeholder[fileID] then
+				local file = seen.files[fileID]
+				local leak = leaked[fileID] and " WRONG SEX" or ""
+				if leak ~= "" then bad = true end
+				parts[#parts + 1] = ("%s x%d (records %s..%s)%s"):format(
+					tostring(fileID), file.count, tostring(file.firstRecord),
+					tostring(file.lastRecord), leak)
+			end
+		end
+		if bad then anomalies = anomalies + 1 end
+		lines[#lines + 1] = ("%s%s: %s"):format(bad and "ANOMALY " or "", Show(key),
+			#parts > 0 and table.concat(parts, " | ") or "placeholder only, not drawn yet")
+	end
+
+	for fileID, holders in pairs(leaked) do
+		lines[#lines + 1] = ""
+		lines[#lines + 1] = ("%s was drawn under keys of different sex:"):format(
+			tostring(fileID))
+		for _, key in ipairs(holders) do lines[#lines + 1] = "   " .. Show(key) end
+	end
+
+	local discounted = {}
+	for fileID, count in pairs(placeholder) do
+		discounted[#discounted + 1] = ("%s (%d keys)"):format(tostring(fileID), count)
+	end
+	table.sort(discounted)
+	if #discounted > 0 then
+		lines[#lines + 1] = ""
+		lines[#lines + 1] = "discounted as placeholders: " .. table.concat(discounted, ", ")
+	end
+	lines[#lines + 1] = ""
+	lines[#lines + 1] = ("%d key(s), %d drawn with a body of the wrong sex")
+		:format(#keys, anomalies)
+	return lines
+end
 
 -- Bodies outlive the cards that show them.
 --
@@ -86,7 +213,6 @@ local characterPool
 -- composited piece. Which one is closer depends on the outfit: a look made
 -- mostly of hidden pieces loses almost nothing on the creature row, while a
 -- full plate set loses nearly all of it.
-local ownBody = {}
 
 -- Whether the wall shows people sitting on the mounts they were seen on.
 --
@@ -94,12 +220,11 @@ local ownBody = {}
 -- then keeps its own answer. A record with no mount recorded ignores all of
 -- this, since there is nothing to sit on.
 local showMounts = false
-local onMount = {}
+local raceFilter
+local nameQuery
 
 local function Mounted(record)
 	if not record.mount then return false end
-	local own = onMount[record.id]
-	if own ~= nil then return own end
 	return showMounts
 end
 
@@ -115,6 +240,90 @@ local function Records()
 	local library = Library()
 	if not library or type(Store) ~= "table" then return {} end
 	return Store.Sorted(library)
+end
+
+-- The client owns the class palette and players expect it, so it is read
+-- rather than invented. Returns nothing for a class the client will not name,
+-- which leaves the caller at its ordinary colour.
+local function ClassInfoFor(classID)
+	if type(classID) ~= "number" then return nil end
+	local classes = C_CreatureInfo
+	local info = classes and classes.GetClassInfo and classes.GetClassInfo(classID)
+	if not info then return nil end
+	return info.className, RAID_CLASS_COLORS and RAID_CLASS_COLORS[info.classFile]
+end
+
+-- Shared with the detail pane, which titles itself with the same colour the
+-- card uses.
+LibraryUI.ClassInfoFor = ClassInfoFor
+
+-- Blizzard's own class icon, by the name they build it from
+-- (SharedConstants.lua: GetClassAtlas). Nil for a class the client will not
+-- name, which leaves the row with no icon rather than a broken one.
+local function ClassAtlas(classID)
+	if type(classID) ~= "number" then return nil end
+	local classes = C_CreatureInfo
+	local info = classes and classes.GetClassInfo and classes.GetClassInfo(classID)
+	if not (info and info.classFile and GetClassAtlas) then return nil end
+	return GetClassAtlas(strlower(info.classFile))
+end
+
+local function ClassRGB(classID)
+	local _className, color = ClassInfoFor(classID)
+	if not color then return nil end
+	return { color.r, color.g, color.b }
+end
+
+-- The character list is the longest filter here and the only one worth typing
+-- at, so it gets the shared search-select window instead of a submenu.
+local function OpenCharacterPicker()
+	local Filter = ns.LibraryFilter
+	if not (Filter and raceFilter and ns.OpenSearchPicker) then return end
+
+	local items = {}
+	for _, entry in ipairs(Filter.OwnerEntries(Records())) do
+		local label = entry.name
+		if entry.realm and entry.realm ~= "" then
+			label = label .. "-" .. entry.realm
+		end
+		items[#items + 1] = {
+			name = label,
+			guid = entry.guid,
+			iconAtlas = ClassAtlas(entry.classID),
+			nameColor = ClassRGB(entry.classID),
+			preselected = Filter.IsOwnerSelected(raceFilter, entry.guid),
+		}
+	end
+
+	ns.OpenSearchPicker({
+		strata = LIBRARY_STRATA,
+		title = "Characters",
+		searchHint = "Search character name",
+		emptyText = "No character here owns an outfit or a custom set yet.",
+		items = items,
+		multi = true,
+		bulkSelect = true,
+		buttons = { {
+			text = "Show",
+			width = 90,
+			allowEmpty = true,
+			tipTitle = "Show these characters",
+			tipBody = "Only the ticked characters' outfits and custom sets appear.",
+			onClick = function(chosen)
+				-- Everyone ticked means "all", not "these five": a character who
+				-- logs in later should arrive shown rather than hidden.
+				if #chosen == #items then
+					Filter.SelectAllOwners(raceFilter)
+				else
+					Filter.SelectNoOwners(raceFilter)
+					for _, item in ipairs(chosen) do
+						Filter.SetOwner(raceFilter, item.guid, true)
+					end
+				end
+				LibraryUI.Refresh()
+			end,
+		} },
+	})
 end
 
 -- Turns one card to the shared angle.
@@ -172,6 +381,9 @@ end
 -- that outfit. The moment the last body is in the pool the whole wall turns
 -- over to full fidelity at once.
 local fullFidelity = false
+-- Whether any card is still without a body of its own, as opposed to whether
+-- every shape of body has been built at least once.
+local bodiesWanted = false
 
 -- What you asked to see, as opposed to what can be shown. Original race is the
 -- default because it is the point of the library, but it is only reachable
@@ -191,8 +403,7 @@ local SWITCH_H = 22
 -- changes clothes: open the library once where there are people, and those
 -- bodies last the rest of the session.
 local function BodyKey(record, shown, native, donorSex)
-	return ("%s|%s|%s|%s"):format(tostring(shown), tostring(native),
-		tostring(donorSex), tostring(record.raceFile))
+	return ns.LibraryBody.Key(record, shown, native, donorSex)
 end
 
 -- Your own body exactly as it is now, including whichever form you are
@@ -230,29 +441,17 @@ local function SetBody(actor, record, body, preferredDonor, preferRace)
 	actor.mogtrotBodyKey = nil
 
 	local wanted = viewMode == "original" and fullFidelity
-	if not (wanted or preferredDonor or ownBody[record.id]) then
+	if not (wanted or preferredDonor) then
 		return SetOwnBody(actor)
 	end
-	if not ownBody[record.id]
-		and type(actor.SetModelByUnit) == "function" and type(raceID) == "number" then
+	if type(actor.SetModelByUnit) == "function" and type(raceID) == "number" then
 		local sheathe, autoDress, hideWeapons, holdBowString = false, false, false, false
 		-- usePlayerNativeForm asks for the viewer's own second body, so it is
 		-- meaningful only for a race that has one. Passing a stored false for a
 		-- race that does not renders the viewer's alternate form wearing the
 		-- record, which looks like the race override was ignored.
-		local native = true
-		local shown = raceID
-		if record.nativeForm == false and body.HasAlternateForm(raceID) then
-			-- A visage is its own race, so it is asked for as that race in its
-			-- own native form. Asking for race 52 altered instead alters the
-			-- viewer and leaves the subject's armour hanging on a dragon.
-			local visage = body.VisageRace(raceID)
-			if visage then
-				shown = visage
-			else
-				native = false
-			end
-		end
+		local shown, native = ns.LibraryBody.Form(record, body.HasAlternateForm,
+			body.VisageRace)
 		-- The race override replaces the race and nothing else, so the sex comes
 		-- from whichever unit the model is built from. Yours when the sexes
 		-- agree, and otherwise anybody of the right sex who is standing about.
@@ -348,14 +547,7 @@ local function IdealShownRace(record, body)
 end
 
 local function IdealBodyKey(record, body)
-	local raceID = record.raceID
-	if type(raceID) ~= "number" then return nil end
-	local native, shown = true, raceID
-	if record.nativeForm == false and body.HasAlternateForm(raceID) then
-		local visage = body.VisageRace(raceID)
-		if visage then shown = visage else native = false end
-	end
-	return BodyKey(record, shown, native, record.sex)
+	return ns.LibraryBody.IdealKey(record, body.HasAlternateForm, body.VisageRace)
 end
 
 -- Distinct bodies are bounded by race, sex and form. The cap only guards
@@ -417,7 +609,11 @@ local function Acquire(card, wantedKey)
 	local entry = AttachScene(Pool():Acquire(card, wantedKey))
 	if not entry then return nil end
 	card.body = entry
+	entry.scene:SetFixedFrameStrata(false)
+	entry.scene:SetFixedFrameLevel(false)
 	entry.scene:SetParent(card)
+	entry.scene:SetFixedFrameStrata(true)
+	entry.scene:SetFixedFrameLevel(true)
 	entry.scene:ClearAllPoints()
 	entry.scene:SetPoint("TOPLEFT", 7, -7)
 	entry.scene:SetPoint("BOTTOMRIGHT", -7, 44)
@@ -425,62 +621,85 @@ local function Acquire(card, wantedKey)
 	return entry
 end
 
-local function Paint(card, record)
+-- Everything the planner needs that has to be asked of the client.
+local function BodyPlan(record, body)
+	local altered = false
+	local diagnostics = ns.Diagnostics
+	if diagnostics and type(diagnostics.UseNativeForm) == "function" then
+		altered = not diagnostics.UseNativeForm("player")
+	end
+	return ns.LibraryBody.Plan({
+		record = record,
+		viewMode = viewMode,
+		fullFidelity = fullFidelity,
+		mounted = Mounted(record),
+		viewer = {
+			raceFile = select(2, UnitRace("player")),
+			sex = UnitSex and UnitSex("player") or nil,
+			altered = altered,
+		},
+		hasAlternateForm = body.HasAlternateForm,
+		visageRace = body.VisageRace,
+	})
+end
+
+-- Draws one card and returns the line that describes what it drew. It writes
+-- no status of its own: Paint owns that, so there is exactly one place the
+-- card's status can come from and no path can leave the previous record's
+-- there. Later text from a dress callback is a separate, honest overwrite.
+local function RenderCard(card, record)
+	local status
 	local render = ns.ProbeRenderUI
 	local codec = ns.LookCodec
 	local body = ns.RaceBody
-	card.mountActor = nil
-	-- Cleared here rather than where it is read: several paths below leave
-	-- early, and a note about this record's mount must never end up under the
-	-- next record that recycles this card.
-	card.mountNote = nil
+	if record.look == "" then
+		Release(card)
+		card.Placeholder:Show()
+		return "wear once to capture its appearance"
+	end
 	if not (render and codec and body) then
 		card.actor = nil
-		card.Status:SetText("modules not loaded")
-		return
+		return "modules not loaded"
 	end
 
-	-- Whose body this card is meant to show. Everything below follows from it:
-	-- which stored body may be reused, and which scene actor is asked for.
-	local wantRecordBody = ownBody[record.id]
-		or (viewMode == "original" and fullFidelity)
-	if Mounted(record) then wantRecordBody = false end
-
-	local ideal = IdealBodyKey(record, body)
-
-	-- Ask for a keyed body only when a keyed body is what this card will
-	-- produce. A creature row and a mounted card both key nothing, so handing
-	-- them a borrowed body means destroying it: the key is wiped, the record
-	-- counts as missing again, and the whole wall drops back to showing
-	-- everything on you because one card's right-click menu was used.
-	local keyed = wantRecordBody and not ownBody[record.id] and not Mounted(record)
-	local entry = Acquire(card, keyed and ideal or nil)
+	-- Whose body this card is meant to show, which form it is in, which actor
+	-- will hold it and what a reusable body must be keyed with: one answer,
+	-- computed before anything is touched.
+	--
+	-- Asking for a keyed body only when a keyed body is what this card will
+	-- produce matters more than it looks. A creature row and a mounted card
+	-- both key nothing, so handing them a borrowed body destroys it: the key
+	-- is wiped, the record counts as missing again, and the whole wall drops
+	-- back to showing everything on you because one card's menu was used.
+	local plan = BodyPlan(record, body)
+	local entry = Acquire(card, plan.keyed and plan.idealKey or nil)
 	if not entry then
 		card.actor = nil
-		card.Status:SetText("character model pool full")
-		return
+		return "character model pool full"
 	end
-	if ownBody[record.id] then entry.key = nil end
 
 	-- A body that is already exactly right is never rebuilt: rebuilding it
 	-- anywhere the right donor is absent would hand back a worse one. A card
 	-- asked to show your body reuses nothing, because a borrowed body is not
 	-- what was asked for.
-	if wantRecordBody and not ownBody[record.id]
-		and entry.actor and ideal and entry.key == ideal then
+	if ns.LibraryBody.CanReuse(plan, entry.key, entry.actor ~= nil) then
 		local look = codec.Decode(record.look)
 		if type(look) == "table" then
 			card.actor = entry.actor
 			-- A body taken back out of the pool is still facing wherever it was
 			-- left, so it is turned to whatever the wall is facing now.
 			TurnCard(card, yaw)
-			card.Status:SetText(entry.note or "")
+			status = entry.note or ""
+			local reusedID = record.id
 			render.DressWhenLoaded(entry.actor, render.TransmogList(look),
 				function(text, reasons)
+					if plan.wantRecordBody then
+						NoteBody(reusedID, plan.idealKey, entry.actor)
+					end
 					card.Status:SetText(("%s | %s"):format(entry.note or "", text or ""))
 					lastApply[record.id] = reasons
 				end)
-			return
+			return status
 		end
 	end
 
@@ -501,8 +720,7 @@ local function Paint(card, record)
 			-- Still the thing to turn, even with nobody riding it.
 			card.actor, card.mountActor = mount, mount
 			TurnCard(card, yaw)
-			card.Status:SetText("they became the mount, so there is nobody to dress")
-			return
+			return "they became the mount, so there is nobody to dress"
 		end
 
 		if mount and rider then
@@ -527,7 +745,7 @@ local function Paint(card, record)
 
 				local note = ("mounted | %s"):format(how)
 				entry.note = note
-				card.Status:SetText(note)
+				status = note
 				render.DressWhenLoaded(rider, render.TransmogList(mounted),
 					function(text, reasons)
 						-- Dressing puts the weapons back in hand, so they go
@@ -536,7 +754,7 @@ local function Paint(card, record)
 						card.Status:SetText(("%s | %s"):format(note, text or ""))
 						lastApply[record.id] = reasons
 					end)
-				return
+				return status
 			end
 		end
 
@@ -548,41 +766,28 @@ local function Paint(card, record)
 	-- Each actor carries the scale and framing its race needs, so asking for a
 	-- Dwarf's actor and then standing your own Dracthyr in it is what makes a
 	-- card look zoomed into somebody's chest.
-	local tagRace, tagSex, altered
-	if wantRecordBody then
-		tagRace, tagSex = record.raceFile, record.sex
-		-- A record of a race with two bodies, captured in the second one, needs
-		-- the scene's alternate-form actor: that actor is built for the
-		-- humanoid body, and the everyday one is built for the dragon.
-		altered = record.nativeForm == false and body.HasAlternateForm(record.raceID)
-	else
-		tagRace = select(2, UnitRace("player"))
-		tagSex = UnitSex and UnitSex("player") or nil
-		local diagnostics = ns.Diagnostics
-		if diagnostics and type(diagnostics.UseNativeForm) == "function" then
-			altered = not diagnostics.UseNativeForm("player")
-		end
-	end
-	local actor, why, route = render.PreparedActor(entry.scene, tagRace, tagSex,
-		altered)
+	-- A record of a race with two bodies, captured in the second one, needs the
+	-- scene's alternate-form actor: that actor is built for the humanoid body
+	-- and the everyday one is built for the dragon. The planner already
+	-- decided this, so the actor asked for here and the body built above can
+	-- no longer disagree.
+	local actor, why, route = render.PreparedActor(entry.scene, plan.tagRace,
+		plan.tagSex, plan.altered)
 	if not actor then
-		card.Status:SetText(tostring(why))
-		return
+		return tostring(why)
 	end
 	card.actor = actor
 	entry.actor = actor
 
 	local how = SetBody(actor, record, body)
 	if not how then
-		card.Status:SetText("no body for this record")
-		return
+		return "no body for this record"
 	end
 	TurnCard(card, yaw)
 
 	local look = codec.Decode(record.look)
 	if type(look) ~= "table" then
-		card.Status:SetText("stored look does not parse")
-		return
+		return "stored look does not parse"
 	end
 	local where = ("%s | %s"):format(tostring(route), how)
 	if card.mountNote then
@@ -593,12 +798,33 @@ local function Paint(card, record)
 	entry.donorRace = actor.mogtrotDonorRace
 	entry.donorGUID = actor.mogtrotDonorGUID
 	entry.note = where
-	card.Status:SetText(where)
+	status = where
 	local id = record.id
 	render.DressWhenLoaded(actor, render.TransmogList(look), function(text, reasons)
 		card.Status:SetText(("%s | %s"):format(where, text or ""))
 		lastApply[id] = reasons
+		lastVisible[id] = render.SlotVisibility(actor, render.TransmogList(look))
+		if plan.wantRecordBody then NoteBody(id, plan.idealKey, actor) end
 	end)
+	return status
+end
+
+-- Cards are pooled, so one arrives still holding whoever it last drew. Every
+-- field that varies per record is cleared here, in one place, and RenderCard
+-- cannot skip it by leaving early. That is the whole point: correctness used
+-- to mean checking that all nine exits set all of it.
+local function ResetCard(card)
+	card.actor = nil
+	card.mountActor = nil
+	card.mountNote = nil
+	card.Placeholder:Hide()
+end
+
+local function Paint(card, record)
+	ResetCard(card)
+	local status = RenderCard(card, record) or ""
+	lastNote[record.id] = status
+	card.Status:SetText(status)
 end
 
 -- Slot by slot, what the client said the last time this record was drawn. The
@@ -615,11 +841,18 @@ local function ApplyLines(record)
 	if #slots == 0 then return {} end
 	table.sort(slots)
 
+	local drawn = lastVisible[record.id]
 	local lines = { "", "last render on this body" }
 	for _, slot in ipairs(slots) do
 		local reason = reasons[slot]
-		lines[#lines + 1] = ("  slot %-3d %s"):format(slot,
-			names[reason] or ("reason " .. tostring(reason)))
+		-- Accepted and not drawn is the interesting case, and the one a
+		-- reason code alone will never show you.
+		local seen = ""
+		if type(drawn) == "table" and drawn[slot] ~= nil then
+			seen = drawn[slot] and ", drawn" or ", NOT DRAWN"
+		end
+		lines[#lines + 1] = ("  slot %-3d %s%s"):format(slot,
+			names[reason] or ("reason " .. tostring(reason)), seen)
 	end
 	return lines
 end
@@ -704,12 +937,19 @@ local function NamedLines(record)
 	return lines
 end
 
+local function NoteLines(record)
+	local note = lastNote[record.id]
+	if type(note) ~= "string" or note == "" then return {} end
+	return { "", "last render note", note }
+end
+
 local function ShowDetails(record)
 	local Text = ns.LibraryText
 	if not (Text and ns.CopyBox) then return end
 	local lines = Text.Details(record)
 	for _, line in ipairs(NamedLines(record)) do lines[#lines + 1] = line end
 	for _, line in ipairs(PieceLines(record)) do lines[#lines + 1] = line end
+	for _, line in ipairs(NoteLines(record)) do lines[#lines + 1] = line end
 	for _, line in ipairs(ApplyLines(record)) do lines[#lines + 1] = line end
 	ns.CopyBox.Show("Mogtrot library: " .. Text.Title(record), lines)
 end
@@ -723,8 +963,6 @@ local function Delete(record)
 		ns.LibraryDetailUI.Hide()
 	end
 	lastApply[record.id] = nil
-	ownBody[record.id] = nil
-	onMount[record.id] = nil
 	LibraryUI.Refresh()
 end
 
@@ -761,6 +999,48 @@ local function BuildCard(card)
 	card.Bg:SetAllPoints()
 	card.Bg:SetColorTexture(0, 0, 0, 0.55)
 
+	-- Top left, mirroring the archive button opposite it. Blizzard's own
+	-- class icon rather than ours, so it matches every other class icon the
+	-- player sees.
+	card.ClassIcon = card:CreateTexture(nil, "OVERLAY")
+	card.ClassIcon:SetSize(18, 18)
+	card.ClassIcon:SetPoint("TOPLEFT", 4, -4)
+	card.ClassIcon:Hide()
+
+	-- Snapshots only. An outfit or a custom set is re-read from the client
+	-- whenever you ask, so there is nothing to protect and nothing to undo;
+	-- a stranger you captured once is the only thing here you cannot get
+	-- back, which is exactly why it is archived rather than deleted.
+	card.Archive = CreateFrame("Button", nil, card)
+	card.Archive:SetSize(18, 18)
+	card.Archive:SetPoint("TOPRIGHT", -4, -4)
+	-- The same small x the search boxes use. Atlas names are not checked at
+	-- runtime: an unknown one leaves the button textureless but still
+	-- clickable, which is worse than absent.
+	card.Archive:SetNormalAtlas("common-search-clearbutton")
+	card.Archive:SetHighlightAtlas("common-search-clearbutton", "ADD")
+	card.Archive:SetScript("OnEnter", function(self)
+		GameTooltip:SetOwner(self, "ANCHOR_LEFT")
+		GameTooltip:SetText("Archive this snapshot")
+		GameTooltip:AddLine("Takes it off the wall without deleting it.",
+			0.6, 0.6, 0.6, true)
+		GameTooltip:Show()
+	end)
+	card.Archive:SetScript("OnLeave", GameTooltip_Hide)
+	card.Archive:SetScript("OnClick", function(self)
+		local record = self:GetParent().record
+		local Store, library = ns.Library, Library()
+		if not (record and Store and library) then return end
+		if Store.Archive(library, record.id, time()) then
+			if ns.LibraryDetailUI and ns.LibraryDetailUI.Shown() == record then
+				ns.LibraryDetailUI.Hide()
+			end
+			lastApply[record.id] = nil
+			lastNote[record.id] = nil
+			LibraryUI.Refresh()
+		end
+	end)
+
 	card.Edges = {}
 	for _, edge in ipairs({ "TOP", "BOTTOM", "LEFT", "RIGHT" }) do
 		local line = card:CreateTexture(nil, "BORDER")
@@ -795,6 +1075,13 @@ local function BuildCard(card)
 	card.Status:SetJustifyH("LEFT")
 	card.Status:SetWordWrap(false)
 
+	card.Placeholder = card:CreateFontString(nil, "OVERLAY", "GameFontDisable")
+	card.Placeholder:SetPoint("CENTER", 0, 10)
+	card.Placeholder:SetWidth(CARD_W - 32)
+	card.Placeholder:SetJustifyH("CENTER")
+	card.Placeholder:SetText("Appearance not captured\nWear this outfit once")
+	card.Placeholder:Hide()
+
 	card:RegisterForClicks("LeftButtonUp", "RightButtonUp")
 	card:RegisterForDrag("LeftButton")
 	card:SetScript("OnDragStart", BeginTurn)
@@ -811,15 +1098,10 @@ local function BuildCard(card)
 		local record = self.record
 		if not record then return end
 		if button == "LeftButton" then
-			-- Left-click opens the detail pane on this look. Clicking the one
-			-- already shown closes it, so the same gesture puts it away.
+			-- One inspector follows whichever card was selected most recently.
 			local detail = ns.LibraryDetailUI
 			if not detail then return end
-			if detail.Shown() == record then
-				detail.Hide()
-			else
-				detail.Show(window, record)
-			end
+			detail.Show(window, record)
 			return
 		end
 		if not MenuUtil then return end
@@ -827,21 +1109,6 @@ local function BuildCard(card)
 		MenuUtil.CreateContextMenu(self, function(_owner, root)
 			root:CreateTitle(Text and Text.Title(record) or "Look")
 			root:CreateButton("More info", function() ShowDetails(record) end)
-			root:CreateButton(ownBody[record.id] and "Show the full outfit"
-				or "Show their own body", function()
-				ownBody[record.id] = not ownBody[record.id] or nil
-				LibraryUI.Refresh()
-			end)
-			if record.mount then
-				local riding = Mounted(record)
-				root:CreateButton(riding and "Take them off the mount"
-					or "Show on their mount", function()
-					-- An explicit answer for this card, which then stops
-					-- following the switch in the header.
-					onMount[record.id] = not riding
-					LibraryUI.Refresh()
-				end)
-			end
 			root:CreateDivider()
 			root:CreateButton("Delete", function() Delete(record) end)
 		end)
@@ -851,9 +1118,18 @@ end
 local function InitCard(card, record)
 	BuildCard(card)
 	card.record = record
+	card.Archive:SetShown(record.source ~= "mine")
+	local classAtlas = ClassAtlas(record.classID)
+	if classAtlas then card.ClassIcon:SetAtlas(classAtlas, false) end
+	card.ClassIcon:SetShown(classAtlas ~= nil)
 
 	local Text = ns.LibraryText
-	card.Title:SetText(Text and Text.Title(record) or "")
+	local title = Text and Text.Title(record) or ""
+	local className, color = ClassInfoFor(record.classID)
+	if Text and className and color then
+		title = Text.CardTitle(record, className, color.colorStr)
+	end
+	card.Title:SetText(title)
 	card.Sub:SetText(Text and Text.Subtitle(record) or "")
 	card.Status:SetText("")
 	Paint(card, record)
@@ -866,7 +1142,10 @@ local function Ensure()
 	window:SetSize(MARGIN * 2 + CARD_W * COLS + GAP * (COLS - 1) + BAR_GUTTER,
 		HEADER + CARD_H * ROWS_SHOWN + GAP * (ROWS_SHOWN - 1) + MARGIN + FOOTER)
 	window:SetPoint("CENTER")
-	window:SetFrameStrata("DIALOG")
+	window:SetFrameStrata(LIBRARY_STRATA)
+	window:SetToplevel(true)
+	window:SetFlattensRenderLayers(true)
+	window:SetIsFrameBuffer(true)
 	window:SetClampedToScreen(true)
 	window:SetMovable(true)
 	window:EnableMouse(true)
@@ -874,9 +1153,6 @@ local function Ensure()
 	window:SetScript("OnDragStart", window.StartMoving)
 	window:SetScript("OnDragStop", function(self)
 		self:StopMovingOrSizing()
-		-- The pane is anchored to the window, so it follows on its own; this
-		-- only matters if a side was chosen relative to the screen.
-		if ns.LibraryDetailUI then ns.LibraryDetailUI.Reanchor() end
 	end)
 	window:SetBackdrop(BACKDROP)
 	window:SetBackdropColor(0, 0, 0, 0.94)
@@ -884,13 +1160,170 @@ local function Ensure()
 	window.Close = CreateFrame("Button", nil, window, "UIPanelCloseButton")
 	window.Close:SetPoint("TOPRIGHT", -4, -4)
 
+	local Addon, Macro = ns.Addon, ns.Macro
+	if Addon and Addon.CreateMacroDrag and Macro then
+		window.SnapDrag = Addon:CreateMacroDrag(window, Macro.SNAP,
+			"Capture macro for the action bar",
+			"Drag to a bar. Makes one general macro that captures your target's look,"
+				.. " and reuses that same macro every time after.")
+	end
+
 	window.Title = window:CreateFontString(nil, "OVERLAY", "GameFontNormal")
 	window.Title:SetPoint("TOPLEFT", MARGIN + 2, -16)
 	window.Title:SetText("Mogtrot library")
 
 	window.Count = window:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-	window.Count:SetPoint("TOPLEFT", MARGIN + 2, -32)
+	window.Count:SetPoint("TOPLEFT", MARGIN + 2, -90)
 	window.Count:SetJustifyH("LEFT")
+
+	window.Search = CreateFrame("EditBox", nil, window, "SearchBoxTemplate")
+	window.Search:SetSize(250, 20)
+	window.Search:SetAutoFocus(false)
+	window.Search:SetPoint("TOPLEFT", MARGIN + 2, -62)
+	if window.Search.Instructions then
+		window.Search.Instructions:SetText("Search character name")
+	end
+	window.Search:HookScript("OnTextChanged", function(self)
+		local text = strtrim(self:GetText() or "")
+		nameQuery = text ~= "" and text or nil
+		LibraryUI.Refresh()
+	end)
+
+	local Filter = ns.LibraryFilter
+	raceFilter = Filter and Filter.New() or nil
+	window.FilterDropdown = CreateFrame("DropdownButton", nil, window,
+		"WowStyle1FilterDropdownTemplate")
+	window.FilterDropdown:SetPoint("LEFT", window.Search, "RIGHT", 14, 0)
+	window.FilterDropdown:SetScript("OnEnter", function(self)
+		if self:IsMenuOpen() then return end
+		GameTooltip:SetOwner(self, "ANCHOR_BOTTOM")
+		GameTooltip:SetText("Filters")
+		GameTooltip:AddLine(self.mogtrotStatus
+			or "Race: All | Class: All | Armor: All",
+			0.6, 0.6, 0.6)
+		GameTooltip:Show()
+	end)
+	window.FilterDropdown:SetScript("OnLeave", GameTooltip_Hide)
+	window.FilterDropdown:HookScript("OnMouseDown", function()
+		GameTooltip:Hide()
+	end)
+	window.FilterDropdown:SetupMenu(function(_dropdown, root)
+		if not (Filter and raceFilter) then return end
+		local records = Records()
+		local races = Filter.Races(records)
+		local classes = Filter.Classes(records)
+		local function Changed()
+			LibraryUI.Refresh()
+			return MenuResponse.Refresh
+		end
+		root:CreateButton(CHECK_ALL or "Check All", function()
+			Filter.SelectAllFilters(raceFilter)
+			return Changed()
+		end)
+		root:CreateButton(UNCHECK_ALL or "Uncheck All", function()
+			Filter.SelectNoFilters(raceFilter)
+			return Changed()
+		end)
+		root:CreateDivider()
+
+		-- The menu answers whichever question the mode is asking. Race, class
+		-- and armour narrow a crowd of strangers; on your own characters the
+		-- character list has already narrowed all three.
+		if not Filter.IsSnapshotMode(raceFilter) then
+			root:CreateTitle("Show:")
+			for _, entry in ipairs({ { "outfits", "Outfits" },
+				{ "customSets", "Custom sets" } }) do
+				local source, label = entry[1], entry[2]
+				root:CreateCheckbox(label, function()
+					return Filter.IsSourceSelected(raceFilter, source)
+				end, function()
+					Filter.SetSource(raceFilter, source,
+						not Filter.IsSourceSelected(raceFilter, source))
+					return Changed()
+				end)
+			end
+			root:CreateDivider()
+			root:CreateCheckbox("Hide outfits with nothing set", function()
+				return Filter.HidesEmptyOutfits(raceFilter)
+			end, function()
+				Filter.SetHideEmptyOutfits(raceFilter,
+					not Filter.HidesEmptyOutfits(raceFilter))
+				return Changed()
+			end)
+			return
+		end
+
+		local raceMenu = root:CreateButton("Race")
+		raceMenu:CreateButton(CHECK_ALL or "All", function()
+			Filter.SelectAll(raceFilter)
+			return Changed()
+		end)
+		raceMenu:CreateButton(UNCHECK_ALL or "None", function()
+			Filter.SelectNone(raceFilter)
+			return Changed()
+		end)
+		raceMenu:CreateDivider()
+		for _, raceID in ipairs(races) do
+			local id = raceID
+			local info = C_CreatureInfo and C_CreatureInfo.GetRaceInfo
+				and C_CreatureInfo.GetRaceInfo(id)
+			local label = info and info.raceName or ("Race " .. id)
+			raceMenu:CreateCheckbox(label, function()
+				return Filter.IsRaceSelected(raceFilter, id)
+			end, function()
+				Filter.SetRace(raceFilter, id,
+					not Filter.IsRaceSelected(raceFilter, id))
+				return Changed()
+			end)
+		end
+		local classMenu = root:CreateButton("Class")
+		classMenu:CreateButton(CHECK_ALL or "All", function()
+			Filter.SelectAllClasses(raceFilter)
+			return Changed()
+		end)
+		classMenu:CreateButton(UNCHECK_ALL or "None", function()
+			Filter.SelectNoClasses(raceFilter)
+			return Changed()
+		end)
+		classMenu:CreateDivider()
+		for _, classID in ipairs(classes) do
+			local id = classID
+			local info = C_CreatureInfo and C_CreatureInfo.GetClassInfo
+				and C_CreatureInfo.GetClassInfo(id)
+			local label = info and info.className or ("Class " .. id)
+			classMenu:CreateCheckbox(label, function()
+				return Filter.IsClassSelected(raceFilter, id)
+			end, function()
+				Filter.SetClass(raceFilter, id,
+					not Filter.IsClassSelected(raceFilter, id))
+				return Changed()
+			end)
+		end
+		local armorMenu = root:CreateButton("Armor type")
+		armorMenu:CreateButton(CHECK_ALL or "All", function()
+			Filter.SelectAllArmorTypes(raceFilter)
+			return Changed()
+		end)
+		armorMenu:CreateButton(UNCHECK_ALL or "None", function()
+			Filter.SelectNoArmorTypes(raceFilter)
+			return Changed()
+		end)
+		armorMenu:CreateDivider()
+		for _, armorType in ipairs(Filter.ARMOR_TYPES) do
+			local label = armorType
+			armorMenu:CreateCheckbox(label, function()
+				return Filter.IsArmorTypeSelected(raceFilter, label)
+			end, function()
+				Filter.SetArmorType(raceFilter, label,
+					not Filter.IsArmorTypeSelected(raceFilter, label))
+				return Changed()
+			end)
+		end
+	end)
+	if window.SnapDrag then
+		window.SnapDrag:ClearAllPoints()
+		window.SnapDrag:SetPoint("LEFT", window.CharacterButton, "RIGHT", 12, 0)
+	end
 
 	-- Two exclusive buttons in the header, the same shape as the mount
 	-- picker's mode switch. Original race is disabled rather than hidden while
@@ -906,6 +1339,19 @@ local function Ensure()
 		button:SetScript("OnLeave", GameTooltip_Hide)
 		return button
 	end
+
+	window.CharacterButton = BuildSwitch("Characters: All", 150)
+	window.CharacterButton:SetPoint("LEFT", window.FilterDropdown, "RIGHT", 8, 0)
+	window.CharacterButton:SetBackdropBorderColor(1, 0.82, 0, 1)
+	window.CharacterButton.Text:SetTextColor(1, 0.82, 0)
+	window.CharacterButton:SetScript("OnClick", OpenCharacterPicker)
+	window.CharacterButton:SetScript("OnEnter", function(self)
+		GameTooltip:SetOwner(self, "ANCHOR_BOTTOM")
+		GameTooltip:SetText("Characters")
+		GameTooltip:AddLine("Whose outfits and custom sets the library shows.",
+			0.6, 0.6, 0.6, true)
+		GameTooltip:Show()
+	end)
 
 	window.Original = BuildSwitch("Original race", 110)
 	window.Original:SetScript("OnClick", function()
@@ -937,8 +1383,6 @@ local function Ensure()
 	window.Mounted:SetScript("OnClick", function()
 		if not window.anyMounts then return end
 		showMounts = not showMounts
-		-- The switch speaks for every card again, including ones told otherwise.
-		wipe(onMount)
 		LibraryUI.Refresh()
 	end)
 	window.Mounted:SetScript("OnEnter", function(self)
@@ -957,6 +1401,32 @@ local function Ensure()
 		GameTooltip:Show()
 	end)
 
+	window.ModeMine = BuildSwitch("My characters", 118)
+	window.ModeMine:SetScript("OnClick", function()
+		Filter.SetMode(raceFilter, "mine")
+		LibraryUI.Refresh()
+	end)
+	window.ModeMine:SetScript("OnEnter", function(self)
+		GameTooltip:SetOwner(self, "ANCHOR_BOTTOM")
+		GameTooltip:SetText("Your own characters")
+		GameTooltip:AddLine("Outfits and custom sets belonging to the characters"
+			.. " you pick.", 0.6, 0.6, 0.6, true)
+		GameTooltip:Show()
+	end)
+
+	window.ModeSnaps = BuildSwitch("Snapshots", 96)
+	window.ModeSnaps:SetScript("OnClick", function()
+		Filter.SetMode(raceFilter, "snapshots")
+		LibraryUI.Refresh()
+	end)
+	window.ModeSnaps:SetScript("OnEnter", function(self)
+		GameTooltip:SetOwner(self, "ANCHOR_BOTTOM")
+		GameTooltip:SetText("Other players you captured")
+		GameTooltip:AddLine("Recorded account-wide, so every character sees the"
+			.. " same ones. Narrowed by race, class and armour.", 0.6, 0.6, 0.6, true)
+		GameTooltip:Show()
+	end)
+
 	window.Mine = BuildSwitch("My race", 82)
 	window.Mine:SetScript("OnClick", function()
 		viewMode = "mine"
@@ -969,6 +1439,10 @@ local function Ensure()
 			0.6, 0.6, 0.6, true)
 		GameTooltip:Show()
 	end)
+	window.ShowLabel = window:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+	window.ShowLabel:SetText("Show:")
+	window.OrLabel = window:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+	window.OrLabel:SetText("or")
 
 	window.Box = CreateFrame("Frame", nil, window, "WowScrollBoxList")
 	window.Box:SetPoint("TOPLEFT", MARGIN, -HEADER)
@@ -999,9 +1473,13 @@ local function Ensure()
 	end)
 
 	-- Anchored once all three exist, right to left from the close button.
-	window.Mounted:SetPoint("TOPRIGHT", window.Close, "TOPLEFT", -6, -2)
-	window.Mine:SetPoint("TOPRIGHT", window.Mounted, "TOPLEFT", -4, 0)
-	window.Original:SetPoint("TOPRIGHT", window.Mine, "TOPLEFT", -4, 0)
+	window.Mine:SetPoint("TOPRIGHT", window.Close, "TOPLEFT", -6, -8)
+	window.OrLabel:SetPoint("RIGHT", window.Mine, "LEFT", -6, 0)
+	window.Original:SetPoint("RIGHT", window.OrLabel, "LEFT", -6, 0)
+	window.ShowLabel:SetPoint("RIGHT", window.Original, "LEFT", -8, 0)
+	window.Mounted:SetPoint("TOPRIGHT", window.Close, "TOPLEFT", -6, -34)
+	window.ModeMine:SetPoint("TOPLEFT", window, "TOPLEFT", MARGIN + 2, -32)
+	window.ModeSnaps:SetPoint("LEFT", window.ModeMine, "RIGHT", 0, 0)
 
 	-- A body can only be borrowed from somebody the client will name, and in a
 	-- crowd that is almost never a nameplate: friendly player nameplates are
@@ -1078,6 +1556,7 @@ function LibraryUI.WarmBody(record, donorUnit)
 	local body = ns.RaceBody
 	local render = ns.ProbeRenderUI
 	if not (body and render and type(record) == "table") then return false end
+	if record.look == "" then return false end
 	if InCombatLockdown and InCombatLockdown() then return false end
 
 	local mine = UnitSex and UnitSex("player") or nil
@@ -1146,9 +1625,11 @@ function LibraryUI.WarmAll(donorUnit)
 	local Store = ns.Library
 	local body = ns.RaceBody
 	if not (Store and body) then return 0 end
-	-- Nothing is missing, so there is nothing to look for. This runs on every
+	-- Nothing is waiting, so there is nothing to look for. This runs on every
 	-- mouseover and every nameplate, so it has to be cheap when it is pointless.
-	if fullFidelity then return 0 end
+	-- Gated on whether a card still wants a body, not on whether the wall looks
+	-- complete: those stopped being the same question.
+	if not bodiesWanted then return 0 end
 
 	local built = 0
 	for _, record in ipairs(Records()) do
@@ -1169,14 +1650,34 @@ local function Missing(list)
 	-- nothing built. Count them all as waiting instead.
 	if not mine then return #list end
 
-	local waiting = 0
+	-- Two counts, because two different questions were being answered by one.
+	--
+	--   keys    is any shape of body still unbuilt? The wall shows every card
+	--           on its own race or none of them, so this one decides that, and
+	--           it is deliberately forgiving: one body of a shape is enough to
+	--           prove the shape can be built.
+	--   bodies  is any card still without a body of its own? A body belongs to
+	--           one card at a time, so two cards wanting one shape need two.
+	--           This one decides whether to keep looking for donors.
+	--
+	-- Answering both with the forgiving count is what stranded a card: the
+	-- wall called itself complete, WarmAll gave up, and a card built during a
+	-- donor-less moment kept the wrong body until the next reload.
+	local supply = Pool():CountByKey()
+	local keys, bodies = 0, 0
 	for _, record in ipairs(list) do
-		if record.sex and record.sex ~= mine and not ownBody[record.id] then
+		if record.look ~= "" and record.sex and record.sex ~= mine then
 			local ideal = IdealBodyKey(record, body)
-			if not (ideal and Pool():Find(ideal)) then waiting = waiting + 1 end
+			local stock = ideal and supply[ideal] or 0
+			if not (ideal and Pool():Find(ideal)) then keys = keys + 1 end
+			if stock > 0 then
+				supply[ideal] = stock - 1
+			else
+				bodies = bodies + 1
+			end
 		end
 	end
-	return waiting
+	return keys, bodies
 end
 
 -- A burst of unit events would otherwise repaint the wall several times in a
@@ -1220,7 +1721,11 @@ function LibraryUI.PaneBody(record, parent, inset)
 		previous.scene:SetPoint("TOPLEFT")
 		previous.scene:Hide()
 	end
+	twin.scene:SetFixedFrameStrata(false)
+	twin.scene:SetFixedFrameLevel(false)
 	twin.scene:SetParent(parent)
+	twin.scene:SetFixedFrameStrata(true)
+	twin.scene:SetFixedFrameLevel(true)
 	twin.scene:ClearAllPoints()
 	twin.scene:SetPoint("TOPLEFT", inset.left, -inset.top)
 	twin.scene:SetPoint("BOTTOMRIGHT", -inset.right, inset.bottom)
@@ -1257,6 +1762,29 @@ function LibraryUI.ReturnPaneBody()
 	entry.scene:ClearAllPoints()
 	entry.scene:SetPoint("TOPLEFT")
 	entry.scene:Hide()
+end
+
+function LibraryUI.LayerProbe()
+	local entry
+	for _, candidate in ipairs(characterPool and characterPool.entries or {}) do
+		if candidate.card and candidate.scene and candidate.scene:IsShown() then
+			entry = candidate
+			break
+		end
+	end
+	local function Read(frame)
+		if not frame then return nil end
+		return {
+			strata = frame:GetFrameStrata(), level = frame:GetFrameLevel(),
+			fixedStrata = frame:HasFixedFrameStrata(),
+			fixedLevel = frame:HasFixedFrameLevel(),
+		}
+	end
+	return {
+		window = Read(window),
+		card = Read(entry and entry.card),
+		scene = Read(entry and entry.scene),
+	}
 end
 
 -- Builds a record's body into a scene somebody else owns, and dresses it.
@@ -1319,9 +1847,82 @@ end
 function LibraryUI.Refresh()
 	if not window or not window:IsShown() then return end
 
-	local list = Records()
-	local waiting = Missing(list)
+	local allRecords = Records()
+	local Filter = ns.LibraryFilter
+	local searched = {}
+	for _, record in ipairs(allRecords) do
+		if not Filter or Filter.NameMatches(record, nameQuery) then
+			searched[#searched + 1] = record
+		end
+	end
+	local list = Filter and Filter.Apply(searched, raceFilter) or searched
+	-- On your own characters the wall opens where you are, in the order your
+	-- own outfit list already uses. Snapshot mode is other people, so there
+	-- is no "current character" to lead with and the recency order stands.
+	if Filter and not Filter.IsSnapshotMode(raceFilter) then
+		local rank
+		local tree = ns.Tree
+		if tree and type(MogtrotCharDB) == "table" then
+			rank = {}
+			for position, choice in ipairs(
+				tree.OutfitChoices(MogtrotCharDB, ns.Addon and ns.Addon.outfitsByID)) do
+				rank[choice.outfitID] = position
+			end
+		end
+		list = Filter.Order(list, UnitGUID and UnitGUID("player") or nil, rank)
+	end
+	if Filter and window.FilterDropdown then
+		local races = Filter.Races(allRecords)
+		local classes = Filter.Classes(allRecords)
+		local selectedRaces = Filter.SelectionCount(raceFilter, races)
+		local selectedClasses = Filter.ClassSelectionCount(raceFilter, classes)
+		local selectedArmor = Filter.ArmorSelectionCount(raceFilter)
+		local owners = Filter.Owners(allRecords)
+		local selectedOwners = Filter.OwnerSelectionCount(raceFilter, owners)
+		local selectedSources = Filter.SourceSelectionCount(raceFilter)
+		local raceLabel = selectedRaces == #races and "All"
+			or selectedRaces == 0 and "None" or (selectedRaces .. "/" .. #races)
+		local classLabel = selectedClasses == #classes and "All"
+			or selectedClasses == 0 and "None"
+			or (selectedClasses .. "/" .. #classes)
+		local armorTotal = #Filter.ARMOR_TYPES
+		local armorLabel = selectedArmor == armorTotal and "All"
+			or selectedArmor == 0 and "None"
+			or (selectedArmor .. "/" .. armorTotal)
+		local ownerLabel = selectedOwners == #owners and "All"
+			or selectedOwners == 0 and "None"
+			or (selectedOwners .. "/" .. #owners)
+		local sourceTotal = #Filter.SOURCES()
+		local sourceLabel = selectedSources == sourceTotal and "All"
+			or selectedSources == 0 and "None"
+			or (selectedSources .. "/" .. sourceTotal)
+		local addon = ns.Addon
+		local sync = addon and addon.OutfitLibrarySyncState
+			and addon.OutfitLibrarySyncState()
+		local customSync = addon and addon.CustomSetLibrarySyncState
+			and addon.CustomSetLibrarySyncState()
+		local missing = sync and sync.missing or 0
+		local customMissing = customSync and customSync.missing or 0
+		-- Each mode reports only the filters it actually applies, so a line
+		-- saying "Race: All" can never be read as a filter that did nothing.
+		if Filter.IsSnapshotMode(raceFilter) then
+			window.FilterDropdown.mogtrotStatus =
+				("Race: %s | Class: %s | Armor: %s"):format(raceLabel, classLabel,
+					armorLabel)
+		else
+			window.FilterDropdown.mogtrotStatus =
+				("Show: %s | Character: %s | Missing outfits: %d | Missing custom sets: %d")
+				:format(sourceLabel, ownerLabel, missing, customMissing)
+		end
+		if window.CharacterButton then
+			window.CharacterButton.Text:SetText(("Characters: %s"):format(ownerLabel))
+		end
+	end
+	-- The wall stays apples to apples on the forgiving count, and the search
+	-- for donors keeps running on the honest one.
+	local waiting, unbuilt = Missing(list)
 	fullFidelity = waiting == 0
+	bodiesWanted = unbuilt > 0
 
 	-- The mounted switch is only meaningful if something here was captured
 	-- riding, so it reports that rather than sitting there doing nothing.
@@ -1339,6 +1940,37 @@ function LibraryUI.Refresh()
 	else
 		window.Mounted:SetBackdropBorderColor(0.5, 0.5, 0.5, 1)
 		window.Mounted.Text:SetTextColor(0.7, 0.7, 0.7)
+	end
+
+	-- Same three-state colouring as the view switches beside them.
+	local snapshotMode = not Filter or Filter.IsSnapshotMode(raceFilter)
+	local function PaintMode(button, selected)
+		if selected then
+			button:SetBackdropBorderColor(1, 0.82, 0, 1)
+			button.Text:SetTextColor(1, 0.82, 0)
+		else
+			button:SetBackdropBorderColor(0.5, 0.5, 0.5, 1)
+			button.Text:SetTextColor(0.7, 0.7, 0.7)
+		end
+	end
+	PaintMode(window.ModeMine, not snapshotMode)
+	PaintMode(window.ModeSnaps, snapshotMode)
+
+	-- Only one mode has characters to choose between, and the box searches a
+	-- different thing in each.
+	if window.CharacterButton then
+		window.CharacterButton:SetShown(not snapshotMode)
+		-- A hidden frame keeps its place, so whatever sits after it has to be
+		-- re-anchored or it leaves a hole.
+		if window.SnapDrag then
+			window.SnapDrag:ClearAllPoints()
+			window.SnapDrag:SetPoint("LEFT", snapshotMode and window.FilterDropdown
+				or window.CharacterButton, "RIGHT", 12, 0)
+		end
+	end
+	if window.Search.Instructions then
+		window.Search.Instructions:SetText(snapshotMode
+			and "Search character name" or "Search set name")
 	end
 
 	-- Selected is gold, available is dim, unavailable is red-grey and unclickable.
@@ -1366,33 +1998,65 @@ function LibraryUI.Refresh()
 		ScrollBoxConstants.RetainScrollPosition)
 
 	if #list == 0 then
-		window.Count:SetText("nothing captured yet: target someone and /mogtrot snap")
-	else
-		if showing then
-			window.Count:SetText(("%d look(s), each on their own race and sex."
-				.. " Right-click a card, drag to turn them all."):format(#list))
-		elseif fullFidelity then
-			window.Count:SetText(("%d look(s), all shown on you by choice."
-				.. " Right-click a card, drag to turn them all."):format(#list))
+		if #allRecords == 0 then
+			window.Count:SetText("nothing captured yet: target someone and /mogtrot snap")
 		else
-			window.Count:SetText(("%d look(s), all shown on you. Hover or target"
+			window.Count:SetText(("0 of %d look(s) match | %s"):format(#allRecords,
+				window.FilterDropdown.mogtrotStatus
+				or "Race: All | Class: All | Armor: All"))
+		end
+	else
+		local prefix = #list == #allRecords and ("%d look(s)"):format(#list)
+			or ("%d of %d look(s)"):format(#list, #allRecords)
+		local filterStatus = window.FilterDropdown
+			and window.FilterDropdown.mogtrotStatus
+			or "Race: All | Class: All | Armor: All"
+		if showing then
+			window.Count:SetText(("%s | %s | each on their own race and sex."
+				.. " Right-click a card, drag to turn them all."):format(prefix, filterStatus))
+		elseif fullFidelity then
+			window.Count:SetText(("%s | %s | all shown on you by choice."
+				.. " Right-click a card, drag to turn them all."):format(prefix, filterStatus))
+		else
+			window.Count:SetText(("%s | %s | all shown on you. Hover or target"
 				.. " anyone of the other sex to see them on their own bodies"
-				.. " (%d still need one)."):format(#list, waiting))
+				.. " (%d still need one)."):format(prefix, filterStatus, waiting))
 		end
 	end
 end
 
+-- On screen right now, which is what a shortcut to it needs to know.
+-- IsVisible rather than IsShown: IsShown answers only for the frame's own
+-- flag and stays true under a hidden parent.
+function LibraryUI.IsOpen()
+	return window ~= nil and window:IsVisible()
+end
+
+-- The library and the pairing window are both full-size and both about the
+-- same outfits, so two of them open is two places to look and one of them
+-- covering the other.
+local function CloseOthers()
+	local addon = ns.Addon
+	if not addon then return end
+	if addon.ClosePicker then addon:ClosePicker() end
+	if addon.CloseHearthstonePicker then addon.CloseHearthstonePicker() end
+end
+
 function LibraryUI.Show()
+	CloseOthers()
 	local frame = Ensure()
 	frame:Show()
 	LibraryUI.Refresh()
 	return frame
 end
 
+function LibraryUI.Hide()
+	if window then window:Hide() end
+end
+
 function LibraryUI.Toggle()
 	local frame = Ensure()
 	if frame:IsShown() then
-		if ns.LibraryDetailUI then ns.LibraryDetailUI.Hide() end
 		frame:Hide()
 	else
 		LibraryUI.Show()

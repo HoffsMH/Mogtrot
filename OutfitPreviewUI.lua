@@ -8,16 +8,16 @@ local OutfitPreviewUI = {}
 ns.OutfitPreviewUI = OutfitPreviewUI
 
 local function ApplyLook(model, look)
-	model:Undress()
-	for slotID, entry in pairs(look) do
-		model:SetItemTransmogInfo(
-			ItemUtil.CreateItemTransmogInfo(entry[1], entry[2], entry[3]), slotID)
-	end
+	OutfitPreviewRender.ApplyLook(model, look, ItemUtil.CreateItemTransmogInfo)
 end
 
 local function BuildOutfitPreview(name, parent)
 	local preview = CreateFrame("Frame", name, parent, "BackdropTemplate")
 	preview:SetSize(230, 330)
+	preview:SetFrameStrata("HIGH")
+	preview:SetToplevel(true)
+	preview:SetFlattensRenderLayers(true)
+	preview:SetIsFrameBuffer(true)
 	preview:SetBackdrop({
 		bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
 		edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
@@ -176,7 +176,6 @@ function OutfitPreviewUI.Attach(Addon, callbacks)
 	local function EnsureMountEditPreview()
 		if mountEditPreview then return mountEditPreview end
 		mountEditPreview = BuildOutfitPreview("MogtrotMountEditPreview", UIParent)
-		mountEditPreview:SetFrameStrata("HIGH")
 		mountEditPreview.DockGlow = BuildDockGlow(mountEditPreview)
 		mountEditPreview:EnableMouse(true)
 		mountEditPreview:RegisterForDrag("LeftButton")
@@ -211,7 +210,6 @@ function OutfitPreviewUI.Attach(Addon, callbacks)
 	local function EnsureSearchPickerPreview()
 		if searchPickerPreview then return searchPickerPreview end
 		searchPickerPreview = BuildOutfitPreview("MogtrotTitlePickerPreview", UIParent)
-		searchPickerPreview:SetFrameStrata("HIGH")
 		searchPickerPreview.Model:ClearAllPoints()
 		searchPickerPreview.Model:SetPoint("TOPLEFT", 8, -8)
 		searchPickerPreview.Model:SetPoint("BOTTOMRIGHT", -8, 28)

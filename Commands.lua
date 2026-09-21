@@ -3,6 +3,26 @@ local _, ns = ...
 -- Handles /mogtrot commands and their user-facing responses.
 local Commands = {}
 
+function Commands.RepairOutfitLooks(charDB, accountDB, guid, keepOutfitID)
+	if type(charDB) ~= "table" or type(accountDB) ~= "table" or not guid then return 0 end
+	charDB.looks = type(charDB.looks) == "table" and charDB.looks or {}
+	local kept = charDB.looks[keepOutfitID]
+	for outfitID in pairs(charDB.looks) do charDB.looks[outfitID] = nil end
+	if kept then charDB.looks[keepOutfitID] = kept end
+
+	local repaired = 0
+	local records = accountDB.library and accountDB.library.records or {}
+	for _, record in pairs(records) do
+		if record.source == "mine" and record.origin == "outfit"
+			and record.guid == guid and record.originID ~= keepOutfitID
+			and record.look ~= "" then
+			record.look = ""
+			repaired = repaired + 1
+		end
+	end
+	return repaired
+end
+
 function Commands.Register(Addon, deps)
 	local frame = deps.frame
 	local Diagnostics = deps.diagnostics
@@ -24,6 +44,10 @@ local HELP = {
 	{ "macro", "check the three action bar macros, for a bug report" },
 	{ "state", "print what Mogtrot can see, for a bug report" },
 	{ "probe", "dump what this client build actually exposes" },
+	{ "probe library", "why the library transfer button is hidden" },
+	{ "probe ingest <id>", "show what the bulk importer read for one outfit" },
+	{ "probe look <id>", "what the client says about each piece of a stored look" },
+	{ "probe layer", "one draggable model above the Transmog window" },
 	{ "probe body <id>", "render one creature display ID wearing your outfit" },
 	{ "probe donors", "which units the library could borrow a body from now" },
 	{ "probe actors", "which bodies the dress-up scene can actually pose" },
@@ -33,6 +57,8 @@ local HELP = {
 	{ "inspect", "capture the appearance list of the player you target" },
 	{ "snap", "save the look of the player you target into the library" },
 	{ "library", "every look you have captured, four to a row" },
+	{ "library repair", "clear bad outfit scans after the preview scanner test" },
+	{ "library bodies", "which model file each body key actually drew" },
 }
 
 local function ShowHelp()
@@ -133,6 +159,32 @@ SlashCmdList.MOGTROT = function(msg)
 		Diagnostics.ProbeClient(Addon, deps)
 		return
 	end
+	if cmd == "probe library" then
+		Diagnostics.ProbeLibraryTransfer(Addon, deps)
+		return
+	end
+	if cmd == "probe ingest" then
+		Diagnostics.ProbeOutfitIngest(Addon, deps, nil)
+		return
+	end
+	local probeIngest = cmd:match("^probe ingest%s+(%d+)$")
+	if probeIngest then
+		Diagnostics.ProbeOutfitIngest(Addon, deps, tonumber(probeIngest))
+		return
+	end
+	if cmd == "probe look" then
+		Diagnostics.ProbeLook(Addon, deps, nil)
+		return
+	end
+	local probeLook = cmd:match("^probe look%s+(%d+)$")
+	if probeLook then
+		Diagnostics.ProbeLook(Addon, deps, tonumber(probeLook))
+		return
+	end
+	if cmd == "probe layer" then
+		Diagnostics.ProbeLayer(Addon, deps)
+		return
+	end
 	local probeBody = cmd:match("^probe body%s+(%S+)$")
 	if probeBody then
 		Diagnostics.ProbeBody(Addon, deps, probeBody)
@@ -182,6 +234,24 @@ SlashCmdList.MOGTROT = function(msg)
 		else
 			Addon:Warn("library unavailable: the library window is not loaded.")
 		end
+		return
+	end
+	if cmd == "library bodies" then
+		local ui = ns.LibraryUI
+		if not (ui and ui.BodyAudit) then
+			Addon:Warn("the library has not been opened yet.")
+			return
+		end
+		local lines = ui.BodyAudit()
+		for _, line in ipairs(lines) do Addon:Say(line) end
+		if ns.CopyBox then ns.CopyBox.Show("Mogtrot body audit", lines) end
+		return
+	end
+	if cmd == "library repair" then
+		local repaired = Commands.RepairOutfitLooks(MogtrotCharDB, MogtrotDB,
+			UnitGUID("player"), 2)
+		Addon:Warn("cleared %d bad outfit scan(s); kept outfit 2.", repaired)
+		if ns.LibraryUI and ns.LibraryUI.Refresh then ns.LibraryUI.Refresh() end
 		return
 	end
 
