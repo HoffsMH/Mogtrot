@@ -88,6 +88,19 @@ local function LessOutfitID(a, b)
 	return tostring(a) < tostring(b)
 end
 
+-- The one link that stands for the whole set, plus how many there are.
+-- Lowest id wins: it is stable as links come and go, which a row's icon and a
+-- macro's icon both need, and it is the rule the outfit list already used
+-- inline before anything else wanted the same answer.
+function OutfitLinks.Representative(store, outfitID)
+	local best, count = nil, 0
+	for linkedID in pairs((store or {})[outfitID] or {}) do
+		count = count + 1
+		if best == nil or LessOutfitID(linkedID, best) then best = linkedID end
+	end
+	return best, count
+end
+
 function OutfitLinks.IndexByLinked(store)
 	local index = {}
 	for outfitID, links in pairs(store or {}) do

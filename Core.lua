@@ -594,11 +594,45 @@ function Addon:WearSnapshot()
 	return Wear.Snapshot(WearSession(), GetTime(), LiveOutfits(self))
 end
 
+-- The icon a macro should be showing right now, or nil for a command whose
+-- icon Mogtrot does not choose.
+--
+-- Summon and hearthstone follow the active outfit's representative link, the
+-- same one a row's icon shows, so the action bar and the outfit list can never
+-- disagree about which of several links stands for the outfit.
+function Addon.WantedMacroIcon(_self, command)
+	local outfitID = ReadActiveOutfitID()
+	if not outfitID then return nil end
+
+	if command == Macro.SUMMON then
+		local mountID = OutfitLinks.Representative(MogtrotCharDB.mounts, outfitID)
+		if not mountID then return nil end
+		return (select(3, C_MountJournal.GetMountInfoByID(mountID)))
+	end
+
+	if command == Macro.HEARTH then
+		local itemID = OutfitLinks.Representative(MogtrotCharDB.hearthstones, outfitID)
+		if not itemID then return nil end
+		local entry = ns.HearthstoneDefinitions.Lookup(itemID)
+		if not entry then return nil end
+		if entry.kind == "toy" then
+			return (select(2, hearthstoneAdapter.getToyInfo(itemID)))
+		end
+		return hearthstoneAdapter.getItemIcon(itemID)
+	end
+
+	return nil
+end
+
 -- Idempotent for the outfit already open, so the second call from the login timer
 -- cannot restart the interval and discard what it earned. Called wherever the
 -- active outfit may have moved.
 function Addon:UpdateWearTracking()
 	Wear.Switch(WearSession(), C_TransmogOutfitInfo.GetActiveOutfitID(), GetTime(), time())
+	-- The outfit moving is the whole reason the summon and hearthstone icons
+	-- change. Writing one already correct is skipped further down, so this
+	-- costs nothing when nothing moved.
+	self:UpdateOwnedMacroIcons()
 end
 
 -- The gauge is rankable but not readable, so the figures live in the tooltip.
