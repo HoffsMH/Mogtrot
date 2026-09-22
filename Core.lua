@@ -15,6 +15,7 @@ local frame
 local NO_TRANSMOG = (Constants and Constants.Transmog and Constants.Transmog.NoTransmogID) or 0
 local C_PetJournal, C_ToyBox, C_Item = _G.C_PetJournal, _G.C_ToyBox, _G.C_Item
 local OutfitLinks = ns.OutfitLinks
+local OutfitCandidates = ns.OutfitCandidates
 local Pins = ns.Pins
 local HearthstoneCollection = ns.HearthstoneCollection
 local HearthstoneController = ns.HearthstoneController
@@ -169,6 +170,7 @@ local mountPinController = ns.PinController.New(nil, {
 	now = time,
 	changed = function()
 		if Addon.Changed then Addon:Changed() end
+		if Addon.CompanionChoiceChanged then Addon:CompanionChoiceChanged() end
 	end,
 })
 
@@ -556,12 +558,14 @@ function Addon:ToggleOutfitMount(outfitID, mountID)
 	MogtrotCharDB.mounts[outfitID] = next(mounts) and mounts or nil
 
 	self:Changed()
+	self:CompanionChoiceChanged()
 	if adding then self:NoticeSummonBindingOnce() end
 end
 
 function Addon:ClearOutfitMounts(outfitID)
 	MogtrotCharDB.mounts[outfitID] = nil
 	self:Changed()
+	self:CompanionChoiceChanged()
 end
 
 -- Connects outfit changes to the wear time shown in the list and tooltip.
@@ -590,24 +594,76 @@ function Addon:WearSnapshot()
 	return Wear.Snapshot(WearSession(), GetTime(), LiveOutfits(self))
 end
 
+-- What the summon and hearth keys draw from right now, resolved by the one
+-- module both ladders resolve their pool with, so an icon can never disagree
+-- with its key about whether a pin is in play.
+--
+-- Eligibility here is ownership alone. The ladders also drop what is unusable
+-- or on cooldown, but those are situational: an icon that changed as you
+-- stepped into water, or every time you hearthed, would be noise on an action
+-- bar. Below this set both ladders pick at random and the mount one falls
+-- through to random favourites, and a random choice has no icon to show.
+local function SummonCandidates(outfitID)
+	local optOut = MogtrotCharDB.pinOptOut
+	local links = MogtrotCharDB.mounts[outfitID]
+	return OutfitCandidates.Resolve({
+		links = links,
+		pins = Pins.ActiveSet(MountPinDomain(MogtrotDB) or {}, time()),
+		isEligible = function(mountID)
+			local name, _spellID, _icon, _isActive, _isUsable, _sourceType,
+				_isFavorite, _isFactionSpecific, _faction, shouldHideOnChar,
+				isCollected = C_MountJournal.GetMountInfoByID(mountID)
+			return name ~= nil and isCollected and not shouldHideOnChar
+		end,
+		hasActiveOutfit = true,
+		pinsOptOut = optOut and optOut.mounts and optOut.mounts[outfitID] and true or false,
+		allowPinsWithoutOutfit = false,
+	}), links
+end
+
+-- outfitID nil is a live case here, not a guard: hearth pins fire without an
+-- outfit, and the key's own resolve says so.
+local function HearthstoneCandidates(outfitID)
+	local optOut = MogtrotCharDB.pinOptOut and MogtrotCharDB.pinOptOut.hearthstones
+	local links = outfitID and MogtrotCharDB.hearthstones[outfitID] or nil
+	return OutfitCandidates.Resolve({
+		links = links,
+		pins = Pins.ActiveSet(PinDomain(MogtrotDB, "hearthstones") or {}, time()),
+		isEligible = function(itemID)
+			local entry = ns.HearthstoneDefinitions.Lookup(itemID)
+			if not entry then return false end
+			if entry.kind == "toy" then return hearthstoneAdapter.hasToy(itemID) end
+			return (hearthstoneAdapter.itemCount(itemID) or 0) > 0
+		end,
+		hasActiveOutfit = outfitID ~= nil,
+		pinsOptOut = outfitID and optOut and optOut[outfitID] and true or false,
+		allowPinsWithoutOutfit = true,
+	}), links
+end
+
 -- The icon a macro should be showing right now, or nil for a command whose
 -- icon Mogtrot does not choose.
 --
--- Summon and hearthstone follow the active outfit's representative link, the
--- same one a row's icon shows, so the action bar and the outfit list can never
--- disagree about which of several links stands for the outfit.
+-- Summon and hearthstone stand for what their key would draw from: the
+-- outfit's links by the same lowest-id rule the outfit row shows, and the
+-- pins the key reaches for instead where the outfit has nothing linked. An
+-- icon naming something the key will not do is worse than one that lags, and
+-- a hearth pin firing under no outfit at all is the case a link-only reading
+-- could not show.
 function Addon.WantedMacroIcon(_self, command)
-	local outfitID = ReadActiveOutfitID()
-	if not outfitID then return nil end
+	local outfitID = CurrentOutfitID()
 
 	if command == Macro.SUMMON then
-		local mountID = OutfitLinks.Representative(MogtrotCharDB.mounts, outfitID)
+		if not outfitID then return nil end
+		local mountID = OutfitLinks.RepresentativePreferring(SummonCandidates(outfitID))
 		if not mountID then return nil end
 		return (select(3, C_MountJournal.GetMountInfoByID(mountID)))
 	end
 
 	if command == Macro.HEARTH then
-		local itemID = OutfitLinks.Representative(MogtrotCharDB.hearthstones, outfitID)
+		if not companionReady then return nil end
+		local itemID = OutfitLinks.RepresentativePreferring(
+			HearthstoneCandidates(outfitID))
 		if not itemID then return nil end
 		local entry = ns.HearthstoneDefinitions.Lookup(itemID)
 		if not entry then return nil end
@@ -618,6 +674,16 @@ function Addon.WantedMacroIcon(_self, command)
 	end
 
 	return nil
+end
+
+-- The case UpdateWearTracking does not cover: the active outfit standing
+-- still while what it would summon changes underneath it. Every link edit and
+-- every pin edit calls this.
+--
+-- Not hung on Changed. Changed repaints and saves and most of its callers
+-- cannot move an icon, while this walks the macro list once per command.
+function Addon:CompanionChoiceChanged()
+	if self.UpdateOwnedMacroIcons then self:UpdateOwnedMacroIcons() end
 end
 
 -- Idempotent for the outfit already open, so the second call from the login timer
@@ -739,6 +805,7 @@ function Addon:ApplyMountToOutfits(mountID, mountName, choices, chosen)
 
 	self:Say("%s: added to %d, removed from %d.", mountName or "mount", added, removed)
 	self:Changed()
+	self:CompanionChoiceChanged()
 	if self:IsPickerOpen() then self:RepaintMountCards() end
 end
 function Addon:GetOutfitHearthstones(outfitID)
@@ -754,6 +821,7 @@ function Addon:ToggleHearthstoneLink(outfitID, itemID)
 	if not companionReady or not outfitID or not itemID then return false end
 	local added = OutfitLinks.Toggle(MogtrotCharDB.hearthstones, outfitID, itemID)
 	self:Changed()
+	self:CompanionChoiceChanged()
 	return added
 end
 
@@ -761,6 +829,7 @@ function Addon:ApplyHearthstoneLinks(itemID, want)
 	if not companionReady then return 0, 0 end
 	local added, removed = OutfitLinks.Apply(MogtrotCharDB.hearthstones, itemID, want)
 	self:Changed()
+	self:CompanionChoiceChanged()
 	return added, removed
 end
 
@@ -787,7 +856,10 @@ local function AttachCompanions(account, char)
 	local hearthstoneDomain = PinDomain(account, "hearthstones")
 	hearthstonePinController = ns.PinController.New(hearthstoneDomain, {
 		now = time,
-		changed = function() Addon:Changed() end,
+		changed = function()
+			Addon:Changed()
+			Addon:CompanionChoiceChanged()
+		end,
 	})
 
 	local hearthButton = _G["MogtrotHearthstone"]

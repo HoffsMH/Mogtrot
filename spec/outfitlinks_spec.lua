@@ -233,3 +233,68 @@ describe("OutfitLinks.Representative", function()
 		assert.equal(2, count)
 	end)
 end)
+
+-- The macro icons stand for the links-and-pins union the summon and hearth
+-- keys draw from, which is nobody's store entry, so the same rule has to be
+-- askable of a bare set.
+describe("OutfitLinks.RepresentativeOf", function()
+	it("picks the lowest id in a set that belongs to no store", function()
+		local id, count = OutfitLinks.RepresentativeOf({
+			[303] = true, [64] = true, [1512] = true,
+		})
+		assert.equal(64, id)
+		assert.equal(3, count)
+	end)
+
+	it("has nothing to represent an empty or absent set", function()
+		local id, count = OutfitLinks.RepresentativeOf({})
+		assert.is_nil(id)
+		assert.equal(0, count)
+
+		id, count = OutfitLinks.RepresentativeOf(nil)
+		assert.is_nil(id)
+		assert.equal(0, count)
+	end)
+
+	it("answers a store entry the same way Representative does", function()
+		local links = { [303] = true, [64] = true }
+		assert.equal(OutfitLinks.Representative({ [1] = links }, 1),
+			OutfitLinks.RepresentativeOf(links))
+	end)
+end)
+
+-- The set a summon or hearth key draws from mixes the outfit's links with
+-- account pins, and the macro icon has to name one of them.
+describe("OutfitLinks.RepresentativePreferring", function()
+	it("keeps a link on the icon when a lower-numbered pin is in the set", function()
+		local links = { [303] = true }
+		local candidates = { [303] = true, [64] = true }
+		local id, count = OutfitLinks.RepresentativePreferring(candidates, links)
+		assert.equal(303, id)
+		assert.equal(1, count)
+	end)
+
+	it("takes the lowest link when several are in the set", function()
+		local links = { [303] = true, [120] = true }
+		local candidates = { [303] = true, [120] = true, [64] = true }
+		assert.equal(120, OutfitLinks.RepresentativePreferring(candidates, links))
+	end)
+
+	it("falls to the pins when the outfit has nothing linked", function()
+		local id, count = OutfitLinks.RepresentativePreferring(
+			{ [303] = true, [64] = true }, nil)
+		assert.equal(64, id)
+		assert.equal(2, count)
+	end)
+
+	-- A link the resolve dropped - the mount is not collected, the toy is not
+	-- owned - is not in the candidate set, so it cannot claim the icon.
+	it("ignores links the candidate set left out", function()
+		local links = { [64] = true }
+		assert.equal(303, OutfitLinks.RepresentativePreferring({ [303] = true }, links))
+	end)
+
+	it("has nothing to represent an empty candidate set", function()
+		assert.is_nil(OutfitLinks.RepresentativePreferring({}, { [64] = true }))
+	end)
+end)

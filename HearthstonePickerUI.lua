@@ -632,6 +632,7 @@ function HearthstonePickerUI.Attach(Addon, deps)
 		elseif type(PinOperations.Pin) == "function" then
 			PinOperations.Pin(domain, itemID, Now())
 		end
+		if Addon.CompanionChoiceChanged then Addon:CompanionChoiceChanged() end
 	end
 
 	function Addon.OpenHearthstoneSearch(itemID)
