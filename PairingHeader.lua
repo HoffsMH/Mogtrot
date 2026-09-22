@@ -5,7 +5,7 @@ if type(ns) ~= "table" then ns = {} end -- luacheck: ignore 331/ns
 -- changeable words are its controls. There is no window title separate from
 -- this: "Choosing mounts for brick chillin" says what you are looking at, and
 -- the words "mounts" and "brick chillin" are the things you click to change
--- it. The library reads "Showing 50 of 247 looks from my characters" the same
+-- it. The library reads "Showing my characters - 50 of 247 looks" the same
 -- way, and has no title and no tabs either.
 --
 -- Pure. Returns segments rather than a string so the caller can make the
@@ -121,9 +121,11 @@ local function Looks(shown, total)
 	return ("%d of %d looks"):format(shown, total)
 end
 
--- The library's header. The count lives in the sentence, the way the pairing
--- window's "3 chosen" does; the row below it says which filters are on and how
--- the bodies are being drawn, which is why this reads 50 rather than 247.
+-- The library's header. The wall comes first because it is the word you
+-- change, and the count follows because it is only ever true of the wall you
+-- are on. The count lives in the sentence, the way the pairing window's
+-- "3 chosen" does; the row below it says which filters are on and how the
+-- bodies are being drawn, which is why this reads 50 rather than 247.
 function PairingHeader.LibrarySegments(state)
 	state = type(state) == "table" and state or {}
 	local mode = PairingHeader.LibraryMode(state.mode)
@@ -131,9 +133,10 @@ function PairingHeader.LibrarySegments(state)
 	local shown = math.max(tonumber(state.shown) or 0, 0)
 
 	return {
-		{ text = ("Showing %s from "):format(Looks(shown, total)) },
+		{ text = "Showing " },
 		{ text = LIBRARY_MODE_LABEL[mode], action = "libraryMode",
 			icon = LIBRARY_MODE_ICON[mode] },
+		{ text = (" - %s"):format(Looks(shown, total)) },
 	}
 end
 

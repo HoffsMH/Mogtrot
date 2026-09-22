@@ -115,8 +115,8 @@ end)
 -- shape as the pairing window's domain word, so the mode is a word in the
 -- sentence and the library has no title and no tabs either.
 describe("PairingHeader.LibrarySegments", function()
-	it("reads as a sentence naming what is shown and how much of it", function()
-		assert.equal("Showing 50 of 247 looks from my characters",
+	it("names the wall first and counts it after", function()
+		assert.equal("Showing my characters - 50 of 247 looks",
 			Text(PairingHeader.LibrarySegments({ mode = "mine", shown = 50,
 				total = 247 })))
 	end)
@@ -124,27 +124,36 @@ describe("PairingHeader.LibrarySegments", function()
 	-- The filter line below says why 50 of 247; saying "of 247" when nothing
 	-- was filtered out would invent a filter.
 	it("drops the comparison when nothing is filtered out", function()
-		assert.equal("Showing 247 looks from snapshots",
+		assert.equal("Showing snapshots - 247 looks",
 			Text(PairingHeader.LibrarySegments({ mode = "snapshots", shown = 247,
 				total = 247 })))
 	end)
 
 	it("counts one look singular", function()
-		assert.equal("Showing 1 look from snapshots",
+		assert.equal("Showing snapshots - 1 look",
 			Text(PairingHeader.LibrarySegments({ mode = "snapshots", shown = 1,
 				total = 1 })))
 	end)
 
 	it("says an empty library is empty rather than counting to zero", function()
-		assert.equal("Showing no looks from my characters",
+		assert.equal("Showing my characters - no looks",
 			Text(PairingHeader.LibrarySegments({ mode = "mine", shown = 0,
 				total = 0 })))
 	end)
 
 	it("counts none of a full library when every look is filtered out", function()
-		assert.equal("Showing 0 of 247 looks from snapshots",
+		assert.equal("Showing snapshots - 0 of 247 looks",
 			Text(PairingHeader.LibrarySegments({ mode = "snapshots", shown = 0,
 				total = 247 })))
+	end)
+
+	-- The wall is the first thing the sentence says, because it is what you
+	-- switch and the count is only true of whichever one you are on.
+	it("puts the mode word ahead of the count", function()
+		local parts = PairingHeader.LibrarySegments({ mode = "snapshots",
+			shown = 50, total = 247 })
+		assert.equal("libraryMode", parts[2].action)
+		assert.is_true(parts[3].text:find("50 of 247", 1, true) ~= nil)
 	end)
 
 	it("offers the mode as its only control", function()
@@ -164,9 +173,9 @@ describe("PairingHeader.LibrarySegments", function()
 	end)
 
 	it("falls back to a whole sentence for a malformed state", function()
-		assert.equal("Showing no looks from snapshots",
+		assert.equal("Showing snapshots - no looks",
 			Text(PairingHeader.LibrarySegments(nil)))
-		assert.equal("Showing no looks from snapshots",
+		assert.equal("Showing snapshots - no looks",
 			Text(PairingHeader.LibrarySegments({})))
 	end)
 

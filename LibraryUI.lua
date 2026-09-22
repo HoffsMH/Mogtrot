@@ -1192,8 +1192,8 @@ local function Ensure()
 	end
 
 	-- The header is one sentence and the word that can change is its control,
-	-- so there is no window title and no tabs: "Showing 50 of 247 looks from my
-	-- characters" is both. Laid out from PairingHeader's segments, the same as
+	-- so there is no window title and no tabs: "Showing my characters - 50 of
+	-- 247 looks" is both. Laid out from PairingHeader's segments, the same as
 	-- the pairing windows'.
 	window.HeaderRow = CreateFrame("Frame", nil, window)
 	window.HeaderRow:SetPoint("TOPLEFT", MARGIN + 2, -12)
