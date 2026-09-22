@@ -20,6 +20,23 @@ describe("Macro.Body", function()
 		assert.equals("#mogtrot:summon\n/click MogtrotSummon", Macro.Body("summon"))
 	end)
 
+	it("clicks the hearthstone button for the hearth command", function()
+		assert.equals("#mogtrot:hearth\n/click MogtrotHearthstone",
+			Macro.Body("hearth"))
+	end)
+
+	it("round-trips through CommandOf for hearth", function()
+		assert.equals("hearth", Macro.CommandOf(Macro.Body("hearth")))
+	end)
+
+	it("clicks the least-worn outfit dispatcher", function()
+		assert.equals("#mogtrot:least\n/click MogtrotLeastWorn", Macro.Body("least"))
+	end)
+
+	it("runs the library capture command", function()
+		assert.equals("#mogtrot:snap\n/mogtrot snap", Macro.Body("snap"))
+	end)
+
 	it("stays on the dispatcher when a fallback route is supplied", function()
 		assert.equals("#mogtrot:summon\n/click MogtrotSummon",
 			Macro.Body("summon", "litemount"))
@@ -28,6 +45,7 @@ describe("Macro.Body", function()
 	it("round-trips through CommandOf", function()
 		assert.equals("open", Macro.CommandOf(Macro.Body("open")))
 		assert.equals("summon", Macro.CommandOf(Macro.Body("summon")))
+		assert.equals("least", Macro.CommandOf(Macro.Body("least")))
 	end)
 
 	it("answers nothing for a command it does not define", function()
@@ -56,15 +74,19 @@ describe("Macro.RepairPlan", function()
 end)
 
 describe("Macro.DEFS", function()
+	it("defines the four commands in the documented order", function()
+		assert.same({ "open", "summon", "least", "hearth" }, Macro.ORDER)
+	end)
+
 	it("defines every command in ORDER", function()
-		assert.equals(2, #Macro.ORDER)
+		assert.equals(4, #Macro.ORDER)
 		for _, command in ipairs(Macro.ORDER) do
 			assert.is_table(Macro.DEFS[command])
 		end
 	end)
 
-	-- Two macros exist at once, so a shared name would make the list unreadable and
-	-- a shared click target would make both do the same thing.
+	-- All macros exist at once, so a shared name would make the list unreadable and
+	-- a shared click target would make multiple handles do the same thing.
 	it("gives each command its own name and click target", function()
 		local names, targets = {}, {}
 		for _, command in ipairs(Macro.ORDER) do
@@ -73,6 +95,22 @@ describe("Macro.DEFS", function()
 			assert.is_nil(targets[def.target])
 			names[def.name], targets[def.target] = true, true
 		end
+	end)
+
+	it("uses the documented hearth macro name and target", function()
+		assert.equals("Mogtrot Hearth", Macro.DEFS.hearth.name)
+		assert.equals("MogtrotHearthstone", Macro.DEFS.hearth.target)
+	end)
+
+	it("gives library capture a camera icon", function()
+		assert.equals("Mogtrot Snap", Macro.DEFS.snap.name)
+		assert.is_number(Macro.DEFS.snap.fixedIcon)
+	end)
+
+	it("hides a placed library capture handle", function()
+		assert.is_false(Macro.DragShown(false, { snap = true }, Macro.SNAP))
+		assert.is_true(Macro.DragShown(false, {}, Macro.SNAP))
+		assert.is_true(Macro.DragShown(true, { snap = true }, Macro.SNAP))
 	end)
 
 	it("keeps every name inside the 16-character cap", function()
@@ -138,13 +176,17 @@ describe("Macro.Find", function()
 		assert.is_nil(Macro.Find(1, Reader(bodies), "open"))
 	end)
 
-	it("tells the two commands apart when both exist", function()
+	it("tells the four commands apart when they all exist", function()
 		local bodies = {
 			"#mogtrot:open\n/click MogtrotToggle",
 			"#mogtrot:summon\n/click MogtrotSummon",
+			"#mogtrot:least\n/click MogtrotLeastWorn",
+			"#mogtrot:hearth\n/click MogtrotHearthstone",
 		}
-		assert.equals(1, Macro.Find(2, Reader(bodies), "open"))
-		assert.equals(2, Macro.Find(2, Reader(bodies), "summon"))
+		assert.equals(1, Macro.Find(4, Reader(bodies), "open"))
+		assert.equals(2, Macro.Find(4, Reader(bodies), "summon"))
+		assert.equals(3, Macro.Find(4, Reader(bodies), "least"))
+		assert.equals(4, Macro.Find(4, Reader(bodies), "hearth"))
 	end)
 
 	it("reads nothing when there are no character macros at all", function()
@@ -204,19 +246,21 @@ describe("Macro.Plan", function()
 		assert.equals("create", Plan(bodies, "open"))
 	end)
 
-	-- One free slot and neither macro made: one of them can be created and, after
-	-- that, the other cannot. Owning one says nothing about the other.
+	-- One free slot and no macro made: one can be created and, after that, the
+	-- others cannot. Owning one says nothing about the others.
 	it("plans each command on its own", function()
 		local bodies = {}
 		for i = 1, 29 do bodies[i] = "/dance" end
 		assert.equals("create", Plan(bodies, "open"))
 		assert.equals("create", Plan(bodies, "summon"))
+		assert.equals("create", Plan(bodies, "least"))
 
 		bodies[30] = "#mogtrot:open\n/click MogtrotToggle"
 		local action, slot = Plan(bodies, "open")
 		assert.equals("reuse", action)
 		assert.equals(30, slot)
 		assert.equals("full", Plan(bodies, "summon"))
+		assert.equals("full", Plan(bodies, "least"))
 	end)
 end)
 
@@ -239,13 +283,14 @@ describe("Macro.CanOffer", function()
 	end)
 
 	-- The answer is per command, so a full list with our open macro in it still
-	-- offers the open one and honestly refuses the summon one.
-	it("answers differently for the two commands on a full list", function()
+	-- offers the open one and honestly refuses the other two.
+	it("answers differently for the three commands on a full list", function()
 		local bodies = {}
 		for i = 1, 30 do bodies[i] = "/dance" end
 		bodies[7] = "#mogtrot:open\n/click MogtrotToggle"
 		assert.is_true(Macro.CanOffer(30, Reader(bodies), "open", 30))
 		assert.is_false(Macro.CanOffer(30, Reader(bodies), "summon", 30))
+		assert.is_false(Macro.CanOffer(30, Reader(bodies), "least", 30))
 	end)
 end)
 
@@ -262,14 +307,20 @@ describe("Macro.ActionBarCommands", function()
 		local bodies = {
 			[4] = "#mogtrot:open\n/click MogtrotToggle",
 			[9] = "#mogtrot:summon\n/click MogtrotSummon",
+			[12] = "#mogtrot:least\n/click MogtrotLeastWorn",
+			[15] = "#mogtrot:hearth\n/click MogtrotHearthstone",
 		}
 		local actions = {
 			[2] = { kind = "macro", id = 9 },
 			[17] = { kind = "macro", id = 4 },
+			[23] = { kind = "macro", id = 12 },
+			[31] = { kind = "macro", id = 15 },
 		}
-		local found = Macro.ActionBarCommands(24, Actions(actions), Reader(bodies))
+		local found = Macro.ActionBarCommands(32, Actions(actions), Reader(bodies))
 		assert.is_true(found.open)
 		assert.is_true(found.summon)
+		assert.is_true(found.least)
+		assert.is_true(found.hearth)
 	end)
 
 	it("does not report the absent macro", function()
@@ -299,15 +350,53 @@ describe("Macro.ActionBarCommands", function()
 end)
 
 describe("Macro.IconToApply", function()
-	it("updates a reused open macro whose icon differs", function()
-		assert.equals(2869702, Macro.IconToApply("open", 136243, 2869702))
+	-- Fixed icons live inside Macro, so the caller passes only what the macro
+	-- currently has and never a desired icon.
+	it("corrects a reused open macro whose icon differs", function()
+		assert.equals(2869702, Macro.IconToApply("open", 136243))
 	end)
 
-	it("leaves a reused open macro alone when its icon is current", function()
-		assert.is_nil(Macro.IconToApply("open", 2869702, 2869702))
+	it("never forces an icon for the hearth macro", function()
+		assert.is_nil(Macro.IconToApply("hearth", 136243))
+	end)
+
+	it("corrects a reused least macro to the internal dice icon", function()
+		assert.equals(237285, Macro.IconToApply("least", 136243))
+	end)
+
+	it("leaves a reused least macro alone when its icon is current", function()
+		assert.is_nil(Macro.IconToApply("least", 237285))
 	end)
 
 	it("never edits the summon macro icon", function()
-		assert.is_nil(Macro.IconToApply("summon", 136243, 2869702))
+		assert.is_nil(Macro.IconToApply("summon", 136243))
+	end)
+
+	it("never forces an icon for the future hearth command", function()
+		assert.is_nil(Macro.IconToApply("hearth", 136243))
+	end)
+end)
+
+describe("Macro.IconToApply with a wanted icon", function()
+	it("gives a command with no constant the icon it was handed", function()
+		assert.equals(999, Macro.IconToApply("summon", 136243, 999))
+		assert.equals(888, Macro.IconToApply("hearth", 136243, 888))
+	end)
+
+	it("writes nothing when the handed icon is already showing", function()
+		assert.is_nil(Macro.IconToApply("summon", 999, 999))
+		assert.is_nil(Macro.IconToApply("hearth", 888, 888))
+	end)
+
+	it("still writes nothing when nothing was handed", function()
+		assert.is_nil(Macro.IconToApply("summon", 136243, nil))
+		assert.is_nil(Macro.IconToApply("hearth", 136243, nil))
+	end)
+
+	-- A caller can pass a wanted icon for every command without first working
+	-- out which kind it is, so a command that owns its icon must ignore one.
+	it("lets a fixed icon win over a handed one", function()
+		assert.equals(2869702, Macro.IconToApply("open", 136243, 999))
+		assert.is_nil(Macro.IconToApply("open", 2869702, 999))
 	end)
 end)

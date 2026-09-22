@@ -549,3 +549,57 @@ describe("MountPick.Plan, no favourites either", function()
 		assert.equals(101, MountPick.Plan(request).mountID)
 	end)
 end)
+
+-- "A pinned mount" is the default, so it has to behave sanely for somebody who
+-- has never pinned anything. An empty pin set is not a refusal, it is just no
+-- opinion, and the random rungs below it still apply.
+describe("MountPick.Plan, pinned fallback with no pins", function()
+	it("draws a favourite when nothing is pinned", function()
+		local plan = MountPick.Plan(Request({
+			hasOutfit = true,
+			fallback = { mode = "pinned", set = nil },
+			usable = FavUsable(),
+			favourites = Favourites,
+		}))
+		assert.equal("summon", plan.action)
+		assert.equal(901, plan.mountID)
+		assert.equal("favourite", plan.from)
+	end)
+
+	it("draws from the collection when nothing is pinned or starred", function()
+		local plan = MountPick.Plan(Request({
+			hasOutfit = true,
+			fallback = { mode = "pinned", set = {} },
+			usable = Usability({ [55] = true }),
+			collection = function() return { [55] = true } end,
+		}))
+		assert.equal("summon", plan.action)
+		assert.equal(55, plan.mountID)
+		assert.equal("collection", plan.from)
+	end)
+
+	-- A pin is a preference, not a restriction. A ground mount pinned while
+	-- you are somewhere you can fly should not stop you getting mounted.
+	it("draws randomly when the only pin is unusable here", function()
+		local plan = MountPick.Plan(Request({
+			hasOutfit = true,
+			fallback = { mode = "pinned", set = { [101] = true } },
+			usable = Usability({ [55] = true }, "Can only use outside"),
+			collection = function() return { [55] = true, [101] = true } end,
+		}))
+		assert.equal("summon", plan.action)
+		assert.equal(55, plan.mountID)
+		assert.equal("collection", plan.from)
+	end)
+
+	it("still refuses when nothing anywhere is usable", function()
+		local plan = MountPick.Plan(Request({
+			hasOutfit = true,
+			fallback = { mode = "pinned", set = { [101] = true } },
+			usable = Usability({}, "Can only use outside"),
+			collection = function() return { [101] = true } end,
+		}))
+		assert.equal("refuse", plan.action)
+		assert.equal("collectionunusable", plan.reason)
+	end)
+end)

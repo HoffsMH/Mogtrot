@@ -21,14 +21,23 @@ local HELP = {
 	{ "capture", "re-capture the outfit you are wearing" },
 	{ "slots scan", "check every outfit again, including ones already checked" },
 	{ "slots wipe", "forget every measurement, so the next scan redoes it" },
-	{ "macro", "check the two action bar macros, for a bug report" },
+	{ "macro", "check the three action bar macros, for a bug report" },
 	{ "state", "print what Mogtrot can see, for a bug report" },
+	{ "snap", "save the look of the player you target into the library" },
+	{ "library", "every look you have captured, four to a row" },
 }
 
+-- The development commands are a separate file that only the development TOC
+-- loads, so their help rows arrive with them or not at all.
 local function ShowHelp()
 	Addon:Warn("commands, as /mogtrot or /mogt")
-	for _, entry in ipairs(HELP) do
+	local function Print(entry)
 		print(("  |cffffd100%-17s|r %s"):format(entry[1], entry[2]))
+	end
+	for _, entry in ipairs(HELP) do Print(entry) end
+	local dev = ns.DevCommands
+	if dev and type(dev.HELP) == "table" then
+		for _, entry in ipairs(dev.HELP) do Print(entry) end
 	end
 end
 
@@ -119,7 +128,27 @@ SlashCmdList.MOGTROT = function(msg)
 		Diagnostics.ShowState(Addon, deps)
 		return
 	end
+	if cmd == "snap" then
+		if ns.SnapCapture then
+			ns.SnapCapture.Target(Addon)
+		else
+			Addon:Warn("capture unavailable: the capture module is not loaded.")
+		end
+		return
+	end
+	if cmd == "library" then
+		if InCombatLockdown() then
+			Addon:Warn("not while you are in combat.")
+		elseif ns.LibraryUI then
+			ns.LibraryUI.Toggle()
+		else
+			Addon:Warn("library unavailable: the library window is not loaded.")
+		end
+		return
+	end
 
+	local dev = ns.DevCommands
+	if dev and dev.Dispatch(Addon, deps, cmd) then return end
 	if Diagnostics.Handle(Addon, deps, cmd) then return end
 
 	if cmd ~= "" then

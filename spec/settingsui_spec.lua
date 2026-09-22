@@ -53,12 +53,16 @@ describe("SettingsUI", function()
 		local shared = {}
 		local SettingsUI = assert(loadfile("SettingsUI.lua"))("Mogtrot", shared)
 		local templates = {}
+		local proxySettings = {}
 		_G.Settings = {
 			VarType = { String = "string", Boolean = "boolean" },
 			RegisterVerticalLayoutCategory = function()
 				return {}, { AddInitializer = function() end }
 			end,
-			RegisterProxySetting = function() return {} end,
+			RegisterProxySetting = function(_, key, _, _, _, getter, setter)
+				proxySettings[key] = { get = getter, set = setter }
+				return {}
+			end,
 			CreateCheckbox = function() end,
 			CreateDropdown = function() end,
 			CreateControlTextContainer = function()
@@ -71,7 +75,9 @@ describe("SettingsUI", function()
 			RegisterAddOnCategory = function() end,
 		}
 		_G.CreateSettingsButtonInitializer = function() return {} end
-		_G.MogtrotDB = { autoPinNewMountDays = 11 }
+		_G.MogtrotDB = { pins = {
+			mounts = { autoNew = true, days = 11, records = {} },
+		} }
 		local addon = { Debug = function() end, Refresh = function() end }
 		SettingsUI.Attach(addon, {
 			Wear = { ShowInList = function() return false end, SetShowInList = function() end },
@@ -89,12 +95,35 @@ describe("SettingsUI", function()
 		})
 		addon:RegisterSettings()
 
-		assert.equal(1, #templates)
+		-- Mount pins, hearthstone pins, and archive retention.
+		assert.equal(3, #templates)
 		assert.equal("MogtrotPinDaysSettingTemplate", templates[1].template)
 		assert.equal("11", templates[1].data.getText())
 		templates[1].data.setText("23")
-		assert.equal(23, MogtrotDB.autoPinNewMountDays)
+		assert.equal(23, MogtrotDB.pins.mounts.days)
 		assert.is_false(templates[1].data.setText("1.5"))
-		assert.equal(23, MogtrotDB.autoPinNewMountDays)
+		assert.equal(23, MogtrotDB.pins.mounts.days)
+		assert.is_true(templates[1].data.setText("0"))
+		assert.equal("0", templates[1].data.getText())
+		assert.equal(0, MogtrotDB.pins.mounts.days)
+
+		local autoPin = proxySettings.MOGTROT_AUTO_PIN_MOUNTS
+		assert.is_true(autoPin.get())
+		assert.is_true(autoPin.set(false))
+		assert.is_false(MogtrotDB.pins.mounts.autoNew)
+	end)
+end)
+
+describe("SettingsUI layout", function()
+	it("puts the pin-days control in Blizzard's own control column", function()
+		local file = assert(io.open("SettingsUI.xml", "r"))
+		local body = file:read("*a")
+		file:close()
+		-- Blizzard's SettingsCheckboxControlMixin, slider and checkbox-with-
+		-- control mixins all anchor LEFT to the row's CENTER at -80. A row that
+		-- picks its own offset starts a second column, which is visible in the
+		-- panel and invisible everywhere else.
+		local offset = body:match('<Anchor point="LEFT" relativePoint="CENTER" x="(%-?%d+)"/>')
+		assert.equal("-80", offset)
 	end)
 end)

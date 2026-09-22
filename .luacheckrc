@@ -9,7 +9,11 @@ std = "lua51"
 max_line_length = 120
 
 -- Addon files start `local ADDON_NAME, ns = ...` and mostly want only the second.
-ignore = { "211/ADDON_NAME" }
+-- A leading underscore is this codebase's way of saying "the API returns this
+-- and we do not want it". Ignoring them is what lets the whole run be clean,
+-- and a clean run is what makes luacheck useful as a gate: it already catches
+-- a function defined twice in one file, which reads correctly and runs stale.
+ignore = { "211/ADDON_NAME", "21./_.*" }
 
 -- Saved variables, the slash-command bindings, and SlashCmdList, whose MOGTROT
 -- field the addon assigns.
@@ -31,16 +35,27 @@ globals = {
 read_globals = {
 	"CAMERA_MODIFICATION_TYPE_DISCARD",
 	"CAMERA_TRANSITION_TYPE_IMMEDIATE",
+	"DRESS_UP_FRAME_MODEL_SCENE_ID",
 	"CHECK_ALL",
 	"UNCHECK_ALL",
 	"C_MountJournal",
 	"C_AddOns",
+	"AuraUtil",
+	"C_AlliedRaces",
+	"C_Item",
+	"C_Map",
+	"ClearInspectPlayer",
+	"C_ToyBox",
+	"C_TooltipInfo",
+	"PlayerHasToy",
+	"ITEM_SPELL_TRIGGER_ONUSE",
 	"C_Secrets",
 	"C_UnitAuras",
 	"C_PaperDollInfo",
 	"C_Spell",
 	"C_Timer",
 	"C_TransmogOutfitInfo",
+	"C_TransmogCollection",
 	"ColorPickerFrame",
 	"Constants",
 	"Enum",
@@ -66,10 +81,25 @@ read_globals = {
 	"GetBindingKey",
 	"GetBuildInfo",
 	"GetCursorPosition",
+	"GetInspectSpecialization",
+	"GetSubZoneText",
 	"GetTime",
+	"GetZoneText",
 	"IsMounted",
+	"IsUnitModelReadyForUI",
 	"issecretvalue",
 	"UnitExists",
+	"UnitFactionGroup",
+	"UnitPVPName",
+	"IsInInstance",
+	"NotifyInspect",
+	"UnitSex",
+	"UnitClass",
+	"UnitRace",
+	"UnitLevel",
+	"C_PlayerInfo",
+	"C_BarberShop",
+	"PlayerLocation",
 	"UnitIsPlayer",
 	"IconSelectorPopupFrameModes",
 	"InCombatLockdown",
@@ -94,6 +124,11 @@ read_globals = {
 	"MenuResponse",
 	"MenuUtil",
 	"RED_FONT_COLOR",
+	"RAID_CLASS_COLORS",
+	"IsControlKeyDown",
+	"GetClassAtlas",
+	"strsplit",
+	"C_CreatureInfo",
 	"ReloadUI",
 	"ScrollBoxConstants",
 	"ScrollBoxListMixin",
@@ -113,6 +148,8 @@ read_globals = {
 	"strtrim",
 	"tCompare",
 	"tDeleteItem",
+	"tinsert",
+	"wipe",
 	-- Epoch seconds. WoW's global, not os.time.
 	"date",
 	"time",
@@ -128,7 +165,7 @@ files["MountPick.lua"] = { ignore = { "331/ns" } }
 files["TargetMount.lua"] = { ignore = { "331/ns" } }
 files["Lint.lua"] = { ignore = { "331/ns" } }
 files["Macro.lua"] = { ignore = { "331/ns" } }
-files["MountPins.lua"] = { ignore = { "331/ns" } }
+files["ProbeRenderUI.lua"] = { ignore = { "331/ns" } }
 
 files["spec/"] = {
 	std = "lua51+busted",

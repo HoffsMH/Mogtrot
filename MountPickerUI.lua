@@ -1,5 +1,7 @@
 local _, ns = ...
 
+local Pins = ns.Pins or require("Pins")
+
 local MountPickerUI = {}
 
 function MountPickerUI.Attach(Addon, deps)
@@ -14,6 +16,24 @@ function MountPickerUI.Attach(Addon, deps)
 	local OutfitWear_PreClick = deps.outfitWearPreClick
 	local OutfitWear_PostClick = deps.outfitWearPostClick
 	local mountPicker
+
+local function MountPinDomain()
+	local db = MogtrotDB
+	local pins = db and db.pins
+	if type(pins) ~= "table" then return nil end
+	local domain = pins.mounts
+	if type(domain) ~= "table" or type(domain.records) ~= "table"
+		or domain.autoNew == nil or domain.days == nil then
+		return nil
+	end
+	return domain
+end
+
+local function ActiveMountPins()
+	local domain = MountPinDomain()
+	if not domain then return {} end
+	return Pins.ActiveSet(domain, time())
+end
 
 -- The picker shows a three-by-three grid; resizing changes the cards, not the count.
 local GRID_COLS = 3
@@ -125,7 +145,12 @@ local function Card_OnEnter(self)
 	end
 
 	GameTooltip:AddLine(" ")
-	GameTooltip:AddLine("Left-click to link or unlink it from this outfit", 0.6, 0.6, 0.6)
+	if mountPicker and mountPicker.mode == "pins" then
+		GameTooltip:AddLine("Click to pin or unpin this mount", 0.6, 0.6, 0.6)
+	else
+		GameTooltip:AddLine("Left-click to link or unlink it from this outfit",
+			0.6, 0.6, 0.6)
+	end
 	GameTooltip:AddLine("Shift-left-click to mount it", 0.6, 0.6, 0.6)
 	GameTooltip:AddLine("Right-click for mount options", 0.6, 0.6, 0.6)
 	if self.isPinned then
@@ -175,6 +200,14 @@ local function Card_OnClick(self, button)
 		ShowMountCardMenu(self)
 	elseif button == "LeftButton" and IsShiftKeyDown() then
 		SummonMountFromCard(self.mountID)
+	elseif button == "LeftButton" and mountPicker and mountPicker.mode == "pins" then
+		-- In pin mode the whole card is the pin, the same as its star. Falling
+		-- through to the outfit link here is what made a click in the middle of
+		-- a card do nothing while you were choosing pinned mounts.
+		Addon:ToggleMountPin(self.mountID)
+		if (mountPicker.filter.chosenMode or "all") ~= "all" then
+			Addon:RefreshMountPicker()
+		end
 	elseif button == "LeftButton" and self.outfitID then
 		Addon:ToggleOutfitMount(self.outfitID, self.mountID)
 		if (mountPicker.filter.chosenMode or "all") ~= "all" then
@@ -479,7 +512,8 @@ function Addon:PaintMountCard(card, mount)
 	card.FallbackStar:SetAtlas(isPinned and "auctionhouse-icon-favorite"
 		or "auctionhouse-icon-favorite-off", false)
 	card.FallbackStar:Show()
-	local days = ns.MountPins.DaysRemaining(MogtrotDB, mount.mountID, time())
+	local domain = MountPinDomain()
+	local days = domain and Pins.DaysRemaining(domain, mount.mountID, time()) or nil
 	card.PinRow:SetShown(mountPicker.mode == "pins" and days ~= nil)
 	if mountPicker.mode == "pins" and days ~= nil then
 		card.PinDays.mountID = mount.mountID
@@ -504,22 +538,39 @@ end
 
 local function RefreshPickerState()
 	mountPicker.selected = mountPicker.mode == "pins"
-		and ns.MountPins.ActiveSet(MogtrotDB, time())
+		and ActiveMountPins()
 		or Addon:GetOutfitMounts(mountPicker.outfitID)
 	mountPicker.linkIndex = ns.MountIndex.Build(MogtrotCharDB)
 end
 
+-- An outfit reads as its icon, its name and the category it lives in, in that
+-- category's own colour: the same three things the main window's rows show,
+-- so a name that appears twice is still tellable apart.
+local function OutfitCategory(outfitID)
+	local char = MogtrotCharDB
+	if type(char) ~= "table" or type(char.assign) ~= "table" then return nil end
+	local cat = type(char.cats) == "table" and char.cats[char.assign[outfitID] or 0]
+	if not cat or cat.protected then return nil end
+	return cat.name, ns.CategoryColor and ns.CategoryColor.Normalize(cat.color) or nil
+end
+
+-- Tree walks the roots in order, each category's own outfits before its
+-- children, which is the order the main window's list is built from. Reusing
+-- it means the two can never drift, and an alphabetical sort here would have
+-- put the list in an order that appears nowhere else in the addon.
 local function OutfitChoices()
-	local choices = {}
-	for outfitID, info in pairs(Addon.outfitsByID or {}) do
-		table.insert(choices, {
-			outfitID = outfitID,
-			name = info.name,
-			icon = info.icon,
-			preselected = mountPicker.outfitID == outfitID or nil,
-		})
+	local choices = ns.Tree.OutfitChoices(MogtrotCharDB, Addon.outfitsByID)
+	for _, choice in ipairs(choices) do
+		local info = (Addon.outfitsByID or {})[choice.outfitID]
+		local category, color = OutfitCategory(choice.outfitID)
+		choice.icon = info and info.icon
+		choice.tag = category
+		choice.tagColor = color
+		choice.preselected = mountPicker.outfitID == choice.outfitID or nil
+		-- The category rides on the name line, so the breadcrumb would only
+		-- add a second line saying the same thing.
+		choice.path = nil
 	end
-	table.sort(choices, function(a, b) return CaseInsensitive(a.name, b.name) end)
 	return choices
 end
 
@@ -552,26 +603,48 @@ function Addon:SetMountPickerPinMode()
 	self:RefreshMountPicker()
 end
 
+local function ShowDomain(domain)
+	if domain == "mounts" then return end
+	-- Opening the other window closes this one, so the switch is a handover
+	-- rather than a second window.
+	if mountPicker.mode == "pins" then
+		if Addon.OpenHearthstonePins then Addon.OpenHearthstonePins() end
+	elseif Addon.OpenHearthstonePicker then
+		Addon.OpenHearthstonePicker(mountPicker.outfitID)
+	end
+end
+
+-- What each changeable word does. How they look is PairingHeaderUI's.
+--
+-- The domain word opens a menu rather than toggling on the spot: swapping the
+-- whole window under the cursor with no warning reads as a misclick, and a
+-- menu shows both choices instead of hiding one.
+local function HeaderAction(action, segment)
+	if action == "outfit" then return ChoosePickerOutfit() end
+	if action == "mode" then
+		if mountPicker.mode == "pins" then return ChoosePickerOutfit() end
+		return Addon:SetMountPickerPinMode()
+	end
+	if action ~= "domain" then return end
+	ns.PairingHeaderUI.ShowDomainMenu(segment, ShowDomain)
+end
+
 function Addon:PaintPickerChrome()
 	local chosen = 0
 	for _ in pairs(mountPicker.selected) do chosen = chosen + 1 end
 
 	local info = self.outfitsByID and self.outfitsByID[mountPicker.outfitID]
 	mountPicker.Title:SetText("")
-	mountPicker.HeaderPrefix:SetText(mountPicker.mode == "pins" and "Pinned mounts:" or "Mounts for")
-	mountPicker.HeaderName:SetText(mountPicker.mode == "pins" and tostring(chosen)
-		or (info and info.name or "Outfit"))
-	if mountPicker.mode == "pins" then
-		mountPicker.HeaderIcon:SetAtlas("auctionhouse-icon-favorite", false)
-	else
-		mountPicker.HeaderIcon:SetTexture(info and info.icon or nil)
-	end
-	mountPicker.HeaderCount:SetText(mountPicker.mode == "pins" and "chosen  -" or
-		("  %d chosen  -"):format(chosen))
-	mountPicker.ModeButton.Text:SetText(mountPicker.mode == "pins" and "Switch to outfit"
-		or "Switch to pins")
 	mountPicker.TitleIcon:Hide()
+	mountPicker.PaintHeader({
+		domain = "mounts",
+		mode = mountPicker.mode,
+		outfitName = info and info.name,
+		outfitIcon = info and info.icon,
+		chosen = chosen,
+	})
 end
+
 
 function Addon:ApplyPickerSize()
 	if not mountPicker then return end
@@ -599,11 +672,12 @@ function Addon:RefreshMountPicker(options)
 	if mountPicker.mode == "pins" then
 		local original = {}
 		for i, mount in ipairs(matches) do original[mount.mountID] = i end
+		local domain = MountPinDomain()
 		table.sort(matches, function(a, b)
 			local ap, bp = Addon:IsMountPinned(a.mountID), Addon:IsMountPinned(b.mountID)
 			if ap ~= bp then return ap end
-			local ar = MogtrotDB.mountPins[a.mountID]
-			local br = MogtrotDB.mountPins[b.mountID]
+			local ar = domain and domain.records[a.mountID]
+			local br = domain and domain.records[b.mountID]
 			local aa, ba = ar and ar.acquiredAt, br and br.acquiredAt
 			if (aa ~= nil) ~= (ba ~= nil) then return aa ~= nil end
 			if aa and aa ~= ba then return aa > ba end
@@ -693,46 +767,11 @@ local function EnsureMountPicker()
 	mountPicker.HeaderRow:SetPoint("RIGHT", mountPicker.CloseButton, "LEFT", -8, 0)
 	mountPicker.HeaderRow:SetHeight(PICKER_HEADER_CONTROL_H)
 
-	mountPicker.HeaderClick = CreateFrame("Button", nil, mountPicker.HeaderRow, "BackdropTemplate")
-	mountPicker.HeaderClick:SetSize(210, PICKER_HEADER_CONTROL_H)
-	mountPicker.HeaderClick:SetBackdrop({ edgeFile = "Interface\\Buttons\\WHITE8X8", edgeSize = 1 })
-	mountPicker.HeaderClick:SetBackdropBorderColor(1, 0.82, 0, 1)
-	mountPicker.HeaderClick:SetScript("OnClick", function()
-		ChoosePickerOutfit()
-	end)
-	mountPicker.HeaderClick:SetScript("OnEnter", function(self)
-		GameTooltip:SetOwner(self, "ANCHOR_TOP")
-		if mountPicker.mode == "pins" then
-			GameTooltip:SetText("Switch to outfit")
-		else
-			GameTooltip:SetText("Choose another outfit")
-			GameTooltip:AddLine("Click to select an outfit.", 0.6, 0.6, 0.6)
-		end
-		GameTooltip:Show()
-	end)
-	mountPicker.HeaderClick:SetScript("OnLeave", GameTooltip_Hide)
-	mountPicker.HeaderPrefix = mountPicker.HeaderRow:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-	mountPicker.HeaderPrefix:SetPoint("LEFT", 0, 0)
-	mountPicker.HeaderClick:SetPoint("LEFT", mountPicker.HeaderPrefix, "RIGHT", 6, 0)
-	mountPicker.HeaderName = mountPicker.HeaderClick:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-	mountPicker.HeaderName:SetPoint("CENTER", 10, 0)
-	mountPicker.HeaderIcon = mountPicker.HeaderClick:CreateTexture(nil, "ARTWORK")
-	mountPicker.HeaderIcon:SetSize(22, 22)
-	mountPicker.HeaderIcon:SetPoint("RIGHT", mountPicker.HeaderName, "LEFT", -5, 0)
-	mountPicker.HeaderIcon:SetTexCoord(0.07, 0.93, 0.07, 0.93)
-	mountPicker.HeaderCount = mountPicker.HeaderRow:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-	mountPicker.HeaderCount:SetPoint("LEFT", mountPicker.HeaderClick, "RIGHT", 6, 0)
-	mountPicker.ModeButton = CreateFrame("Button", nil, mountPicker.HeaderRow, "BackdropTemplate")
-	mountPicker.ModeButton:SetSize(120, PICKER_HEADER_CONTROL_H)
-	mountPicker.ModeButton:SetPoint("LEFT", mountPicker.HeaderCount, "RIGHT", 6, 0)
-	mountPicker.ModeButton:SetBackdrop({ edgeFile = "Interface\\Buttons\\WHITE8X8", edgeSize = 1 })
-	mountPicker.ModeButton:SetBackdropBorderColor(1, 0.82, 0, 1)
-	mountPicker.ModeButton.Text = mountPicker.ModeButton:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-	mountPicker.ModeButton.Text:SetPoint("CENTER")
-	mountPicker.ModeButton:SetScript("OnClick", function()
-		if mountPicker.mode == "pins" then ChoosePickerOutfit()
-		else Addon:SetMountPickerPinMode() end
-	end)
+	-- The header is one sentence and its changeable words are its controls,
+	-- so it is laid out from PairingHeader's segments rather than from fixed
+	-- widgets. Nothing here knows what the sentence says.
+	mountPicker.PaintHeader = ns.PairingHeaderUI.New(mountPicker.HeaderRow,
+		PICKER_HEADER_CONTROL_H, HeaderAction)
 
 	mountPicker.SearchBox = CreateFrame("EditBox", nil, mountPicker, "SearchBoxTemplate")
 	mountPicker.SearchBox:SetSize(220, 20)
@@ -932,6 +971,13 @@ end
 function Addon:OpenMountPicker(outfitID)
 	if InCombatLockdown() then return end
 
+	-- One pairing window at a time: mounts and hearthstones are two views of
+	-- the same question, and two of them open at once is two answers.
+	if Addon.CloseHearthstonePicker then Addon.CloseHearthstonePicker() end
+		-- The library is the other full-size window about these outfits, so
+		-- it closes too rather than sitting underneath.
+		if ns.LibraryUI and ns.LibraryUI.Hide then ns.LibraryUI.Hide() end
+
 	local picker = EnsureMountPicker()
 	if picker:IsShown() then
 		self:SetMountPickerOutfit(outfitID)
@@ -956,6 +1002,13 @@ end
 
 function Addon:OpenMountPins()
 	if InCombatLockdown() then return end
+
+	-- One pairing window at a time: mounts and hearthstones are two views of
+	-- the same question, and two of them open at once is two answers.
+	if Addon.CloseHearthstonePicker then Addon.CloseHearthstonePicker() end
+		-- The library is the other full-size window about these outfits, so
+		-- it closes too rather than sitting underneath.
+		if ns.LibraryUI and ns.LibraryUI.Hide then ns.LibraryUI.Hide() end
 
 	local picker = EnsureMountPicker()
 	picker.outfitID = nil

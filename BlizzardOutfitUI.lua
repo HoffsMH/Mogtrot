@@ -6,6 +6,52 @@ local BlizzardOutfitUI = {}
 local Tree, Lint, OutfitLint = ns.Tree, ns.Lint, ns.OutfitLint
 local blizzardScrollBox
 local initialized
+local NO_TRANSMOG = (Constants and Constants.Transmog and Constants.Transmog.NoTransmogID) or 0
+local ASSIGNED = (Enum and Enum.TransmogOutfitDisplayType
+	and Enum.TransmogOutfitDisplayType.Assigned) or 1
+
+local function StoredID(info)
+	return info and info.displayType == ASSIGNED and info.transmogID or NO_TRANSMOG
+end
+
+function BlizzardOutfitUI.CaptureViewedLook(addon)
+	local preview = TransmogFrame and TransmogFrame.CharacterPreview
+	local pool = preview and preview.CharacterAppearanceSlotFramePool
+	local outfitID = C_TransmogOutfitInfo.GetCurrentlyViewedOutfitID()
+	if not pool or not outfitID or outfitID == 0 then return false end
+
+	local look = {}
+	local diagnostic = {}
+	for slotFrame in pool:EnumerateActive() do
+		local location = slotFrame:GetTransmogLocation()
+		local slotID = location and location:GetSlotID()
+		if slotID then
+			local slotInfo = slotFrame:GetSlotInfo()
+			local primary = StoredID(slotInfo)
+			local secondary, illusion = NO_TRANSMOG, NO_TRANSMOG
+			local linked = C_TransmogOutfitInfo.GetLinkedSlotInfo(location:GetSlot())
+			if linked and linked.primarySlotInfo.slot == location:GetSlot() then
+				local option = slotFrame:GetCurrentWeaponOptionInfo().weaponOption
+				secondary = StoredID(C_TransmogOutfitInfo.GetViewedOutfitSlotInfo(
+					linked.secondarySlotInfo.slot, linked.secondarySlotInfo.type, option))
+			end
+			local illusionFrame = slotFrame:GetIllusionSlotFrame()
+			if illusionFrame then illusion = StoredID(illusionFrame:GetSlotInfo()) end
+			look[slotID] = { primary, secondary, illusion }
+			diagnostic[#diagnostic + 1] = {
+				slotID = slotID,
+				displayType = slotInfo and slotInfo.displayType,
+				apiID = slotInfo and slotInfo.transmogID,
+				storedID = primary,
+			}
+		end
+	end
+	MogtrotCharDB.looks[outfitID] = look
+	addon.ingestDiagnostics = addon.ingestDiagnostics or {}
+	addon.ingestDiagnostics[outfitID] = diagnostic
+	if not addon.sweep and addon.SyncOutfitLibrary then addon.SyncOutfitLibrary() end
+	return true, outfitID
+end
 
 local function OutfitRowLabel(outfitID)
 	local char = MogtrotCharDB
@@ -117,16 +163,30 @@ function BlizzardOutfitUI.Initialize(addon)
 		if not TransmogFrame or addon.transmogHooked then return end
 		addon.transmogHooked = true
 
-		TransmogFrame:HookScript("OnShow", function()
-			C_Timer.After(1.0, function()
-				if TransmogFrame:IsShown() then OutfitLint.Begin(addon, false) end
-			end)
-		end)
 		TransmogFrame:HookScript("OnHide", function()
 			OutfitLint.Abandon(addon, "the window closed")
 		end)
 
 		local collection = TransmogFrame.OutfitCollection
+		if not collection then return end
+		local ingest = CreateFrame("Button", nil, collection)
+		ingest:SetSize(28, 28)
+		ingest:SetPoint("TOPRIGHT", collection, "TOPRIGHT", -34, -4)
+		ingest:SetNormalTexture("Interface\\Icons\\ability_hisek_aim")
+		ingest:SetHighlightTexture("Interface\\Buttons\\ButtonHilight-Square", "ADD")
+		ingest:SetScript("OnEnter", function(self)
+			GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+			GameTooltip:SetText("Ingest all outfits", 1, 0.82, 0)
+			GameTooltip:AddLine("Tell Mogtrot to ingest all your outfits. This may take a few seconds.",
+				1, 1, 1, true)
+			GameTooltip:Show()
+		end)
+		ingest:SetScript("OnLeave", GameTooltip_Hide)
+		ingest:SetScript("OnClick", function()
+			if addon.sweep then OutfitLint.Abandon(addon, "ingest requested") end
+			OutfitLint.Begin(addon, true, true, true)
+		end)
+		collection.MogtrotIngestButton = ingest
 		local scrollBox = collection and collection.OutfitList and collection.OutfitList.ScrollBox
 		if not scrollBox or blizzardScrollBox then return end
 		blizzardScrollBox = scrollBox

@@ -14,7 +14,9 @@ OutfitLint.Colours = {
 local APPEARANCE_TYPE = (Enum and Enum.TransmogType and Enum.TransmogType.Appearance) or 0
 local SWEEP_STEP_DELAY = 0.1
 local SWEEP_TIMEOUT = 3.0
+local SLOT_SETTLE_DELAY = 0.2
 local sweepToken = 0
+local slotReadyToken = 0
 
 function OutfitLint.Build()
 	return select(4, GetBuildInfo()) or 0
@@ -173,7 +175,7 @@ function OutfitLint.CanSweep()
 	return true
 end
 
-function OutfitLint.Begin(addon, all, verbose)
+function OutfitLint.Begin(addon, all, verbose, ingest)
 	if addon.sweep then return end
 	local allowed, why = OutfitLint.CanSweep()
 	if not allowed then
@@ -194,6 +196,7 @@ function OutfitLint.Begin(addon, all, verbose)
 		if verbose then addon:Say("every outfit has been checked already.") end
 		return
 	end
+	if ingest then addon.ingestDiagnostics = {} end
 
 	sweepToken = sweepToken + 1
 	addon.sweep = {
@@ -201,6 +204,7 @@ function OutfitLint.Begin(addon, all, verbose)
 		queue = queue,
 		index = 0,
 		restore = C_TransmogOutfitInfo.GetCurrentlyViewedOutfitID(),
+		ingest = ingest == true,
 	}
 	local visible = TransmogFrame and TransmogFrame:IsShown()
 	addon:Say("checking %d outfit%s for unset slots%s.", #queue,
@@ -225,6 +229,9 @@ function OutfitLint.Step(addon)
 
 	if C_TransmogOutfitInfo.GetCurrentlyViewedOutfitID() == outfitID then
 		OutfitLint.MeasureViewed(addon)
+		if sweep.ingest and ns.BlizzardOutfitUI then
+			ns.BlizzardOutfitUI.CaptureViewedLook(addon)
+		end
 		return OutfitLint.Step(addon)
 	end
 
@@ -239,10 +246,13 @@ function OutfitLint.Step(addon)
 	end)
 end
 
-function OutfitLint.OnViewedSlotsReady(addon)
+local function ProcessViewedSlotsReady(addon)
 	local outfitID = OutfitLint.MeasureViewed(addon)
 	local sweep = addon.sweep
 	if not sweep then
+		if outfitID and ns.BlizzardOutfitUI then
+			ns.BlizzardOutfitUI.CaptureViewedLook(addon)
+		end
 		if outfitID then addon:Changed() end
 		return
 	end
@@ -250,12 +260,28 @@ function OutfitLint.OnViewedSlotsReady(addon)
 	if outfitID and outfitID ~= sweep.expect then
 		return OutfitLint.Abandon(addon, "the view changed")
 	end
+	if sweep.ingest and ns.BlizzardOutfitUI then
+		ns.BlizzardOutfitUI.CaptureViewedLook(addon)
+	end
 
 	sweep.waiting = false
 	local token = sweep.token
 	C_Timer.After(SWEEP_STEP_DELAY, function()
 		if addon.sweep and addon.sweep.token == token then OutfitLint.Step(addon) end
 	end)
+end
+
+function OutfitLint.DebounceViewedSlotsReady(addon, after, process)
+	slotReadyToken = slotReadyToken + 1
+	local token = slotReadyToken
+	process = process or ProcessViewedSlotsReady
+	after(SLOT_SETTLE_DELAY, function()
+		if token == slotReadyToken then process(addon) end
+	end)
+end
+
+function OutfitLint.OnViewedSlotsReady(addon)
+	OutfitLint.DebounceViewedSlotsReady(addon, C_Timer.After)
 end
 
 function OutfitLint.Finish(addon)
@@ -266,7 +292,14 @@ function OutfitLint.Finish(addon)
 		and C_TransmogOutfitInfo.GetCurrentlyViewedOutfitID() == sweep.expect then
 		C_TransmogOutfitInfo.ChangeViewedOutfit(sweep.restore)
 	end
-	addon:Say("checked %d outfit%s.", #sweep.queue, #sweep.queue == 1 and "" or "s")
+	addon:Say("%s %d outfit%s.", sweep.ingest and "ingested" or "checked",
+		#sweep.queue, #sweep.queue == 1 and "" or "s")
+	if sweep.ingest then
+		local captured = 0
+		for _ in pairs(addon.ingestDiagnostics or {}) do captured = captured + 1 end
+		addon:Say("ingest diagnostics captured %d of %d outfits.", captured, #sweep.queue)
+	end
+	if sweep.ingest and addon.SyncOutfitLibrary then addon.SyncOutfitLibrary() end
 	addon:Changed()
 end
 

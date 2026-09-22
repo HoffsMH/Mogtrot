@@ -3,6 +3,7 @@ if type(ns) ~= "table" then ns = {} end
 
 local MountPick = ns.MountPick or require("MountPick")
 local LinkedMountShuffle = ns.LinkedMountShuffle or require("LinkedMountShuffle")
+local OutfitCandidates = ns.OutfitCandidates or require("OutfitCandidates")
 
 local SummonDecision = {}
 
@@ -20,12 +21,21 @@ local function Usability(collection)
 		return mount and mount.usable == true, mount and mount.error
 	end
 end
-
 local function MountInfo(collection)
 	return function(mountID)
 		local mount = collection and collection[mountID]
 		return mount and mount.collected and not mount.hidden or false,
 			mount and mount.name
+	end
+end
+
+-- Local eligibility runs before the configured fallback, so dead links fall
+-- to usable pins and, if the whole local pool empties, the fallback still runs.
+local function Eligible(collection)
+	return function(mountID)
+		local mount = collection and collection[mountID]
+		return mount ~= nil and mount.collected and not mount.hidden
+			and mount.usable == true
 	end
 end
 
@@ -52,18 +62,20 @@ function SummonDecision.Decide(snapshot)
 			requirePreferred = snapshot.requirePreferred,
 		}
 	end
-	local linkedMountIDs = outfit and outfit.linkedMountIDs or nil
-	if outfit and linkedMountIDs and next(linkedMountIDs) ~= nil
-		and preferences.shufflePinned then
-		local mixed = {}
-		for mountID in pairs(linkedMountIDs) do mixed[mountID] = true end
-		for mountID in pairs(snapshot.pinnedMountIDs or {}) do mixed[mountID] = true end
-		linkedMountIDs = mixed
-	end
+	local candidates = OutfitCandidates.Resolve({
+		links = outfit and outfit.linkedMountIDs or nil,
+		pins = snapshot.pinnedMountIDs or nil,
+		isEligible = Eligible(collection),
+		hasActiveOutfit = outfit ~= nil,
+		-- Default includes pins; an explicit false opts the outfit out until
+		-- the controller field cutover.
+		pinsOptOut = preferences.shufflePinned == false,
+		allowPinsWithoutOutfit = false,
+	})
 	local plan = MountPick.Plan({
 		targetMountID = preferences.matchTarget and situation.targetMountID or nil,
+		set = candidates,
 		hasOutfit = outfit ~= nil,
-		set = linkedMountIDs,
 		fallback = { mode = preferences.fallbackMode, mountID = preferences.pinnedMountID,
 			set = snapshot.pinnedMountIDs },
 		liteMountAvailable = snapshot.integrations and snapshot.integrations.liteMountReady,

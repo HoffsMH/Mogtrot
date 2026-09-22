@@ -2,21 +2,22 @@ local _, ns = ...
 local OutfitPreviewRender = ns.OutfitPreviewRender
 
 -- Controls the outfit preview beside the main window and the outfit preview
--- attached to the mount picker window.
+-- docked to the mount and hearthstone pickers. Those two pickers share one
+-- docked frame; dockOwner is whichever picker last asked for it.
 local OutfitPreviewUI = {}
 ns.OutfitPreviewUI = OutfitPreviewUI
 
 local function ApplyLook(model, look)
-	model:Undress()
-	for slotID, entry in pairs(look) do
-		model:SetItemTransmogInfo(
-			ItemUtil.CreateItemTransmogInfo(entry[1], entry[2], entry[3]), slotID)
-	end
+	OutfitPreviewRender.ApplyLook(model, look, ItemUtil.CreateItemTransmogInfo)
 end
 
 local function BuildOutfitPreview(name, parent)
 	local preview = CreateFrame("Frame", name, parent, "BackdropTemplate")
 	preview:SetSize(230, 330)
+	preview:SetFrameStrata("HIGH")
+	preview:SetToplevel(true)
+	preview:SetFlattensRenderLayers(true)
+	preview:SetIsFrameBuffer(true)
 	preview:SetBackdrop({
 		bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
 		edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
@@ -94,7 +95,7 @@ local function PaintDockGlow(glow, side)
 end
 
 function OutfitPreviewUI.Attach(Addon, callbacks)
-	local previewFrame, mountEditPreview, searchPickerPreview, mountPicker
+	local previewFrame, mountEditPreview, searchPickerPreview, mountPicker, dockOwner
 	local mountEditDock = { side = "right", position = 0.5 }
 	local mainWindow = callbacks.mainWindow
 
@@ -106,17 +107,17 @@ function OutfitPreviewUI.Attach(Addon, callbacks)
 	end
 
 	local function UpdateMountEditDockGlow()
-		if not (mountPicker and mountEditPreview) then return end
+		if not (dockOwner and mountEditPreview) then return end
 		local opposite = { left = "right", right = "left", top = "bottom", bottom = "top" }
-		PaintDockGlow(mountPicker.DockGlow, mountEditDock.side)
+		PaintDockGlow(dockOwner.DockGlow, mountEditDock.side)
 		PaintDockGlow(mountEditPreview.DockGlow, opposite[mountEditDock.side])
 	end
 
 	local function ApplyMountEditDock()
-		if not (mountPicker and mountEditPreview) then return end
+		if not (dockOwner and mountEditPreview) then return end
 		local side = mountEditDock.side
 		local position = math.max(0, math.min(mountEditDock.position or 0.5, 1))
-		local pickerWidth, pickerHeight = mountPicker:GetSize()
+		local pickerWidth, pickerHeight = dockOwner:GetSize()
 		local previewWidth, previewHeight = mountEditPreview:GetSize()
 
 		mountEditPreview:ClearAllPoints()
@@ -124,29 +125,29 @@ function OutfitPreviewUI.Attach(Addon, callbacks)
 			local span = math.max(0, pickerHeight - previewHeight)
 			local offset = (position - 0.5) * span
 			if side == "left" then
-				mountEditPreview:SetPoint("RIGHT", mountPicker, "LEFT", 0, offset)
+				mountEditPreview:SetPoint("RIGHT", dockOwner, "LEFT", 0, offset)
 			else
-				mountEditPreview:SetPoint("LEFT", mountPicker, "RIGHT", 0, offset)
+				mountEditPreview:SetPoint("LEFT", dockOwner, "RIGHT", 0, offset)
 			end
 		else
 			local span = math.max(0, pickerWidth - previewWidth)
 			local offset = (position - 0.5) * span
 			if side == "top" then
-				mountEditPreview:SetPoint("BOTTOM", mountPicker, "TOP", offset, 0)
+				mountEditPreview:SetPoint("BOTTOM", dockOwner, "TOP", offset, 0)
 			else
-				mountEditPreview:SetPoint("TOP", mountPicker, "BOTTOM", offset, 0)
+				mountEditPreview:SetPoint("TOP", dockOwner, "BOTTOM", offset, 0)
 			end
 		end
 		UpdateMountEditDockGlow()
 	end
 
 	local function UpdateMountEditDockFromCursor()
-		if not (mountPicker and mountEditPreview) then return end
+		if not (dockOwner and mountEditPreview) then return end
 		local scale = UIParent:GetEffectiveScale()
 		local x, y = GetCursorPosition()
 		x, y = x / scale, y / scale
-		local left, right = mountPicker:GetLeft(), mountPicker:GetRight()
-		local bottom, top = mountPicker:GetBottom(), mountPicker:GetTop()
+		local left, right = dockOwner:GetLeft(), dockOwner:GetRight()
+		local bottom, top = dockOwner:GetBottom(), dockOwner:GetTop()
 		if not (left and right and bottom and top) then return end
 
 		local distances = {
@@ -175,7 +176,6 @@ function OutfitPreviewUI.Attach(Addon, callbacks)
 	local function EnsureMountEditPreview()
 		if mountEditPreview then return mountEditPreview end
 		mountEditPreview = BuildOutfitPreview("MogtrotMountEditPreview", UIParent)
-		mountEditPreview:SetFrameStrata("HIGH")
 		mountEditPreview.DockGlow = BuildDockGlow(mountEditPreview)
 		mountEditPreview:EnableMouse(true)
 		mountEditPreview:RegisterForDrag("LeftButton")
@@ -210,7 +210,6 @@ function OutfitPreviewUI.Attach(Addon, callbacks)
 	local function EnsureSearchPickerPreview()
 		if searchPickerPreview then return searchPickerPreview end
 		searchPickerPreview = BuildOutfitPreview("MogtrotTitlePickerPreview", UIParent)
-		searchPickerPreview:SetFrameStrata("HIGH")
 		searchPickerPreview.Model:ClearAllPoints()
 		searchPickerPreview.Model:SetPoint("TOPLEFT", 8, -8)
 		searchPickerPreview.Model:SetPoint("BOTTOMRIGHT", -8, 28)
@@ -256,17 +255,25 @@ function OutfitPreviewUI.Attach(Addon, callbacks)
 		return previewFrame ~= nil and previewFrame:IsShown()
 	end
 
+	-- Docks the shared outfit preview to owner (a picker frame) and paints
+	-- outfitID into it.
+	local function ShowEditPreview(owner, outfitID, label)
+		local preview = EnsureMountEditPreview()
+		dockOwner = owner
+		preview.Label:SetText(label)
+		ApplyMountEditDock()
+		preview:Show()
+		RenderOutfitPreview(preview, outfitID)
+	end
+
 	return {
 		BuildDockGlow = BuildDockGlow,
 		ApplyMountEditDock = ApplyMountEditDock,
+		ShowEditPreview = ShowEditPreview,
 		ShowMountEditPreview = function(outfitID)
-			local preview = EnsureMountEditPreview()
 			local info = Addon.outfitsByID and Addon.outfitsByID[outfitID]
-			preview.Label:SetText(("Editing mounts for %s"):format(
+			ShowEditPreview(mountPicker, outfitID, ("Editing mounts for %s"):format(
 				info and info.name or tostring(outfitID)))
-			ApplyMountEditDock()
-			preview:Show()
-			RenderOutfitPreview(preview, outfitID)
 		end,
 		HideMountEditPreview = function()
 			if not mountEditPreview then return end
