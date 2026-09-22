@@ -61,10 +61,6 @@ local hearthstoneAdapter = {
 	totalItemCount = function(itemID)
 		return C_Item and C_Item.GetItemCount and C_Item.GetItemCount(itemID, true) or 0
 	end,
-	isEquipped = function(itemID)
-		return C_Item and C_Item.IsEquippedItem
-			and C_Item.IsEquippedItem(itemID) or false
-	end,
 	isUsable = function(itemID)
 		return C_Item and C_Item.IsUsableItem and C_Item.IsUsableItem(itemID) or false
 	end,

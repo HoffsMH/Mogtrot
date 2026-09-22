@@ -20,10 +20,14 @@ local Rotation = ns.Rotation or require("Rotation")
 --
 -- A link or a pin is a preference, not a restriction. Nothing linked, nothing
 -- pinned, everything pinned on cooldown: all three mean the pins have no
--- opinion, so the rung below offers everything owned and ready instead.
+-- opinion, so the rungs below offer what is owned and ready instead.
 -- Refusing there would leave somebody standing still next to a hearthstone
 -- they own. Only a character with nothing owned, usable and ready at all
 -- gets a refusal.
+--
+-- The toys are their own rung above the rest of the registry. The hearthstone
+-- in your bags is a thing a player can throw away and rely on toys instead,
+-- so serving it by default serves the one item they chose not to keep.
 local HearthPick = {}
 
 -- The ready IDs in canonical numeric order, plus what stopped the rest: the
@@ -53,13 +57,19 @@ local function IDsOf(set)
 	return ids
 end
 
-local function RegistryIDs(registry)
-	local entries = registry and registry.entries
-	return IDsOf(entries)
+-- The registry IDs of one kind, or all of them when kind is nil.
+local function RegistryIDs(registry, kind)
+	local ids = {}
+	for itemID, entry in pairs(registry and registry.entries or {}) do
+		if kind == nil or entry.kind == kind then ids[#ids + 1] = itemID end
+	end
+	return ids
 end
 
--- Rotation.Choose over a sorted pool is the deterministic pick both rungs
--- share, and an empty pool leaves the rotation state untouched.
+-- Rotation.Choose over a sorted pool is the deterministic pick every rung
+-- shares, and an empty pool leaves the rotation state untouched. A rung that
+-- finds anything always serves it, so at most one call per plan touches the
+-- rotation state.
 local function Serve(request, ids)
 	local pool, blocked, owned = HearthPick.Ready(ids, request.isEligible)
 	return Rotation.Choose(request.state, pool, request.random), blocked, owned
@@ -69,6 +79,12 @@ function HearthPick.Plan(request)
 	local itemID = Serve(request, IDsOf(request.candidates))
 	if itemID then
 		return { action = "use", itemID = itemID, from = "linked" }
+	end
+
+	itemID = Serve(request, RegistryIDs(request.registry, "toy"))
+	if itemID then
+		return { action = "use", itemID = itemID, from = "toy",
+			cause = "nolinked" }
 	end
 
 	local blocked, owned
@@ -85,6 +101,7 @@ end
 
 -- Which rung answered, as the tail of a sentence about what just happened.
 local function Did(plan)
+	if plan.from == "toy" then return "a random hearthstone toy" end
 	if plan.from == "collection" then return "one you own" end
 	return "a linked or pinned one"
 end

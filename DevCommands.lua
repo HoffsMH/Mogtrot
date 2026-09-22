@@ -501,6 +501,82 @@ function DevCommands.ProbeClient(Addon, _deps)
 	end
 end
 
+-- "absent" for a call this build does not have, otherwise its returns joined,
+-- so a missing function and a function answering false read differently.
+local function Returns(fn, ...)
+	if type(fn) ~= "function" then return "absent" end
+	local ok, first, second, third = pcall(fn, ...)
+	if not ok then return "error" end
+	local out = tostring(first)
+	if second ~= nil then out = out .. "," .. tostring(second) end
+	if third ~= nil then out = out .. "," .. tostring(third) end
+	return out
+end
+
+local function Present(fn)
+	return type(fn) == "function" and "yes" or "no"
+end
+
+-- What this client answers about each hearthstone the character owns. The key
+-- rests on three action-time reads and one of them, the item usability check,
+-- answers for bag items only - so an owned toy being called unusable is a
+-- thing to read off a screenshot rather than argue about. Read-only: nothing
+-- here uses an item or changes a setting.
+function DevCommands.ProbeHearthstones(Addon, _deps)
+	local registry = ns.HearthstoneDefinitions
+	if type(registry) ~= "table" then
+		Addon:Warn("probe hearth unavailable: the registry is not loaded.")
+		return
+	end
+
+	local toyBox, container = C_ToyBox, C_Container
+	local lines = {
+		"build: " .. tostring(select(1, GetBuildInfo())),
+		("PlayerHasToy=%s C_ToyBox.IsToyUsable=%s C_Item.IsUsableItem=%s "
+			.. "C_Item.GetItemCooldown=%s C_Container.GetItemCooldown=%s"):format(
+			Present(PlayerHasToy), Present(toyBox and toyBox.IsToyUsable),
+			Present(C_Item and C_Item.IsUsableItem),
+			Present(C_Item and C_Item.GetItemCooldown),
+			Present(container and container.GetItemCooldown)),
+	}
+
+	local ids = {}
+	for itemID in pairs(registry.entries) do ids[#ids + 1] = itemID end
+	table.sort(ids)
+
+	local unowned = 0
+	for _, itemID in ipairs(ids) do
+		local entry = registry.entries[itemID]
+		local owned
+		if entry.kind == "toy" then
+			owned = PlayerHasToy and PlayerHasToy(itemID) and true or false
+		else
+			owned = C_Item and C_Item.GetItemCount
+				and (C_Item.GetItemCount(itemID) or 0) > 0 or false
+		end
+		if owned then
+			lines[#lines + 1] = ("%d %s %s | usableItem=%s toyUsable=%s cdItem=%s cdBag=%s")
+				:format(itemID, entry.kind,
+					Returns(C_Item and C_Item.GetItemNameByID, itemID),
+					Returns(C_Item and C_Item.IsUsableItem, itemID),
+					Returns(toyBox and toyBox.IsToyUsable, itemID),
+					Returns(C_Item and C_Item.GetItemCooldown, itemID),
+					Returns(container and container.GetItemCooldown, itemID))
+		else
+			unowned = unowned + 1
+		end
+	end
+	lines[#lines + 1] = ("%d of %d registry entries are not owned here.")
+		:format(unowned, #ids)
+
+	Addon:Say("hearthstone probe: %d lines.", #lines)
+	if ns.CopyBox then
+		ns.CopyBox.Show("Mogtrot hearthstone probe", lines)
+	else
+		for _, line in ipairs(lines) do print(line) end
+	end
+end
+
 local function TransmogListFromLook(look)
 	local render = ns.ProbeRenderUI
 	if type(render) ~= "table" then return {} end
@@ -1152,6 +1228,7 @@ DevCommands.HELP = {
 	{ "debug", "developer output, on or off" },
 	{ "probe", "dump what this client build actually exposes" },
 	{ "probe library", "why the library transfer button is hidden" },
+	{ "probe hearth", "what this client answers about each hearthstone you own" },
 	{ "probe ingest <id>", "show what the bulk importer read for one outfit" },
 	{ "probe look <id>", "what the client says about each piece of a stored look" },
 	{ "probe layer", "one draggable model above the Transmog window" },
@@ -1174,6 +1251,10 @@ function DevCommands.Dispatch(Addon, deps, cmd)
 	end
 	if cmd == "probe library" then
 		DevCommands.ProbeLibraryTransfer(Addon, deps)
+		return true
+	end
+	if cmd == "probe hearth" then
+		DevCommands.ProbeHearthstones(Addon, deps)
 		return true
 	end
 	if cmd == "probe ingest" then

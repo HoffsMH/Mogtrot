@@ -45,13 +45,6 @@ function HearthstoneCollection.Rows(adapter, registry)
 		else
 			row.count = adapter.itemCount and adapter.itemCount(itemID) or nil
 			row.owned = type(row.count) == "number" and row.count > 0 or nil
-			-- A worn hearthstone carries a bag count of zero, so only entries
-			-- the registry marks equippable pay for the equipment check.
-			if not row.owned and entry.equippable and adapter.isEquipped
-				and adapter.isEquipped(itemID) then
-				row.owned = true
-				row.equipped = true
-			end
 			if adapter.totalItemCount then
 				row.total = adapter.totalItemCount(itemID)
 			end

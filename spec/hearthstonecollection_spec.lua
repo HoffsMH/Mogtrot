@@ -318,47 +318,28 @@ describe("HearthstoneCollection", function()
 			assert.is_nil(HearthstoneDefinitions.entries[TOY])
 		end)
 
-		it("treats an equipped hearthstone item as owned at a bag count of zero", function()
-			local adapter = Adapter({
-				itemCount = function() return 0 end,
-				totalItemCount = function() return 0 end,
-				isEquipped = function(itemID) return itemID == SLIPPERS end,
-			})
-			local registry = {
-				VERSION = 1,
-				entries = { [SLIPPERS] = { kind = "item", equippable = true } },
-			}
-			local rows = HearthstoneCollection.Rows(adapter, registry)
-			assert.equal(1, #rows)
-			assert.is_true(rows[1].owned)
-			assert.is_true(rows[1].equipped)
-		end)
-
 		it("leaves a carried item's ownership to its count", function()
-			local adapter = Adapter({
-				isEquipped = function() return false end,
-			})
-			local registry = {
+			local rows = HearthstoneCollection.Rows(Adapter(), {
 				VERSION = 1,
 				entries = { [HEARTH] = { kind = "item" } },
-			}
-			local rows = HearthstoneCollection.Rows(adapter, registry)
+			})
 			assert.is_true(rows[1].owned)
-			assert.is_nil(rows[1].equipped)
 		end)
 
-		it("does not ask about equipment for an entry that is not equippable", function()
+		-- The worn hearthstones are out of scope: a bag count of zero is all
+		-- this layer sees of a pair of slippers on your feet, and no equipment
+		-- read is asked for.
+		it("counts a worn hearthstone the bags do not carry as not owned", function()
 			local asked = false
 			local adapter = Adapter({
 				itemCount = function() return 0 end,
 				totalItemCount = function() return 0 end,
 				isEquipped = function() asked = true return true end,
 			})
-			local registry = {
+			local rows = HearthstoneCollection.Rows(adapter, {
 				VERSION = 1,
-				entries = { [HEARTH] = { kind = "item" } },
-			}
-			local rows = HearthstoneCollection.Rows(adapter, registry)
+				entries = { [SLIPPERS] = { kind = "item" } },
+			})
 			assert.is_falsy(rows[1].owned)
 			assert.is_false(asked)
 		end)

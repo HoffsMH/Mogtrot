@@ -14,6 +14,10 @@
 --       random,      -- function(n) -> 1..n
 --   }
 --   HearthPick.Text(plan) -> the line to show, or nil when there is none
+--
+-- The ladder is three rungs: the linked and pinned union, then the toys, then
+-- the whole registry. Toys sit above the rest because the hearthstone in your
+-- bags is a thing a player can throw away.
 local HearthPick = require("HearthPick")
 
 describe("HearthPick", function()
@@ -109,31 +113,71 @@ describe("HearthPick", function()
 		end)
 	end)
 
-	describe("Plan, the rung below", function()
-		it("falls to anything owned and ready when the linked one is not", function()
+	describe("Plan, the toy rung", function()
+		it("prefers a hearthstone toy over the one in your bags", function()
+			local plan = HearthPick.Plan(Request({
+				candidates = {},
+				isEligible = Eligibility({ [HEARTH] = true, [PORTAL] = true, [TOY] = true }),
+				random = function() return 1 end, -- the lowest ID of the sorted pool
+			}))
+			-- HEARTH is the lowest ID in the whole registry, so PORTAL coming
+			-- back is the toys having been their own pool.
+			assert.same({ action = "use", itemID = PORTAL, from = "toy",
+				cause = "nolinked" }, plan)
+		end)
+
+		it("falls to a toy when the linked hearthstone is not ready", function()
 			local plan = HearthPick.Plan(Request({
 				candidates = { [HEARTH] = true },
 				isEligible = Eligibility({ [HEARTH] = "cooldown", [TOY] = true }),
 			}))
-			assert.same({ action = "use", itemID = TOY, from = "collection",
+			assert.same({ action = "use", itemID = TOY, from = "toy",
 				cause = "nolinked" }, plan)
 		end)
 
-		it("falls back with nothing linked or pinned at all", function()
+		it("falls to a toy with nothing linked or pinned at all", function()
 			local plan = HearthPick.Plan(Request({
 				candidates = {},
 				isEligible = Eligibility({ [PORTAL] = true }),
 			}))
 			assert.equals(PORTAL, plan.itemID)
-			assert.equals("collection", plan.from)
+			assert.equals("toy", plan.from)
 		end)
 
-		it("never serves a hearthstone that is not ready", function()
+		it("names the toy rung in what it says", function()
+			local plan = HearthPick.Plan(Request({
+				candidates = { [HEARTH] = true },
+				isEligible = Eligibility({ [HEARTH] = "cooldown", [TOY] = true }),
+			}))
+			assert.equals("no usable linked or pinned hearthstone right now, so this "
+				.. "is a random hearthstone toy.", HearthPick.Text(plan))
+		end)
+
+		it("spreads repeats over every ready toy", function()
+			local Rotation = require("Rotation")
+			local request = Request({
+				candidates = {},
+				isEligible = Eligibility({ [HEARTH] = true, [PORTAL] = true, [TOY] = true }),
+			})
+
+			local first = HearthPick.Plan(request)
+			Rotation.Commit(request.state, first.itemID)
+			local second = HearthPick.Plan(request)
+
+			assert.equals("toy", first.from)
+			assert.equals("toy", second.from)
+			assert.not_equals(first.itemID, second.itemID)
+		end)
+	end)
+
+	describe("Plan, the rung below the toys", function()
+		it("uses a hearthstone from your bags when no toy is ready", function()
 			local plan = HearthPick.Plan(Request({
 				candidates = { [TOY] = true },
 				isEligible = Eligibility({ [TOY] = "cooldown", [HEARTH] = true }),
 			}))
-			assert.equals(HEARTH, plan.itemID)
+			assert.same({ action = "use", itemID = HEARTH, from = "collection",
+				cause = "nolinked" }, plan)
 		end)
 
 		it("ignores registry entries the player does not own", function()
@@ -141,15 +185,15 @@ describe("HearthPick", function()
 				candidates = {},
 				isEligible = Eligibility({ [HEARTH] = true }),
 			}))
-			-- TOY sorts highest and the random source picks the highest index,
-			-- so an unowned entry being skipped is what leaves HEARTH.
+			-- Both toys sort above HEARTH and the random source picks the
+			-- highest index, so an unowned entry being skipped is what leaves it.
 			assert.equals(HEARTH, plan.itemID)
 		end)
 
 		it("states which rung answered instead of refusing", function()
 			local plan = HearthPick.Plan(Request({
-				candidates = { [HEARTH] = true },
-				isEligible = Eligibility({ [HEARTH] = "cooldown", [TOY] = true }),
+				candidates = { [TOY] = true },
+				isEligible = Eligibility({ [TOY] = "cooldown", [HEARTH] = true }),
 			}))
 			assert.equals("no usable linked or pinned hearthstone right now, so this "
 				.. "is one you own.", HearthPick.Text(plan))
@@ -193,10 +237,10 @@ describe("HearthPick", function()
 	end)
 
 	describe("Plan, rotation", function()
-		it("serves every ready hearthstone before repeating", function()
+		it("serves every ready linked hearthstone before repeating", function()
 			local Rotation = require("Rotation")
 			local request = Request({
-				candidates = {},
+				candidates = { [HEARTH] = true, [TOY] = true },
 				isEligible = Eligibility({ [HEARTH] = true, [TOY] = true }),
 			})
 

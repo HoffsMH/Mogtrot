@@ -486,9 +486,7 @@ function HearthstonePickerUI.Attach(Addon, deps)
 		card.PinState:SetText(nil)
 		card.Cooldown:SetText(nil)
 
-		if row.equipped then
-			card.OwnedState:SetText("equipped")
-		elseif type(row.count) == "number" then
+		if type(row.count) == "number" then
 			card.OwnedState:SetText(("carried: %d"):format(row.count))
 		else
 			card.OwnedState:SetText(card.owned and "owned" or "not collected")

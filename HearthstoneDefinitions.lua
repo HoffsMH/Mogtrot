@@ -12,8 +12,9 @@ if type(ns) ~= "table" then ns = {} end -- luacheck: ignore 331/ns
 --
 -- kind drives the secure dispatch attribute, not ownership: a toy is used via
 -- type="toy" and answers PlayerHasToy, a plain item via type="item" and a bag
--- count. equippable marks the two that are worn rather than carried, so a bag
--- count of zero does not mean you lack them.
+-- count. The two pairs of slippers are worn rather than carried, so a bag
+-- count of zero is all this addon can see of them and the key leaves them
+-- alone.
 --
 -- No localized names, icons or animation data here. The collection adapter
 -- resolves display metadata live, and the client exposes no mapping from an
@@ -24,11 +25,11 @@ HearthstoneDefinitions.VERSION = 3
 
 HearthstoneDefinitions.entries = {
 	[6948] = { kind = "item" },                       -- Hearthstone
-	[28585] = { kind = "item", equippable = true },   -- Ruby Slippers
+	[28585] = { kind = "item" },                      -- Ruby Slippers
 	[54452] = { kind = "toy" },                       -- Ethereal Portal
 	[64488] = { kind = "toy" },                       -- The Innkeeper's Daughter
 	[93672] = { kind = "toy" },                       -- Dark Portal
-	[142298] = { kind = "item", equippable = true },  -- Astonishingly Scarlet Slippers
+	[142298] = { kind = "item" },                     -- Astonishingly Scarlet Slippers
 	[142542] = { kind = "toy" },                      -- Tome of Town Portal
 	[162973] = { kind = "toy" },                      -- Greatfather Winter's Hearthstone
 	[163045] = { kind = "toy" },                      -- Headless Horseman's Hearthstone

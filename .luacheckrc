@@ -46,6 +46,7 @@ read_globals = {
 	"C_Map",
 	"ClearInspectPlayer",
 	"C_ToyBox",
+	"C_Container",
 	"C_TooltipInfo",
 	"PlayerHasToy",
 	"ITEM_SPELL_TRIGGER_ONUSE",
