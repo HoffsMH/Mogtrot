@@ -52,6 +52,7 @@ Rotation.lua
 OutfitTransition.lua
 HearthstoneDefinitions.lua
 HearthstoneCollection.lua
+HearthPick.lua
 HearthstoneController.lua
 HearthstonePickerUI.lua
 MountPickerUI.lua

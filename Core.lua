@@ -781,6 +781,10 @@ local function CompanionWarning(message)
 	end
 end
 
+local function CompanionNotice(message)
+	Addon:Say(message)
+end
+
 local function AttachCompanions(account, char)
 	if not CompanionSchemaSupported(account, char) then return false end
 
@@ -807,6 +811,7 @@ local function AttachCompanions(account, char)
 			combat = InCombatLockdown,
 			now = GetTime,
 			warn = CompanionWarning,
+			say = CompanionNotice,
 		}
 		hearthstoneController = HearthstoneController.New(hearthstoneControllerDeps)
 	end

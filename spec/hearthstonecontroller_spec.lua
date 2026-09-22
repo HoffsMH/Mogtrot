@@ -4,7 +4,9 @@
 -- cooldown, rotation state is caller-owned per outfit, and the secure button
 -- is a plain attribute-recording fake. No real protected call is possible in
 -- a unit test: the controller only installs attributes and the harness (or
--- MH in game) dispatches. No globals, no WoW API, no clock.
+-- MH in game) dispatches. No globals, no WoW API, no clock. Which rung of the
+-- fallback ladder answers is HearthPick's; what is asserted here is the live
+-- reads feeding it and the attributes and feedback that come back out.
 --
 -- API under contract:
 --   HearthstoneController.New(deps) where deps = {
@@ -22,13 +24,14 @@
 --       button,            -- attribute fake: SetAttribute(name, value)
 --       combat,            -- function() -> bool
 --       warn,              -- function(message) for refusal feedback
+--       say,               -- function(message) for what just happened
 --   }
 --   controller:PreClick()   -- installs secure attributes for one action
 --   controller:PostClick()  -- commits the rotation once, clears attributes
 local HearthstoneController = require("HearthstoneController")
 
 describe("HearthstoneController", function()
-	local HEARTH, TOY = 6948, 165802
+	local HEARTH, TOY, SLIPPERS = 6948, 165802, 28585
 
 	local function MakeDeps(overrides)
 		local deps
@@ -78,6 +81,7 @@ describe("HearthstoneController", function()
 			combat = function() return false end,
 			now = function() return 200 end,
 			warn = function(msg) deps.lastWarn = msg end,
+			say = function(msg) deps.lastSay = msg end,
 		}
 		for k, v in pairs(overrides or {}) do deps[k] = v end
 		return deps
@@ -85,6 +89,23 @@ describe("HearthstoneController", function()
 
 	local function Attrs(deps)
 		return deps.attrs
+	end
+
+	-- The adapter shape with every read answering "nothing here", so a spec
+	-- states only the reads it is about.
+	local function Adapter(over)
+		local adapter = {
+			hasToy = function() return false end,
+			getToyInfo = function() return nil end,
+			itemCount = function() return 0 end,
+			totalItemCount = function() return 0 end,
+			isUsable = function() return true, nil end,
+			getCooldown = function() return 0, 0, 0 end,
+			getItemName = function() return nil end,
+			getItemIcon = function() return nil end,
+		}
+		for key, value in pairs(over or {}) do adapter[key] = value end
+		return adapter
 	end
 
 	describe("PreClick attribute installation", function()
@@ -226,6 +247,97 @@ describe("HearthstoneController", function()
 			controller:PreClick()
 			assert.is_nil(Attrs(deps)["type"])
 			assert.not_equals("", deps.lastWarn or "")
+		end)
+	end)
+
+	describe("the fallback ladder", function()
+		-- The linked hearthstone is carried none of, and the toy is neither
+		-- linked nor pinned: it is simply owned and ready.
+		local function OnlyTheToyIsReady()
+			return MakeDeps({
+				links = { [7] = { [HEARTH] = true } },
+				pins = {},
+				adapter = Adapter({
+					hasToy = function(itemID) return itemID == TOY end,
+				}),
+			})
+		end
+
+		it("uses a hearthstone the character owns when nothing linked is ready", function()
+			local deps = OnlyTheToyIsReady()
+			local controller = HearthstoneController.New(deps)
+			controller:PreClick()
+			assert.equals("toy", Attrs(deps)["type"])
+			assert.equals(TOY, Attrs(deps).toy)
+		end)
+
+		it("states what happened rather than flashing a refusal", function()
+			local deps = OnlyTheToyIsReady()
+			local controller = HearthstoneController.New(deps)
+			controller:PreClick()
+			assert.equals("hearthstone: no usable linked or pinned hearthstone right now, "
+				.. "so this is one you own.", deps.lastSay)
+			assert.is_nil(deps.lastWarn)
+		end)
+
+		it("keeps quiet when the linked hearthstone is the one served", function()
+			local deps = MakeDeps({
+				links = { [7] = { [HEARTH] = true } },
+				pins = {},
+			})
+			local controller = HearthstoneController.New(deps)
+			controller:PreClick()
+			assert.equals("item:" .. HEARTH, Attrs(deps).item)
+			assert.is_nil(deps.lastSay)
+		end)
+
+		it("counts a worn hearthstone the bags do not carry", function()
+			local deps = MakeDeps({
+				registry = {
+					VERSION = 1,
+					entries = { [SLIPPERS] = { kind = "item", equippable = true } },
+				},
+				links = {},
+				pins = {},
+				adapter = Adapter({
+					isEquipped = function(itemID) return itemID == SLIPPERS end,
+				}),
+			})
+			local controller = HearthstoneController.New(deps)
+			controller:PreClick()
+			assert.equals("item:" .. SLIPPERS, Attrs(deps).item)
+		end)
+
+		it("refuses when everything owned is still on cooldown, and says so", function()
+			local deps = MakeDeps({
+				links = { [7] = { [HEARTH] = true } },
+				pins = {},
+				adapter = Adapter({
+					hasToy = function(itemID) return itemID == TOY end,
+					itemCount = function(itemID) return itemID == HEARTH and 1 or 0 end,
+					getCooldown = function() return 100, 600, 1 end,
+				}),
+			})
+			local controller = HearthstoneController.New(deps)
+			controller:PreClick()
+			assert.is_nil(Attrs(deps)["type"])
+			assert.equals("hearthstone: every hearthstone you own is still on cooldown.",
+				deps.lastWarn)
+		end)
+
+		it("refuses when the character owns none of the registry at all", function()
+			local deps = MakeDeps({
+				links = { [7] = { [HEARTH] = true } },
+				pins = {},
+				adapter = Adapter(),
+			})
+			local controller = HearthstoneController.New(deps)
+			controller:PreClick()
+			assert.is_nil(Attrs(deps)["type"])
+			assert.equals("hearthstone: no hearthstone on this character to fall back on yet.",
+				deps.lastWarn)
+			-- A refusal served nothing, so it records no rotation.
+			assert.is_nil(deps.rotationStates[7])
 		end)
 	end)
 

@@ -103,6 +103,10 @@ describe("TOC", function()
 				"RaceBody.lua", "LibraryUI.lua",
 			},
 			["ProbeRenderUI.lua"] = { "ClientProbe.lua" },
+			["HearthPick.lua"] = { "Rotation.lua" },
+			["HearthstoneController.lua"] = {
+				"OutfitCandidates.lua", "HearthPick.lua", "Rotation.lua",
+			},
 		}
 		for file, needed in pairs(dependencies) do
 			for _, other in ipairs(needed) do
