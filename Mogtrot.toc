@@ -36,6 +36,7 @@ CustomSetLibrarySyncAdapter.lua
 RaceBody.lua
 LibraryBody.lua
 ProbeRenderUI.lua
+LibraryZoom.lua
 LibraryUI.lua
 LibraryTransfer.lua
 LibraryDetailUI.lua

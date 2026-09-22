@@ -1258,18 +1258,21 @@ function DevCommands.Dispatch(Addon, deps, cmd)
 	end
 
 
-	-- The library's mounted cards are framed by pulling the camera in by a
-	-- fraction of the scene's own distance. The right fraction is a matter of
-	-- looking at it, so it is tunable in game rather than guessed in a file.
+	-- The same number the library's zoom buttons write, typed exactly: how
+	-- close the whole wall sits against the way a card is normally framed,
+	-- smaller being closer. The bounds come from the module that clamps it,
+	-- so there is one answer to what a usable zoom is.
 	local mountZoom = cmd:match("^mountzoom%s+([%d%.]+)$")
 	if MogtrotDB.debug and mountZoom then
+		local Zooms = ns.LibraryZoom
 		local value = tonumber(mountZoom)
-		if not value or value <= 0.05 or value > 3 then
-			Addon:Warn("mount zoom wants a number between 0.05 and 3.")
+		if not (value and value >= Zooms.MIN and value <= Zooms.MAX) then
+			Addon:Warn("library zoom wants a number between %s and %s.",
+				Zooms.MIN, Zooms.MAX)
 			return true
 		end
 		MogtrotDB.mountZoom = value
-		Addon:Debug("mount zoom = %s (smaller is closer)", tostring(value))
+		Addon:Debug("library zoom = %s (smaller is closer)", tostring(value))
 		if ns.LibraryUI then ns.LibraryUI.Refresh() end
 		return true
 	end

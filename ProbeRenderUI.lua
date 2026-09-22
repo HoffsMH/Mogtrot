@@ -100,9 +100,10 @@ local function PreparedActor(scene, raceFile, sex, altered)
 	local ok = pcall(scene.TransitionToModelSceneID, scene, DRESS_UP_SCENE_ID,
 		CAMERA_TRANSITION_TYPE_IMMEDIATE, CAMERA_MODIFICATION_TYPE_DISCARD, true)
 	if not ok then return nil, "transition failed" end
-	-- The transition resets the camera, so the remembered starting yaw is no
-	-- longer what the camera is actually at.
+	-- The transition resets the camera, so the remembered starting yaw and
+	-- distance are no longer what the camera is actually at.
 	scene.mogtrotBaseYaw = nil
+	scene.mogtrotBaseDistance = nil
 	if type(scene.GetPlayerActor) ~= "function" then return nil, "no player actor" end
 
 	-- Which actor answered is the difference between a body at the right scale
@@ -244,18 +245,38 @@ function ProbeRenderUI.TurnCamera(scene, degrees)
 	return (pcall(camera.SetYaw, camera, scene.mogtrotBaseYaw - math.rad(degrees)))
 end
 
--- Pulls the camera in by a fraction of its own distance. A mount scene is
--- framed for the mount journal's big panel, so in a card it reads as a distant
--- speck unless it is brought closer.
-function ProbeRenderUI.ZoomBy(scene, factor)
+-- Puts the camera at a fraction of the distance its scene shipped with, so
+-- one number frames scenes that were each built for a different panel.
+--
+-- The distance to measure from is recorded once per scene, like the base yaw,
+-- because the camera reports wherever it was last put: scaling what it reads
+-- back compounds every call and, driven from a drag, buries the camera in the
+-- model within a second.
+function ProbeRenderUI.ZoomTo(scene, factor)
 	local camera = ProbeRenderUI.Camera(scene)
 	if not camera or type(camera.GetZoomDistance) ~= "function" then return false end
-	local ok, distance = pcall(camera.GetZoomDistance, camera)
-	if not ok or type(distance) ~= "number" then return false end
+	if scene.mogtrotBaseDistance == nil then
+		local ok, distance = pcall(camera.GetZoomDistance, camera)
+		if not ok or type(distance) ~= "number" then return false end
+		-- A camera with no limits of its own answers zero, or nan, which
+		-- compares false to everything including itself.
+		if distance ~= distance or distance <= 0 then return false end
+		scene.mogtrotBaseDistance = distance
+	end
+
+	-- A zoom is kept as a fraction of the span between the camera's own two
+	-- limits and saturated, so a distance outside that span is silently the
+	-- limit instead. Both ends move out of the way first, and they move the
+	-- same way every call so one factor always means one distance.
+	local distance = scene.mogtrotBaseDistance * factor
 	if type(camera.SetMinZoomDistance) == "function" then
 		pcall(camera.SetMinZoomDistance, camera, 0.01)
 	end
-	return (pcall(camera.SetZoomDistance, camera, distance * factor))
+	if type(camera.SetMaxZoomDistance) == "function" then
+		pcall(camera.SetMaxZoomDistance, camera,
+			math.max(distance, scene.mogtrotBaseDistance))
+	end
+	return (pcall(camera.SetZoomDistance, camera, distance))
 end
 
 -- A mount and a place to sit on it.
@@ -322,6 +343,7 @@ function ProbeRenderUI.PreparedMount(scene, mountID)
 	end
 
 	scene.mogtrotBaseYaw = nil
+	scene.mogtrotBaseDistance = nil
 
 	local rider
 	if not isSelfMount then
