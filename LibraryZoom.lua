@@ -17,8 +17,13 @@ local LibraryZoom = {}
 
 -- The bounds sit inside what the saved value is read back at, so a wall left
 -- at either end still looks the same after a reload.
+--
+-- The far end is where a card stops saying anything: a subject framed to fill
+-- the scene stands about a sixth of that height there, enough for a
+-- silhouette and a colour and no more, and the longest mounts are already
+-- whole in frame before it.
 LibraryZoom.MIN = 0.1
-LibraryZoom.MAX = 3
+LibraryZoom.MAX = 6
 
 -- Pixels of drag per halving or doubling, and clicks of the button per the
 -- same. Both slow enough to stop where you meant to.
