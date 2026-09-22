@@ -110,3 +110,105 @@ describe("PairingHeader toggles", function()
 		assert.equal("pins", PairingHeader.OtherMode(nil))
 	end)
 end)
+
+-- The library wears the same header. Its two exclusive modes are the same
+-- shape as the pairing window's domain word, so the mode is a word in the
+-- sentence and the library has no title and no tabs either.
+describe("PairingHeader.LibrarySegments", function()
+	it("reads as a sentence naming what is shown and how much of it", function()
+		assert.equal("Showing 50 of 247 looks from my characters",
+			Text(PairingHeader.LibrarySegments({ mode = "mine", shown = 50,
+				total = 247 })))
+	end)
+
+	-- The filter line below says why 50 of 247; saying "of 247" when nothing
+	-- was filtered out would invent a filter.
+	it("drops the comparison when nothing is filtered out", function()
+		assert.equal("Showing 247 looks from snapshots",
+			Text(PairingHeader.LibrarySegments({ mode = "snapshots", shown = 247,
+				total = 247 })))
+	end)
+
+	it("counts one look singular", function()
+		assert.equal("Showing 1 look from snapshots",
+			Text(PairingHeader.LibrarySegments({ mode = "snapshots", shown = 1,
+				total = 1 })))
+	end)
+
+	it("says an empty library is empty rather than counting to zero", function()
+		assert.equal("Showing no looks from my characters",
+			Text(PairingHeader.LibrarySegments({ mode = "mine", shown = 0,
+				total = 0 })))
+	end)
+
+	it("counts none of a full library when every look is filtered out", function()
+		assert.equal("Showing 0 of 247 looks from snapshots",
+			Text(PairingHeader.LibrarySegments({ mode = "snapshots", shown = 0,
+				total = 247 })))
+	end)
+
+	it("offers the mode as its only control", function()
+		assert.same({ "libraryMode" },
+			Actions(PairingHeader.LibrarySegments({ mode = "mine", shown = 3,
+				total = 3 })))
+	end)
+
+	it("names the mode it is showing", function()
+		local function IconFor(state)
+			for _, segment in ipairs(PairingHeader.LibrarySegments(state)) do
+				if segment.action == "libraryMode" then return segment.icon end
+			end
+		end
+		assert.equal("characters", IconFor({ mode = "mine" }))
+		assert.equal("snapshots", IconFor({ mode = "snapshots" }))
+	end)
+
+	it("falls back to a whole sentence for a malformed state", function()
+		assert.equal("Showing no looks from snapshots",
+			Text(PairingHeader.LibrarySegments(nil)))
+		assert.equal("Showing no looks from snapshots",
+			Text(PairingHeader.LibrarySegments({})))
+	end)
+
+	-- Same default as LibraryFilter's: anything that is not "mine" is the
+	-- snapshot wall, so the sentence can never disagree with the cards.
+	it("resolves an unknown mode to snapshots", function()
+		assert.equal("snapshots", PairingHeader.LibraryMode("bananas"))
+		assert.equal("snapshots", PairingHeader.LibraryMode(nil))
+		assert.equal("mine", PairingHeader.LibraryMode("mine"))
+	end)
+end)
+
+-- A word that stands for one of a fixed set opens a menu of that set, and the
+-- rows in it are the words the sentence would read, so one vocabulary serves
+-- both.
+describe("PairingHeader.Choices", function()
+	local function Values(choices)
+		local out = {}
+		for _, choice in ipairs(choices) do out[#out + 1] = choice.value end
+		return out
+	end
+
+	it("offers both domains behind the domain word", function()
+		assert.same({ "mounts", "hearthstones" },
+			Values(PairingHeader.Choices("domain")))
+	end)
+
+	it("offers both library modes behind the library's mode word", function()
+		assert.same({ "mine", "snapshots" },
+			Values(PairingHeader.Choices("libraryMode")))
+	end)
+
+	it("reads each choice the way the sentence would", function()
+		local choices = PairingHeader.Choices("libraryMode")
+		assert.equal("my characters", choices[1].text)
+		assert.equal("characters", choices[1].icon)
+		assert.equal("snapshots", choices[2].text)
+		assert.equal("snapshots", choices[2].icon)
+	end)
+
+	it("offers nothing for a word that is not one of a fixed set", function()
+		assert.same({}, PairingHeader.Choices("outfit"))
+		assert.same({}, PairingHeader.Choices(nil))
+	end)
+end)

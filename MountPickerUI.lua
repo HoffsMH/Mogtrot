@@ -626,7 +626,7 @@ local function HeaderAction(action, segment)
 		return Addon:SetMountPickerPinMode()
 	end
 	if action ~= "domain" then return end
-	ns.PairingHeaderUI.ShowDomainMenu(segment, ShowDomain)
+	ns.PairingHeaderUI.ShowMenu(segment, "domain", ShowDomain)
 end
 
 function Addon:PaintPickerChrome()
@@ -771,7 +771,7 @@ local function EnsureMountPicker()
 	-- so it is laid out from PairingHeader's segments rather than from fixed
 	-- widgets. Nothing here knows what the sentence says.
 	mountPicker.PaintHeader = ns.PairingHeaderUI.New(mountPicker.HeaderRow,
-		PICKER_HEADER_CONTROL_H, HeaderAction)
+		PICKER_HEADER_CONTROL_H, HeaderAction, ns.PairingHeader.Segments)
 
 	mountPicker.SearchBox = CreateFrame("EditBox", nil, mountPicker, "SearchBoxTemplate")
 	mountPicker.SearchBox:SetSize(220, 20)

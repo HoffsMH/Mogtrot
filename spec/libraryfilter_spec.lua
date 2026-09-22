@@ -362,3 +362,40 @@ describe("LibraryFilter.Order", function()
 		assert.same(list, LibraryFilter.Order(list, nil, nil))
 	end)
 end)
+
+-- The header says "50 of 247 looks from my characters", so the 247 has to be
+-- the wall you are on. The other mode's looks are not 247 minus 50; they are a
+-- different collection that this sentence is not about.
+describe("LibraryFilter.ModeCount", function()
+	local records = {
+		{ id = 1, source = "mine", guid = "P1" },
+		{ id = 2, source = "mine", guid = "P2" },
+		{ id = 3, raceID = 6, classID = 1 },
+	}
+
+	it("counts only your own characters' looks in that mode", function()
+		local state = LibraryFilter.New()
+		LibraryFilter.SetMode(state, "mine")
+		assert.equal(2, LibraryFilter.ModeCount(records, state))
+	end)
+
+	it("counts only snapshots in snapshot mode", function()
+		local state = LibraryFilter.New()
+		LibraryFilter.SetMode(state, "snapshots")
+		assert.equal(1, LibraryFilter.ModeCount(records, state))
+	end)
+
+	-- Whatever else is selected, this is the size of the wall before the
+	-- filters narrow it, or the count would compare a number against itself.
+	it("ignores the narrowing filters", function()
+		local state = LibraryFilter.New()
+		LibraryFilter.SetMode(state, "snapshots")
+		LibraryFilter.SelectNone(state)
+		assert.equal(1, LibraryFilter.ModeCount(records, state))
+	end)
+
+	it("counts nothing where there is nothing", function()
+		assert.equal(0, LibraryFilter.ModeCount({}, LibraryFilter.New()))
+		assert.equal(0, LibraryFilter.ModeCount(nil, nil))
+	end)
+end)
