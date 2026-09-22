@@ -284,6 +284,19 @@ function LibraryFilter.Apply(records, state)
 	return filtered
 end
 
+-- How many looks the mode holds before anything narrows it, which is what the
+-- header's "50 of 247" compares against. The other mode's looks are not the
+-- rest of that 247; they are a different wall.
+function LibraryFilter.ModeCount(records, state)
+	local snapshotMode = LibraryFilter.IsSnapshotMode(state)
+	local count = 0
+	for _, record in ipairs(type(records) == "table" and records or {}) do
+		local mine = record.source == "mine"
+		if mine ~= snapshotMode then count = count + 1 end
+	end
+	return count
+end
+
 function LibraryFilter.SOURCES()
 	return { "outfits", "customSets" }
 end

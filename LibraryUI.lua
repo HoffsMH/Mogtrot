@@ -16,7 +16,7 @@ local LibraryUI = {}
 local COLS = 4
 local CARD_W, CARD_H = 210, 320
 local GAP, MARGIN = 10, 14
-local HEADER, FOOTER = 110, 12
+local HEADER, FOOTER = 88, 12
 local BAR_GUTTER, BAR_GAP = 14, 6
 local ROWS_SHOWN = 2
 local LIBRARY_STRATA = "DIALOG"
@@ -324,6 +324,22 @@ local function OpenCharacterPicker()
 			end,
 		} },
 	})
+end
+
+-- What the changeable word in the header sentence does. How it looks is
+-- PairingHeaderUI's, and what it says is PairingHeader's.
+--
+-- A menu of the two rather than a toggle, the same as the pairing window's
+-- domain word: the two walls are unrelated collections, and a word that hides
+-- the other one makes you click it to find out what it was.
+local function HeaderAction(action, segment)
+	if action ~= "libraryMode" then return end
+	local Filter = ns.LibraryFilter
+	if not (Filter and raceFilter) then return end
+	ns.PairingHeaderUI.ShowMenu(segment, action, function(mode)
+		Filter.SetMode(raceFilter, mode)
+		LibraryUI.Refresh()
+	end)
 end
 
 -- Turns one card to the shared angle.
@@ -1175,18 +1191,24 @@ local function Ensure()
 				.. " and reuses that same macro every time after.")
 	end
 
-	window.Title = window:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-	window.Title:SetPoint("TOPLEFT", MARGIN + 2, -16)
-	window.Title:SetText("Mogtrot library")
+	-- The header is one sentence and the word that can change is its control,
+	-- so there is no window title and no tabs: "Showing 50 of 247 looks from my
+	-- characters" is both. Laid out from PairingHeader's segments, the same as
+	-- the pairing windows'.
+	window.HeaderRow = CreateFrame("Frame", nil, window)
+	window.HeaderRow:SetPoint("TOPLEFT", MARGIN + 2, -12)
+	window.HeaderRow:SetHeight(SWITCH_H)
+	window.PaintHeader = ns.PairingHeaderUI.New(window.HeaderRow, SWITCH_H,
+		HeaderAction, ns.PairingHeader.LibrarySegments)
 
-	window.Count = window:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-	window.Count:SetPoint("TOPLEFT", MARGIN + 2, -90)
-	window.Count:SetJustifyH("LEFT")
+	window.Status = window:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+	window.Status:SetPoint("TOPLEFT", MARGIN + 2, -68)
+	window.Status:SetJustifyH("LEFT")
 
 	window.Search = CreateFrame("EditBox", nil, window, "SearchBoxTemplate")
 	window.Search:SetSize(250, 20)
 	window.Search:SetAutoFocus(false)
-	window.Search:SetPoint("TOPLEFT", MARGIN + 2, -62)
+	window.Search:SetPoint("TOPLEFT", MARGIN + 2, -40)
 	if window.Search.Instructions then
 		window.Search.Instructions:SetText("Search character name")
 	end
@@ -1408,32 +1430,6 @@ local function Ensure()
 		GameTooltip:Show()
 	end)
 
-	window.ModeMine = BuildSwitch("My characters", 118)
-	window.ModeMine:SetScript("OnClick", function()
-		Filter.SetMode(raceFilter, "mine")
-		LibraryUI.Refresh()
-	end)
-	window.ModeMine:SetScript("OnEnter", function(self)
-		GameTooltip:SetOwner(self, "ANCHOR_BOTTOM")
-		GameTooltip:SetText("Your own characters")
-		GameTooltip:AddLine("Outfits and custom sets belonging to the characters"
-			.. " you pick.", 0.6, 0.6, 0.6, true)
-		GameTooltip:Show()
-	end)
-
-	window.ModeSnaps = BuildSwitch("Snapshots", 96)
-	window.ModeSnaps:SetScript("OnClick", function()
-		Filter.SetMode(raceFilter, "snapshots")
-		LibraryUI.Refresh()
-	end)
-	window.ModeSnaps:SetScript("OnEnter", function(self)
-		GameTooltip:SetOwner(self, "ANCHOR_BOTTOM")
-		GameTooltip:SetText("Other players you captured")
-		GameTooltip:AddLine("Recorded account-wide, so every character sees the"
-			.. " same ones. Narrowed by race, class and armour.", 0.6, 0.6, 0.6, true)
-		GameTooltip:Show()
-	end)
-
 	window.Mine = BuildSwitch("My race", 82)
 	window.Mine:SetScript("OnClick", function()
 		viewMode = "mine"
@@ -1485,8 +1481,9 @@ local function Ensure()
 	window.Original:SetPoint("RIGHT", window.OrLabel, "LEFT", -6, 0)
 	window.ShowLabel:SetPoint("RIGHT", window.Original, "LEFT", -8, 0)
 	window.Mounted:SetPoint("TOPRIGHT", window.Close, "TOPLEFT", -6, -34)
-	window.ModeMine:SetPoint("TOPLEFT", window, "TOPLEFT", MARGIN + 2, -32)
-	window.ModeSnaps:SetPoint("LEFT", window.ModeMine, "RIGHT", 0, 0)
+	-- The sentence shares its row with the body switches, so it ends where
+	-- they begin.
+	window.HeaderRow:SetPoint("RIGHT", window.ShowLabel, "LEFT", -10, 0)
 
 	-- A body can only be borrowed from somebody the client will name, and in a
 	-- crowd that is almost never a nameplate: friendly player nameplates are
@@ -1949,19 +1946,14 @@ function LibraryUI.Refresh()
 		window.Mounted.Text:SetTextColor(0.7, 0.7, 0.7)
 	end
 
-	-- Same three-state colouring as the view switches beside them.
 	local snapshotMode = not Filter or Filter.IsSnapshotMode(raceFilter)
-	local function PaintMode(button, selected)
-		if selected then
-			button:SetBackdropBorderColor(1, 0.82, 0, 1)
-			button.Text:SetTextColor(1, 0.82, 0)
-		else
-			button:SetBackdropBorderColor(0.5, 0.5, 0.5, 1)
-			button.Text:SetTextColor(0.7, 0.7, 0.7)
-		end
-	end
-	PaintMode(window.ModeMine, not snapshotMode)
-	PaintMode(window.ModeSnaps, snapshotMode)
+	-- The sentence says which wall you are on and how much of it is showing;
+	-- the line under it says why that is not all of it.
+	window.PaintHeader({
+		mode = snapshotMode and "snapshots" or "mine",
+		shown = #list,
+		total = Filter and Filter.ModeCount(allRecords, raceFilter) or #allRecords,
+	})
 
 	-- Only one mode has characters to choose between, and the box searches a
 	-- different thing in each.
@@ -2004,31 +1996,28 @@ function LibraryUI.Refresh()
 	window.Box:SetDataProvider(CreateDataProvider(list),
 		ScrollBoxConstants.RetainScrollPosition)
 
+	-- The count is in the sentence above, so this line is only the filters and
+	-- the bodies. Saying either of those twice would make the header look like
+	-- it disagreed with itself.
+	local filterStatus = window.FilterDropdown
+		and window.FilterDropdown.mogtrotStatus
+		or "Race: All | Class: All | Armor: All"
 	if #list == 0 then
 		if #allRecords == 0 then
-			window.Count:SetText("nothing captured yet: target someone and /mogtrot snap")
+			window.Status:SetText("nothing captured yet: target someone and /mogtrot snap")
 		else
-			window.Count:SetText(("0 of %d look(s) match | %s"):format(#allRecords,
-				window.FilterDropdown.mogtrotStatus
-				or "Race: All | Class: All | Armor: All"))
+			window.Status:SetText(filterStatus)
 		end
+	elseif showing then
+		window.Status:SetText(("%s | each on their own race and sex."
+			.. " Right-click a card, drag to turn them all."):format(filterStatus))
+	elseif fullFidelity then
+		window.Status:SetText(("%s | all shown on you by choice."
+			.. " Right-click a card, drag to turn them all."):format(filterStatus))
 	else
-		local prefix = #list == #allRecords and ("%d look(s)"):format(#list)
-			or ("%d of %d look(s)"):format(#list, #allRecords)
-		local filterStatus = window.FilterDropdown
-			and window.FilterDropdown.mogtrotStatus
-			or "Race: All | Class: All | Armor: All"
-		if showing then
-			window.Count:SetText(("%s | %s | each on their own race and sex."
-				.. " Right-click a card, drag to turn them all."):format(prefix, filterStatus))
-		elseif fullFidelity then
-			window.Count:SetText(("%s | %s | all shown on you by choice."
-				.. " Right-click a card, drag to turn them all."):format(prefix, filterStatus))
-		else
-			window.Count:SetText(("%s | %s | all shown on you. Hover or target"
-				.. " anyone of the other sex to see them on their own bodies"
-				.. " (%d still need one)."):format(prefix, filterStatus, waiting))
-		end
+		window.Status:SetText(("%s | all shown on you. Hover or target"
+			.. " anyone of the other sex to see them on their own bodies"
+			.. " (%d still need one)."):format(filterStatus, waiting))
 	end
 end
 

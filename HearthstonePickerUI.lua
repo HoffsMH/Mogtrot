@@ -361,7 +361,7 @@ function HearthstonePickerUI.Attach(Addon, deps)
 					return SetPinMode()
 				end
 				if action ~= "domain" then return end
-				ns.PairingHeaderUI.ShowDomainMenu(segment, function(choice)
+				ns.PairingHeaderUI.ShowMenu(segment, "domain", function(choice)
 					if choice == "hearthstones" then return end
 					if picker.mode == "pins" then
 						if Addon.OpenMountPins then Addon:OpenMountPins() end
@@ -369,7 +369,7 @@ function HearthstonePickerUI.Attach(Addon, deps)
 						Addon:OpenMountPicker(picker.outfitID)
 					end
 				end)
-			end)
+			end, ns.PairingHeader.Segments)
 
 		picker.SearchBox = CreateFrame("EditBox", nil, picker, "SearchBoxTemplate")
 		picker.SearchBox:SetSize(220, 20)

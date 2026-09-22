@@ -4,9 +4,10 @@ local _, ns = ...
 -- and every changeable word as a boxed, iconed button.
 --
 -- Shared, because the mount window and the hearthstone window are two views
--- of one question and their headers must read identically. Written twice they
--- would drift, and the first sign of that is a window you can switch out of
--- but not back into.
+-- of one question and their headers must read identically, and because the
+-- library's header is the same sentence about a different collection. Written
+-- twice they would drift, and the first sign of that is a window you can
+-- switch out of but not back into.
 --
 -- The window supplies what each word does; this knows only how one looks.
 local PairingHeaderUI = {}
@@ -25,6 +26,10 @@ local TIP = {
 	outfit = { "Choose another outfit", "Click to select an outfit." },
 	mode = { "Switch between an outfit and your pins",
 		"Pins belong to the account; an outfit's links belong to that outfit." },
+	libraryMode = { "Switch what the library shows",
+		"Your own characters' outfits and custom sets, or the snapshots you took"
+			.. " of other players. Snapshots are account-wide and are narrowed by"
+			.. " race, class and armour." },
 }
 
 -- Returns the texture and whether it is an atlas, because the two need
@@ -41,29 +46,39 @@ local function IconFor(name, outfitIcon)
 	end
 	if name == "outfit" then return outfitIcon, false end
 	if name == "pins" then return "auctionhouse-icon-favorite", true end
+	if name == "characters" then return "socialqueuing-icon-group", true end
+	-- Whatever the snap macro wears, since the snap macro is what makes these.
+	if name == "snapshots" then
+		local Macro = ns.Macro
+		return Macro and Macro.FixedIcon(Macro.SNAP) or nil, false
+	end
 	return nil, false
 end
 
 PairingHeaderUI.Icon = IconFor
 
--- The domain menu, shared so both windows offer the same one.
+-- The menu behind a word that stands for one of a fixed set: the domain in
+-- the pairing windows, the mode in the library. Which words those are and how
+-- their rows read is PairingHeader.Choices'.
 --
 -- Plain buttons rather than radios: the sentence behind the menu already says
--- which domain you are on, so a dot repeats it and costs the row its left
--- edge. The icon goes there instead, and a minimum width keeps the rows the
--- same size rather than one per word length.
+-- which one you are on, so a dot repeats it and costs the row its left edge.
+-- The icon goes there instead, and a minimum width keeps the rows the same
+-- size rather than one per word length.
 local MENU_ICON = 16
 local MENU_WIDTH = 170
 
-function PairingHeaderUI.ShowDomainMenu(anchor, onChoose)
+function PairingHeaderUI.ShowMenu(anchor, action, onChoose)
 	if not (MenuUtil and anchor) then return end
+	local choices = ns.PairingHeader.Choices(action)
+	if #choices == 0 then return end
 	MenuUtil.CreateContextMenu(anchor, function(_owner, root)
 		root:SetMinimumWidth(MENU_WIDTH)
-		for _, domain in ipairs(ns.PairingHeader.DOMAINS) do
-			local choice = domain
-			local entry = root:CreateButton(choice, function() onChoose(choice) end)
+		for _, choice in ipairs(choices) do
+			local value = choice.value
+			local entry = root:CreateButton(choice.text, function() onChoose(value) end)
 			entry:AddInitializer(function(button)
-				local icon, isAtlas = IconFor(choice)
+				local icon, isAtlas = IconFor(choice.icon)
 				local texture = button:AttachTexture()
 				texture:SetSize(MENU_ICON, MENU_ICON)
 				texture:SetPoint("LEFT", button, "LEFT", 4, 0)
@@ -91,8 +106,13 @@ end
 
 -- row is the frame the sentence is laid out in, left to right. height is the
 -- row's own height so a boxed word fills it. onClick(action, segment) is
--- called with "domain", "outfit" or "mode", and the widget clicked.
-function PairingHeaderUI.New(row, height, onClick)
+-- called with the action the word carries and the widget clicked.
+--
+-- sentence is which of PairingHeader's sentences this row says. A window
+-- names it once, here, rather than at every paint, and there is no default:
+-- a window that forgot would otherwise lay out somebody else's sentence and
+-- look like it meant to.
+function PairingHeaderUI.New(row, height, onClick, sentence)
 	local segments = {}
 
 	-- The segment goes back with the action so a caller can hang a menu off
@@ -119,9 +139,10 @@ function PairingHeaderUI.New(row, height, onClick)
 		return segment
 	end
 
-	-- state is PairingHeader's, plus outfitIcon for the outfit word.
+	-- state is whatever this row's sentence reads, plus outfitIcon for a word
+	-- that names an outfit.
 	return function(state)
-		local parts = ns.PairingHeader.Segments(state)
+		local parts = sentence(state)
 		local anchor
 		for index, part in ipairs(parts) do
 			local segment = Acquire(index)
