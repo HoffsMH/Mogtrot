@@ -88,17 +88,42 @@ local function LessOutfitID(a, b)
 	return tostring(a) < tostring(b)
 end
 
--- The one link that stands for the whole set, plus how many there are.
--- Lowest id wins: it is stable as links come and go, which a row's icon and a
--- macro's icon both need, and it is the rule the outfit list already used
--- inline before anything else wanted the same answer.
-function OutfitLinks.Representative(store, outfitID)
+-- The one id that stands for a whole set, plus how many there are. Lowest id
+-- wins: it is stable as members come and go, which a row's icon and a macro's
+-- icon both need, and it is the rule the outfit list already used inline
+-- before anything else wanted the same answer.
+--
+-- Takes a bare set, so a caller holding a set that is not a store entry - the
+-- links-and-pins union the summon and hearth keys draw from - gets the same
+-- answer by the same rule.
+function OutfitLinks.RepresentativeOf(set)
 	local best, count = nil, 0
-	for linkedID in pairs((store or {})[outfitID] or {}) do
+	for linkedID in pairs(set or {}) do
 		count = count + 1
 		if best == nil or LessOutfitID(linkedID, best) then best = linkedID end
 	end
 	return best, count
+end
+
+function OutfitLinks.Representative(store, outfitID)
+	return OutfitLinks.RepresentativeOf((store or {})[outfitID])
+end
+
+-- The representative of a candidate set, preferring the members that are also
+-- links. Whoever assembled the set drew from links and from somewhere looser -
+-- pins - and this says which half the one id comes from.
+--
+-- Links win: a link is a deliberate pairing and a pin is a standing
+-- preference, so an acquisition auto-pinned this week must not displace the
+-- paired id. With no link in the set the looser half is the whole answer.
+-- Both halves are read by the same lowest-id rule.
+function OutfitLinks.RepresentativePreferring(candidates, links)
+	local preferred = {}
+	for id in pairs(candidates or {}) do
+		if links and links[id] then preferred[id] = true end
+	end
+	if next(preferred) then return OutfitLinks.RepresentativeOf(preferred) end
+	return OutfitLinks.RepresentativeOf(candidates)
 end
 
 function OutfitLinks.IndexByLinked(store)

@@ -461,6 +461,7 @@ function Addon:ToggleMountPin(mountID)
 		Pins.Pin(domain, mountID, time())
 	end
 	self:RepaintMountCards()
+	self:CompanionChoiceChanged()
 end
 
 function Addon:SetMountPinDays(mountID, days)
@@ -472,8 +473,11 @@ end
 function Addon:KeepMountPinned(mountID)
 	local domain = MountPinDomain()
 	if not domain then return end
+	-- Keep re-pins a suppressed mount, so this puts one back in the pool the
+	-- summon key draws from and the macro icon has to be asked again.
 	Pins.Keep(domain, mountID, time())
 	self:RepaintMountCards()
+	self:CompanionChoiceChanged()
 end
 
 	local controller = {}

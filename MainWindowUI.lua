@@ -351,6 +351,9 @@ function MainWindowUI.Attach(Addon, deps)
 				local mounts = MountPinOptOut()
 				if not mounts then return MenuResponse.Refresh end
 				mounts[outfitID] = not mounts[outfitID] and true or nil
+				-- Admitting or excluding pins changes what this outfit's
+				-- summon key draws from, so the macro icon is now stale.
+				if Addon.CompanionChoiceChanged then Addon:CompanionChoiceChanged() end
 				return MenuResponse.Refresh
 			end)
 
