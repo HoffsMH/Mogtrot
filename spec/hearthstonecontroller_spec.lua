@@ -31,7 +31,7 @@
 local HearthstoneController = require("HearthstoneController")
 
 describe("HearthstoneController", function()
-	local HEARTH, TOY, SLIPPERS = 6948, 165802, 28585
+	local HEARTH, TOY = 6948, 165802
 
 	local function MakeDeps(overrides)
 		local deps
@@ -250,6 +250,55 @@ describe("HearthstoneController", function()
 		end)
 	end)
 
+	describe("eligibility by kind", function()
+		-- A toy's item ID is not a bag item, so the client's item usability
+		-- read answers unusable for every toy the player owns.
+		it("uses an owned toy the item usability read calls unusable", function()
+			local deps = MakeDeps({
+				links = { [7] = { [TOY] = true } },
+				pins = {},
+				adapter = Adapter({
+					hasToy = function(itemID) return itemID == TOY end,
+					isUsable = function() return false end,
+				}),
+			})
+			local controller = HearthstoneController.New(deps)
+			controller:PreClick()
+			assert.equals("toy", Attrs(deps)["type"])
+			assert.equals(TOY, Attrs(deps).toy)
+		end)
+
+		it("never asks the item usability read about a toy", function()
+			local asked = false
+			local deps = MakeDeps({
+				links = { [7] = { [TOY] = true } },
+				pins = {},
+				adapter = Adapter({
+					hasToy = function(itemID) return itemID == TOY end,
+					isUsable = function() asked = true return true end,
+				}),
+			})
+			HearthstoneController.New(deps):PreClick()
+			assert.is_false(asked)
+		end)
+
+		it("still asks whether a carried hearthstone can be used", function()
+			local deps = MakeDeps({
+				links = { [7] = { [HEARTH] = true } },
+				pins = {},
+				adapter = Adapter({
+					itemCount = function(itemID) return itemID == HEARTH and 1 or 0 end,
+					isUsable = function() return false end,
+				}),
+			})
+			local controller = HearthstoneController.New(deps)
+			controller:PreClick()
+			assert.is_nil(Attrs(deps)["type"])
+			assert.equals("hearthstone: no hearthstone you own can be used here.",
+				deps.lastWarn)
+		end)
+	end)
+
 	describe("the fallback ladder", function()
 		-- The linked hearthstone is carried none of, and the toy is neither
 		-- linked nor pinned: it is simply owned and ready.
@@ -276,7 +325,7 @@ describe("HearthstoneController", function()
 			local controller = HearthstoneController.New(deps)
 			controller:PreClick()
 			assert.equals("hearthstone: no usable linked or pinned hearthstone right now, "
-				.. "so this is one you own.", deps.lastSay)
+				.. "so this is a random hearthstone toy.", deps.lastSay)
 			assert.is_nil(deps.lastWarn)
 		end)
 
@@ -289,23 +338,6 @@ describe("HearthstoneController", function()
 			controller:PreClick()
 			assert.equals("item:" .. HEARTH, Attrs(deps).item)
 			assert.is_nil(deps.lastSay)
-		end)
-
-		it("counts a worn hearthstone the bags do not carry", function()
-			local deps = MakeDeps({
-				registry = {
-					VERSION = 1,
-					entries = { [SLIPPERS] = { kind = "item", equippable = true } },
-				},
-				links = {},
-				pins = {},
-				adapter = Adapter({
-					isEquipped = function(itemID) return itemID == SLIPPERS end,
-				}),
-			})
-			local controller = HearthstoneController.New(deps)
-			controller:PreClick()
-			assert.equals("item:" .. SLIPPERS, Attrs(deps).item)
 		end)
 
 		it("refuses when everything owned is still on cooldown, and says so", function()

@@ -51,25 +51,26 @@ end
 -- cooldown. Nothing is cached across clicks. An entry that is not ready says
 -- which of the three stopped it, so a refusal can tell owning none from
 -- owning none that are ready.
+--
+-- Usability splits on kind the way ownership does. The client's item
+-- usability read answers for something in your bags, and a toy is not in your
+-- bags, so it calls every toy you own unusable. There is no per-toy
+-- replacement: the Toy Box exposes usability as one of its own list filters
+-- and nothing else. Blizzard's Toy Box asks nothing either - it desaturates
+-- what you have not collected and leaves the cooldown swipe to say the rest -
+-- so an owned toy off cooldown counts as ready and the client refuses the
+-- ones it will not allow.
 local function Eligible(deps, itemID)
 	local entry = deps.registry.entries[itemID]
 	if not entry then return false, "unowned" end
 
-	local owned
 	if entry.kind == "toy" then
-		owned = deps.adapter.hasToy(itemID) and true or false
+		if not deps.adapter.hasToy(itemID) then return false, "unowned" end
 	else
-		owned = (deps.adapter.itemCount(itemID) or 0) > 0
-		-- A worn hearthstone carries a bag count of zero, so only entries the
-		-- registry marks equippable pay for the equipment check.
-		if not owned and entry.equippable and deps.adapter.isEquipped then
-			owned = deps.adapter.isEquipped(itemID) and true or false
+		if (deps.adapter.itemCount(itemID) or 0) <= 0 then return false, "unowned" end
+		if not deps.collection.UsableInfo(deps.adapter, itemID) then
+			return false, "unusable"
 		end
-	end
-	if not owned then return false, "unowned" end
-
-	if not deps.collection.UsableInfo(deps.adapter, itemID) then
-		return false, "unusable"
 	end
 
 	-- Cooldown is active only while start + duration is in the future; a
