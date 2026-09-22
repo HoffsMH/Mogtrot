@@ -20,7 +20,7 @@ Library.VERSION = 5
 local FIELDS = {
 	id = true, source = true,
 	origin = true, originID = true, originName = true, originIcon = true,
-	look = true, hidden = true, variants = true, scanned = true,
+	look = true, scanned = true,
 	archivedAt = true,
 	raceID = true, raceFile = true, sex = true, classID = true,
 	altRaceID = true, nativeForm = true,
@@ -136,7 +136,7 @@ local SNAP_FIELDS = {
 	"name", "realm", "guid", "title", "faction", "level", "specID",
 	"zone", "subZone", "mapID", "x", "y", "mount", "form",
 	"mythicPlus", "itemLevel",
-	"build", "tocVersion", "capturedBy", "hidden", "variants",
+	"build", "tocVersion", "capturedBy",
 }
 
 -- Builds a record from what the client answered about someone standing in

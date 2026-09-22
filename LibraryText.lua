@@ -127,7 +127,6 @@ local ORDER = {
 	{ "seenAt" }, { "lastSeen" }, { "seenCount" },
 	{ "savedAt" }, { "updatedAt" },
 	{ "build" }, { "tocVersion" }, { "capturedBy" },
-	{ "hidden" }, { "variants" },
 }
 
 -- Every field the schema knows, in a fixed order, then the look one slot per
