@@ -48,7 +48,7 @@ local DEFAULT_ZOOM = 1
 -- the controls write: LibraryZoom clamps inside them.
 local function Zoom()
 	local saved = MogtrotDB and tonumber(MogtrotDB.mountZoom)
-	if saved and saved > 0.05 and saved <= 3 then return saved end
+	if saved and saved > 0.05 and saved <= 6 then return saved end
 	return DEFAULT_ZOOM
 end
 

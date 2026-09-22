@@ -24,10 +24,10 @@ describe("LibraryZoom.Clamp", function()
 
 	-- Whatever it hands back has to survive being written to the saved
 	-- variables and read again, and the reader refuses anything at or below
-	-- 0.05 or above 3.
+	-- 0.05 or above 6.
 	it("stays inside what the saved value is read back at", function()
 		assert.is_true(LibraryZoom.MIN > 0.05)
-		assert.is_true(LibraryZoom.MAX <= 3)
+		assert.is_true(LibraryZoom.MAX <= 6)
 	end)
 
 	it("answers nothing for what is not a number", function()
@@ -126,6 +126,11 @@ describe("LibraryZoom.Magnification", function()
 	it("rounds to a whole percent", function()
 		assert.equal(118, LibraryZoom.Magnification(0.85))
 		assert.equal(33, LibraryZoom.Magnification(3))
+	end)
+
+	-- What the readout rests on with the wall dragged all the way out.
+	it("reads the far end of the range as seventeen percent", function()
+		assert.equal(17, LibraryZoom.Magnification(LibraryZoom.MAX))
 	end)
 
 	it("answers nothing for what is not a usable factor", function()
