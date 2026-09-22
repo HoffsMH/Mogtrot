@@ -2,6 +2,7 @@ local _, ns = ...
 if type(ns) ~= "table" then ns = {} end -- luacheck: ignore 331/ns
 
 local OutfitCandidates = ns.OutfitCandidates or require("OutfitCandidates")
+local HearthPick = ns.HearthPick or require("HearthPick")
 local Rotation = ns.Rotation or require("Rotation")
 
 -- Dependency-injected hearthstone controller. The picker button drives it:
@@ -10,6 +11,9 @@ local Rotation = ns.Rotation or require("Rotation")
 -- clears the transient attributes. Protected dispatch itself belongs to the
 -- secure handler - this module never calls UseToy/UseItem, and a failed use
 -- is never retried automatically.
+--
+-- Which hearthstone is served, and which rung of the fallback ladder serves
+-- it, belongs to HearthPick. This half supplies the live reads.
 --
 -- deps = {
 --     registry,          -- curated definitions (entries: itemID -> kind)
@@ -26,6 +30,7 @@ local Rotation = ns.Rotation or require("Rotation")
 --     combat,            -- function() -> bool
 --     now,               -- function() -> number, for cooldown math
 --     warn,              -- function(message) for visible refusals
+--     say,               -- function(message) for what just happened
 -- }
 --
 -- Rotation key: outfitID when one is active, otherwise the sentinel false
@@ -42,6 +47,41 @@ local function ClearAttributes(deps)
 	set(deps.button, "item", nil)
 end
 
+-- Action-time state, read fresh every click: ownership, usability and
+-- cooldown. Nothing is cached across clicks. An entry that is not ready says
+-- which of the three stopped it, so a refusal can tell owning none from
+-- owning none that are ready.
+local function Eligible(deps, itemID)
+	local entry = deps.registry.entries[itemID]
+	if not entry then return false, "unowned" end
+
+	local owned
+	if entry.kind == "toy" then
+		owned = deps.adapter.hasToy(itemID) and true or false
+	else
+		owned = (deps.adapter.itemCount(itemID) or 0) > 0
+		-- A worn hearthstone carries a bag count of zero, so only entries the
+		-- registry marks equippable pay for the equipment check.
+		if not owned and entry.equippable and deps.adapter.isEquipped then
+			owned = deps.adapter.isEquipped(itemID) and true or false
+		end
+	end
+	if not owned then return false, "unowned" end
+
+	if not deps.collection.UsableInfo(deps.adapter, itemID) then
+		return false, "unusable"
+	end
+
+	-- Cooldown is active only while start + duration is in the future; a
+	-- historical duration already elapsed is ready.
+	local start, duration = deps.collection.Cooldown(deps.adapter, itemID)
+	if type(start) == "number" and type(duration) == "number"
+		and duration > 0 and start + duration > deps.now() then
+		return false, "cooldown"
+	end
+	return true
+end
+
 function HearthstoneController.New(deps)
 	local controller = { choice = nil }
 
@@ -53,73 +93,51 @@ function HearthstoneController.New(deps)
 
 		ClearAttributes(deps)
 
-
 		local outfitID = deps.hasActiveOutfit() and deps.activeOutfitID() or nil
 		local candidates = OutfitCandidates.Resolve({
 			links = outfitID and deps.links and deps.links[outfitID] or nil,
 			pins = deps.pins,
-			isEligible = function(itemID)
-				local entry = deps.registry.entries[itemID]
-				if not entry then return false end
-				-- Action-time state, read fresh every click: ownership,
-				-- usability and cooldown. Nothing is cached across clicks.
-				local owned
-				if entry.kind == "toy" then
-					owned = deps.adapter.hasToy(itemID) and true or false
-				else
-					owned = (deps.adapter.itemCount(itemID) or 0) > 0
-				end
-				if not owned then return false end
-
-				local usable = deps.collection.UsableInfo(deps.adapter, itemID)
-				if not usable then return false end
-
-				-- Cooldown is active only while start + duration is in the
-				-- future; a historical duration already elapsed is ready.
-				local start, duration = deps.collection.Cooldown(deps.adapter, itemID)
-				if type(start) == "number" and type(duration) == "number"
-					and duration > 0 and start + duration > deps.now() then
-					return false
-				end
-				return true
-			end,
+			-- The ladder below owns eligibility, so here the sets only merge.
+			isEligible = function() return true end,
 			hasActiveOutfit = deps.hasActiveOutfit(),
 			pinsOptOut = outfitID and deps.pinsOptOut and deps.pinsOptOut[outfitID] or false,
 			-- Hearthstones are usable without an outfit: pins alone.
 			allowPinsWithoutOutfit = true,
 		})
 
-		local pool = {}
-		for itemID in pairs(candidates) do pool[#pool + 1] = itemID end
-		table.sort(pool) -- canonical numeric order before the deterministic pick
-
-		if #pool == 0 then
-			deps.warn("hearthstone: no usable linked or pinned hearthstone right now")
-			return
-		end
-
+		-- The state is published only once something is served, so a refusal
+		-- leaves no empty rotation behind in the saved variables.
 		local key = outfitID or NO_OUTFIT_KEY
-		local state = deps.rotationStates[key]
-		if not state then
-			state = {}
-			deps.rotationStates[key] = state
-		end
+		local state = deps.rotationStates[key] or {}
 
-		local chosen = Rotation.Choose(state, pool, deps.random)
-		if not chosen then
-			deps.warn("hearthstone: no usable linked or pinned hearthstone right now")
+		local plan = HearthPick.Plan({
+			candidates = candidates,
+			registry = deps.registry,
+			isEligible = function(itemID) return Eligible(deps, itemID) end,
+			state = state,
+			random = deps.random,
+		})
+
+		local text = HearthPick.Text(plan)
+		if plan.action == "refuse" then
+			deps.warn("hearthstone: " .. text)
 			return
 		end
+		-- A rung below the linked and pinned ones is not a refusal, so it is
+		-- said rather than flashed red.
+		if text then deps.say("hearthstone: " .. text) end
 
-		local entry = deps.registry.entries[chosen]
+		deps.rotationStates[key] = state
+
+		local entry = deps.registry.entries[plan.itemID]
 		if entry.kind == "toy" then
 			deps.button.SetAttribute(deps.button, "type", "toy")
-			deps.button.SetAttribute(deps.button, "toy", chosen)
+			deps.button.SetAttribute(deps.button, "toy", plan.itemID)
 		else
 			deps.button.SetAttribute(deps.button, "type", "item")
-			deps.button.SetAttribute(deps.button, "item", "item:" .. chosen)
+			deps.button.SetAttribute(deps.button, "item", "item:" .. plan.itemID)
 		end
-		controller.choice = { itemID = chosen, key = key, state = state }
+		controller.choice = { itemID = plan.itemID, key = key, state = state }
 	end
 
 	function controller.PostClick()
