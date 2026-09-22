@@ -1,9 +1,29 @@
 local _, ns = ...
 
--- Reads mounts used by linking, filtering, and summoning.
+local Pins = ns.Pins or require("Pins")
+
+-- Reads mounts used for linking, filtering, and summoning.
 local MountCollection = {}
 
 function MountCollection.Attach(Addon)
+
+local function MountPinDomain()
+	local db = MogtrotDB
+	local pins = db and db.pins
+	if type(pins) ~= "table" then return nil end
+	local domain = pins.mounts
+	if type(domain) ~= "table" or type(domain.records) ~= "table"
+		or domain.autoNew == nil or domain.days == nil then
+		return nil
+	end
+	return domain
+end
+
+local function ActiveMountPins()
+	local domain = MountPinDomain()
+	if not domain then return {} end
+	return Pins.ActiveSet(domain, time())
+end
 
 local MOUNT_TYPE = (Enum and Enum.MountType)
 	or { Ground = 0, Flying = 1, Aquatic = 2, Dragonriding = 3, RideAlong = 4 }
@@ -234,7 +254,7 @@ end
 local function CollectMounts(chosenFor)
 	local mounts = {}
 	local collectedIDs = {}
-	local pinned = ns.MountPins.ActiveSet(MogtrotDB, time())
+	local pinned = ActiveMountPins()
 	local linkCounts = {}
 	for mountID, outfits in pairs(ns.MountIndex.Build(MogtrotCharDB)) do
 		linkCounts[mountID] = #outfits

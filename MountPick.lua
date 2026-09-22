@@ -49,16 +49,16 @@ local function Fallback(request, cause)
 		end
 		return { action = "refuse", reason = "litemountunavailable", cause = cause }
 	end
+	-- A pin is a preference, not a restriction. Nothing pinned, nothing usable
+	-- here, nothing that suits the situation: all three mean the same thing,
+	-- which is that the pins have no opinion and the rungs below carry on.
+	-- Refusing instead would leave somebody on foot next to mounts they own.
 	if mode == "pinned" then
-		local mountID, useError = MountPick.Choose(config.set, request.usable,
+		local mountID = MountPick.Choose(config.set, request.usable,
 			request.random, request.preference)
 		if mountID then
 			return { action = "summon", mountID = mountID, from = "fallback", cause = cause }
 		end
-		if config.set and next(config.set) ~= nil then
-			return { action = "refuse", reason = "unusable", detail = useError, cause = cause }
-		end
-		return { action = "refuse", reason = "nopins", cause = cause }
 	end
 
 	-- Blizzard's random-favourite call can silently choose an unusable mount.

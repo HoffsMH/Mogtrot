@@ -79,6 +79,24 @@ describe("StartupGuard", function()
 		assert.equal("MogtrotDevDB", devMetadata.SavedVariables)
 		assert.equal("MogtrotDevCharDB", devMetadata.SavedVariablesPerCharacter)
 		assert.is_nil(devMetadata["X-Curse-Project-ID"])
-		assert.same(releaseFiles, devFiles)
+
+		-- The development build loads everything the release build does, plus
+		-- the probe commands, which no player install may contain.
+		local devOnly = { ["DevCommands.lua"] = true }
+		local shared = {}
+		for _, name in ipairs(devFiles) do
+			if not devOnly[name] then shared[#shared + 1] = name end
+		end
+		assert.same(releaseFiles, shared)
+		for name in pairs(devOnly) do
+			local found = false
+			for _, listed in ipairs(devFiles) do
+				if listed == name then found = true end
+			end
+			assert.is_true(found, name .. " is missing from MogtrotDev.toc")
+			for _, listed in ipairs(releaseFiles) do
+				assert.is_not.equal(name, listed)
+			end
+		end
 	end)
 end)

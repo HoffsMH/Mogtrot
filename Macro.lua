@@ -13,21 +13,26 @@ local Macro = {}
 Macro.PREFIX = "#mogtrot:"
 Macro.OPEN = "open"
 Macro.SUMMON = "summon"
-
+Macro.LEAST = "least"
+Macro.HEARTH = "hearth"
+Macro.SNAP = "snap"
 -- Per command: the named button the body clicks, and the macro's name. MogtrotToggle
--- is the secure toggle, which is what lets the open macro work in combat; MogtrotSummon
--- is the button that calls the same function the summon keybinding calls.
+-- is the secure toggle, MogtrotSummon calls the same function as the summon
+-- keybinding, and MogtrotLeastWorn chooses and wears an underused outfit.
 --
 -- One macro per command, so a name is never truncated to the 16-character cap,
--- uniquified, or checked against anything. Names differ only so the two are told
+-- uniquified, or checked against anything. Names differ so the macros are told
 -- apart in the macro list; identity is the marker line, never the name.
 Macro.DEFS = {
-	[Macro.OPEN] = { target = "MogtrotToggle", name = "Mogtrot" },
+	[Macro.OPEN] = { target = "MogtrotToggle", name = "Mogtrot", fixedIcon = 2869702 },
 	[Macro.SUMMON] = { target = "MogtrotSummon", name = "Mogtrot Mount" },
+	[Macro.LEAST] = { target = "MogtrotLeastWorn", name = "Mogtrot Least", fixedIcon = 237285 },
+	[Macro.HEARTH] = { target = "MogtrotHearthstone", name = "Mogtrot Hearth" },
+	[Macro.SNAP] = { body = "/mogtrot snap", name = "Mogtrot Snap", fixedIcon = 134442 },
 }
 
--- Fixed order, so anything listing both reads the same way every time.
-Macro.ORDER = { Macro.OPEN, Macro.SUMMON }
+-- Fixed order, so anything listing the macros reads the same way every time.
+Macro.ORDER = { Macro.OPEN, Macro.SUMMON, Macro.LEAST, Macro.HEARTH }
 
 function Macro.NameOf(command)
 	local def = Macro.DEFS[command]
@@ -37,7 +42,14 @@ end
 function Macro.Body(command)
 	local def = Macro.DEFS[command]
 	if not def then return nil end
-	return Macro.PREFIX .. command .. "\n/click " .. def.target
+	return Macro.PREFIX .. command .. "\n" .. (def.body or "/click " .. def.target)
+end
+
+-- The icon Mogtrot owns for a command, or nil when the macro's icon is
+-- runtime/user-chosen (summon) or the command has no definition yet.
+function Macro.FixedIcon(command)
+	local def = Macro.DEFS[command]
+	return def and def.fixedIcon or nil
 end
 
 -- The marker has to start a line, so "##mogtrot:open" and "#mogtrotfoo:open" are
@@ -106,9 +118,29 @@ function Macro.ActionBarCommands(slotCount, getActionInfo, getBody)
 	return found
 end
 
-function Macro.IconToApply(command, currentIcon, desiredIcon)
-	if command == Macro.OPEN and currentIcon ~= desiredIcon then
-		return desiredIcon
+function Macro.DragShown(forceShown, placed, command)
+	return forceShown or not placed[command]
+end
+
+-- OPEN and LEAST have fixed icons Mogtrot owns, so a macro the user renamed or
+-- a client that substituted its fallback icon gets corrected on the next
+-- refresh.
+--
+-- SUMMON and HEARTH own no constant: what they should show depends on what the
+-- active outfit is linked to, which only the caller can read. It arrives as
+-- wantedIcon, and a command with a fixed icon ignores it, so a caller can pass
+-- one for every command without deciding which kind it is.
+--
+-- Either way an icon already correct returns nil, because the only consumer
+-- writes with EditMacro and there is no reason to write what is already there.
+function Macro.IconToApply(command, currentIcon, wantedIcon)
+	local fixed = Macro.FixedIcon(command)
+	if fixed then
+		if currentIcon ~= fixed then return fixed end
+		return nil
+	end
+	if wantedIcon and currentIcon ~= wantedIcon then
+		return wantedIcon
 	end
 	return nil
 end

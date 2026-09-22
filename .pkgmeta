@@ -8,6 +8,7 @@ ignore:
   - .luacheckrc
   - .pkgmeta
   - CONTRIBUTING.md
+  - DevCommands.lua
   - MogtrotDev.toc
   - scripts
   - spec

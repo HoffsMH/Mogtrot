@@ -360,6 +360,103 @@ describe("Wear.Top", function()
 	end)
 end)
 
+describe("Wear.LeastWornEligible", function()
+	it("keeps live categorized outfits and excludes Unsorted and disabled outfits",
+		function()
+			local char = {
+				cats = {
+					[10] = { protected = nil },
+					[20] = { protected = true },
+				},
+				assign = { [1] = 10, [2] = 20, [3] = 10, [4] = 99 },
+			}
+			local outfits = {
+				[1] = {},
+				[2] = {},
+				[3] = { isDisabled = true },
+				[4] = {},
+			}
+
+			assert.same({ [1] = true }, Wear.LeastWornEligible(char, outfits))
+		end)
+
+	it("answers an empty set before character data is ready", function()
+		assert.same({}, Wear.LeastWornEligible(nil, { [1] = {} }))
+	end)
+end)
+
+describe("Wear.ChooseLeastWorn", function()
+	it("chooses from the least-worn twenty percent when that is more than five",
+		function()
+			local totals, eligible = {}, {}
+			for outfitID = 1, 30 do
+				totals[outfitID] = outfitID * 10
+				eligible[outfitID] = true
+			end
+
+			assert.equal(6, Wear.ChooseLeastWorn({ totals = totals }, eligible, nil,
+				function(count)
+					assert.equal(6, count)
+					return count
+				end))
+		end)
+
+	it("keeps at least five outfits in the candidate pool", function()
+		local totals, eligible = {}, {}
+		for outfitID = 1, 20 do
+			totals[outfitID] = outfitID * 10
+			eligible[outfitID] = true
+		end
+
+		assert.equal(5, Wear.ChooseLeastWorn({ totals = totals }, eligible, nil,
+			function(count)
+				assert.equal(5, count)
+				return count
+			end))
+	end)
+
+	it("treats an eligible outfit with no tracked time as least worn", function()
+		local snapshot = { totals = { [7] = 30, [8] = 60 } }
+		local eligible = { [7] = true, [8] = true, [9] = true }
+
+		assert.equal(9, Wear.ChooseLeastWorn(snapshot, eligible, nil,
+			function() return 1 end))
+	end)
+
+	it("includes every outfit tied at the cutoff", function()
+		local snapshot = {
+			totals = { [1] = 10, [2] = 20, [3] = 30, [4] = 40, [5] = 50, [6] = 50 },
+		}
+		local eligible = { [1] = true, [2] = true, [3] = true, [4] = true,
+			[5] = true, [6] = true }
+
+		assert.equal(6, Wear.ChooseLeastWorn(snapshot, eligible, nil,
+			function(count)
+				assert.equal(6, count)
+				return 6
+			end))
+	end)
+
+	it("leaves out the active outfit before ranking", function()
+		local snapshot = {
+			totals = { [1] = 10, [2] = 20, [3] = 30, [4] = 40, [5] = 50, [6] = 60 },
+		}
+		local eligible = { [1] = true, [2] = true, [3] = true, [4] = true,
+			[5] = true, [6] = true }
+
+		assert.equal(2, Wear.ChooseLeastWorn(snapshot, eligible, 1,
+			function(count)
+				assert.equal(5, count)
+				return 1
+			end))
+	end)
+
+	it("answers nothing when no other eligible outfit exists", function()
+		assert.is_nil(Wear.ChooseLeastWorn({ totals = {} }, { [1] = true }, 1,
+			function() return 1 end))
+	end)
+end)
+
 -- The whole point of holding the open interval in memory: a session that is never
 -- closed loses only that interval, and nothing on disk can be read as time that
 -- passed while logged out.
