@@ -95,6 +95,7 @@ describe("TOC", function()
 			["LibraryUI.lua"] = {
 				"Library.lua", "LibraryText.lua", "LookCodec.lua", "RaceBody.lua",
 				"DonorBody.lua", "ProbeRenderUI.lua", "CopyBox.lua", "ClientProbe.lua",
+				"LibraryZoom.lua",
 			},
 			["LibraryDetailUI.lua"] = { "LibraryText.lua", "LibraryUI.lua" },
 			["SnapCapture.lua"] = {

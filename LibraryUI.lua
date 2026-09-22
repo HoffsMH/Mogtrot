@@ -9,8 +9,9 @@ local _, ns = ...
 --
 -- The grid is Blizzard's scroll box, the same one the mount picker uses, so
 -- the wheel and the bar behave here the way they do there. Dragging a card
--- turns every model at once: a wall of portraits is for comparing them, and
--- comparing them means seeing them from one angle.
+-- moves every model at once, side to side to turn and up and down to zoom: a
+-- wall of portraits is for comparing them, and comparing them means seeing
+-- them the same way.
 local LibraryUI = {}
 
 local COLS = 4
@@ -24,20 +25,31 @@ local LIBRARY_STRATA = "DIALOG"
 -- Degrees of yaw per pixel dragged, slow enough to stop on a detail.
 local TURN_PER_PIXEL = 0.6
 
+-- A mount scene is framed for the mount journal's big panel, so in a card it
+-- reads as a distant speck until it is brought closer, while a dress-up scene
+-- is already framed for something card-shaped. Correcting for that is a
+-- property of the scene rather than a matter of taste, so it is a fraction of
+-- whatever distance the scene shipped with and it holds across mounts of very
+-- different sizes. Gentle on purpose: a big mount pulled in hard leaves
+-- nothing but a wing in frame once it turns.
+--
 -- The mount picker frames its cards by sliding the scene frame instead, which
 -- suits it: those cards show a mount alone and the complaint there was dead
 -- space under the name. Here the rider is the subject and has to be legible,
 -- which is a distance problem, not a position one.
--- A fraction of whatever distance the scene shipped with, not a fixed number,
--- so it holds across mounts of very different sizes. Gentle on purpose: a big
--- mount pulled in hard leaves nothing but a wing in frame once it turns.
--- Tunable in game with /mogtrot mountzoom while debug is on.
-local MOUNT_ZOOM = 0.85
+local MOUNT_FRAMING = 0.85
 
-local function MountZoom()
+-- What the wall is zoomed to on top of that framing, so one at the default
+-- means every card shows what it was framed to show. Dragging a card up and
+-- down moves it, the zoom buttons step it, and it is saved.
+local DEFAULT_ZOOM = 1
+
+-- Saved under mountZoom. The bounds read back here are wider than the ones
+-- the controls write: LibraryZoom clamps inside them.
+local function Zoom()
 	local saved = MogtrotDB and tonumber(MogtrotDB.mountZoom)
 	if saved and saved > 0.05 and saved <= 3 then return saved end
-	return MOUNT_ZOOM
+	return DEFAULT_ZOOM
 end
 
 local BACKDROP = {
@@ -359,11 +371,46 @@ local function TurnCard(card, degrees)
 	pcall(actor.SetYaw, actor, math.rad(degrees))
 end
 
-local function ApplyYaw()
+-- Zooms one card to the shared factor. Always the camera, mounted or not: an
+-- actor has no distance of its own to move, and the scene is what draws it.
+-- A mounted card folds its framing correction into the same call, so one zoom
+-- answers for both kinds of card.
+local function ZoomCard(card, factor)
+	local scene = card.body and card.body.scene
+	local render = ns.ProbeRenderUI
+	if not (scene and render) then return end
+	render.ZoomTo(scene, card.mountActor and factor * MOUNT_FRAMING or factor)
+end
+
+-- One card put the way the whole wall is: same angle, same distance.
+local function FrameCard(card)
+	TurnCard(card, yaw)
+	ZoomCard(card, Zoom())
+end
+
+local function ApplyFraming()
 	if not window or not window.Box then return end
-	window.Box:ForEachFrame(function(card)
-		TurnCard(card, yaw)
-	end)
+	window.Box:ForEachFrame(FrameCard)
+end
+
+-- What the zoom controls say, in a number that grows as the models do.
+local function ShowZoom()
+	local Zooms = ns.LibraryZoom
+	if not (window and window.ZoomLevel and Zooms) then return end
+	local percent = Zooms.Magnification(Zoom())
+	window.ZoomLevel.Text:SetText(percent and ("%d%%"):format(percent) or "--")
+end
+
+-- The one way in for every control: the drag, the buttons and the readout all
+-- go through here, so the saved value, the wall and the readout cannot
+-- disagree. A factor it cannot use leaves the zoom alone and still re-frames,
+-- because the drag turns the wall on the same call.
+local function SetZoom(factor)
+	local Zooms = ns.LibraryZoom
+	local value = Zooms and Zooms.Clamp(factor)
+	if value and MogtrotDB then MogtrotDB.mountZoom = value end
+	ShowZoom()
+	ApplyFraming()
 end
 
 -- How the client answers about a unit, for DonorBody. A unit the client
@@ -703,8 +750,8 @@ local function RenderCard(card, record)
 		if type(look) == "table" then
 			card.actor = entry.actor
 			-- A body taken back out of the pool is still facing wherever it was
-			-- left, so it is turned to whatever the wall is facing now.
-			TurnCard(card, yaw)
+			-- left, so it is put the way the wall is now.
+			FrameCard(card)
 			status = entry.note or ""
 			local reusedID = record.id
 			render.DressWhenLoaded(entry.actor, render.TransmogList(look),
@@ -735,7 +782,7 @@ local function RenderCard(card, record)
 		if mount and (isSelfMount or not rider) then
 			-- Still the thing to turn, even with nobody riding it.
 			card.actor, card.mountActor = mount, mount
-			TurnCard(card, yaw)
+			FrameCard(card)
 			return "they became the mount, so there is nobody to dress"
 		end
 
@@ -755,9 +802,8 @@ local function RenderCard(card, record)
 				Sheathe()
 
 				render.Seat(mount, rider, animID, kitID)
-				render.ZoomBy(entry.scene, MountZoom())
 				card.mountActor = mount
-				TurnCard(card, yaw)
+				FrameCard(card)
 
 				local note = ("mounted | %s"):format(how)
 				entry.note = note
@@ -799,7 +845,7 @@ local function RenderCard(card, record)
 	if not how then
 		return "no body for this record"
 	end
-	TurnCard(card, yaw)
+	FrameCard(card)
 
 	local look = codec.Decode(record.look)
 	if type(look) ~= "table" then
@@ -982,26 +1028,31 @@ local function Delete(record)
 	LibraryUI.Refresh()
 end
 
--- Drag to turn. The card owns the drag rather than the scene, so the wheel
--- stays with the list and a left-press never reaches the scene's own zoom.
-local function EndTurn(card)
-	card.turning = false
+-- Drag to turn and zoom: side to side turns the wall, up and down brings it
+-- closer. The card owns the drag rather than the scene, so the wheel stays
+-- with the list and a left-press never reaches the scene's own zoom.
+local function EndDrag(card)
+	card.dragging = false
 	card:SetScript("OnUpdate", nil)
 end
 
-local function BeginTurn(card)
-	local startX = GetCursorPosition()
-	local startYaw = yaw
-	card.turning = true
+local function BeginDrag(card)
+	local startX, startY = GetCursorPosition()
+	local startYaw, startZoom = yaw, Zoom()
+	card.dragging = true
 	card:SetScript("OnUpdate", function(self)
-		if not self.turning then return end
-		local x = GetCursorPosition()
+		if not self.dragging then return end
+		local x, y = GetCursorPosition()
 		-- Deliberately not wrapped into 0-360. An angle that jumps from 359 to
 		-- 1 is the same direction to a mathematician and a lurch to anybody
 		-- watching, because the model takes the long way round to get there.
 		-- Radians do not care how large the number is.
 		yaw = startYaw + (x - startX) * TURN_PER_PIXEL
-		ApplyYaw()
+		-- Both axes read from where the drag began rather than from the last
+		-- frame. Zoom multiplies, so a step per frame compounds sixty times a
+		-- second and ends inside the model.
+		local Zooms = ns.LibraryZoom
+		SetZoom(Zooms and Zooms.Drag(startZoom, startY, y))
 	end)
 end
 
@@ -1107,9 +1158,9 @@ local function BuildCard(card)
 
 	card:RegisterForClicks("LeftButtonUp", "RightButtonUp")
 	card:RegisterForDrag("LeftButton")
-	card:SetScript("OnDragStart", BeginTurn)
-	card:SetScript("OnDragStop", EndTurn)
-	card:SetScript("OnHide", EndTurn)
+	card:SetScript("OnDragStart", BeginDrag)
+	card:SetScript("OnDragStop", EndDrag)
+	card:SetScript("OnHide", EndDrag)
 
 	-- The wheel belongs to the list, not to the model under the pointer.
 	card:EnableMouseWheel(true)
@@ -1442,6 +1493,59 @@ local function Ensure()
 			0.6, 0.6, 0.6, true)
 		GameTooltip:Show()
 	end)
+
+	-- Zoom, on the row under the view switches. Dragging a card up and down
+	-- does the same thing, but a drag is invisible until somebody tries it,
+	-- and it cannot offer the way back: the readout is that, and says how far
+	-- from its normal framing the wall has been taken.
+	local function BuildZoomButton(label, width, steps)
+		local button = BuildSwitch(label, width)
+		button:SetBackdropBorderColor(1, 0.82, 0, 1)
+		button.Text:SetTextColor(1, 0.82, 0)
+		button:SetScript("OnClick", function()
+			local Zooms = ns.LibraryZoom
+			if not Zooms then return end
+			SetZoom(Zooms.Step(Zoom(), steps))
+		end)
+		return button
+	end
+
+	window.ZoomOut = BuildZoomButton("-", 24, -1)
+	window.ZoomOut:SetScript("OnEnter", function(self)
+		GameTooltip:SetOwner(self, "ANCHOR_BOTTOM")
+		GameTooltip:SetText("Zoom out")
+		GameTooltip:AddLine("Every model a step further away. Dragging a card"
+			.. " down does the same.", 0.6, 0.6, 0.6, true)
+		GameTooltip:Show()
+	end)
+
+	window.ZoomIn = BuildZoomButton("+", 24, 1)
+	window.ZoomIn:SetScript("OnEnter", function(self)
+		GameTooltip:SetOwner(self, "ANCHOR_BOTTOM")
+		GameTooltip:SetText("Zoom in")
+		GameTooltip:AddLine("Every model a step closer. Dragging a card up"
+			.. " does the same.", 0.6, 0.6, 0.6, true)
+		GameTooltip:Show()
+	end)
+
+	window.ZoomLevel = BuildSwitch("", 54)
+	window.ZoomLevel:SetBackdropBorderColor(0.5, 0.5, 0.5, 1)
+	window.ZoomLevel.Text:SetTextColor(0.7, 0.7, 0.7)
+	window.ZoomLevel:SetScript("OnClick", function()
+		SetZoom(DEFAULT_ZOOM)
+	end)
+	window.ZoomLevel:SetScript("OnEnter", function(self)
+		GameTooltip:SetOwner(self, "ANCHOR_BOTTOM")
+		GameTooltip:SetText("Zoom")
+		GameTooltip:AddLine("How close the wall is against the way a card is"
+			.. " normally framed. Kept until you change it.", 0.6, 0.6, 0.6, true)
+		GameTooltip:AddLine("Click to put it back.", 0.9, 0.9, 0.9, true)
+		GameTooltip:Show()
+	end)
+
+	window.ZoomLabel = window:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+	window.ZoomLabel:SetText("Zoom:")
+
 	window.ShowLabel = window:CreateFontString(nil, "OVERLAY", "GameFontNormal")
 	window.ShowLabel:SetText("Show:")
 	window.OrLabel = window:CreateFontString(nil, "OVERLAY", "GameFontNormal")
@@ -1481,8 +1585,13 @@ local function Ensure()
 	window.Original:SetPoint("RIGHT", window.OrLabel, "LEFT", -6, 0)
 	window.ShowLabel:SetPoint("RIGHT", window.Original, "LEFT", -8, 0)
 	window.Mounted:SetPoint("TOPRIGHT", window.Close, "TOPLEFT", -6, -34)
+	window.ZoomIn:SetPoint("RIGHT", window.Mounted, "LEFT", -8, 0)
+	window.ZoomLevel:SetPoint("RIGHT", window.ZoomIn, "LEFT", -4, 0)
+	window.ZoomOut:SetPoint("RIGHT", window.ZoomLevel, "LEFT", -4, 0)
+	window.ZoomLabel:SetPoint("RIGHT", window.ZoomOut, "LEFT", -8, 0)
 	-- The sentence shares its row with the body switches, so it ends where
-	-- they begin.
+	-- they begin. The zoom controls are on the row below, with the body
+	-- switch, so neither row has to make space for the other.
 	window.HeaderRow:SetPoint("RIGHT", window.ShowLabel, "LEFT", -10, 0)
 
 	-- A body can only be borrowed from somebody the client will name, and in a
@@ -1945,6 +2054,8 @@ function LibraryUI.Refresh()
 		window.Mounted:SetBackdropBorderColor(0.5, 0.5, 0.5, 1)
 		window.Mounted.Text:SetTextColor(0.7, 0.7, 0.7)
 	end
+
+	ShowZoom()
 
 	local snapshotMode = not Filter or Filter.IsSnapshotMode(raceFilter)
 	-- The sentence says which wall you are on and how much of it is showing;
