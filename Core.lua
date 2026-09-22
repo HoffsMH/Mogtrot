@@ -594,21 +594,24 @@ function Addon:WearSnapshot()
 	return Wear.Snapshot(WearSession(), GetTime(), LiveOutfits(self))
 end
 
--- What the summon and hearth keys draw from right now, resolved by the one
--- module both ladders resolve their pool with, so an icon can never disagree
--- with its key about whether a pin is in play.
+-- What the summon and hearth keys draw from right now. Each mirrors the
+-- OutfitCandidates.Resolve its own ladder makes - the same links, the same
+-- pins, the same opt-out - so an icon can never disagree with its key about
+-- what is in play, and an icon follows a ladder that changes its top rung.
 --
--- Eligibility here is ownership alone. The ladders also drop what is unusable
--- or on cooldown, but those are situational: an icon that changed as you
--- stepped into water, or every time you hearthed, would be noise on an action
--- bar. Below this set both ladders pick at random and the mount one falls
--- through to random favourites, and a random choice has no icon to show.
+-- Only that rung. Below it both ladders pick at random, and the mount one
+-- falls through to random favourites, so there is nothing single to draw.
 local function SummonCandidates(outfitID)
 	local optOut = MogtrotCharDB.pinOptOut
 	local links = MogtrotCharDB.mounts[outfitID]
 	return OutfitCandidates.Resolve({
 		links = links,
 		pins = Pins.ActiveSet(MountPinDomain(MogtrotDB) or {}, time()),
+		-- The mount ladder filters here, and account-wide pins make that
+		-- matter: a mount learned on a Horde alt is hidden on this character
+		-- and the key would never reach it. Usability is left out of the
+		-- reading, because an icon that changed as you stepped into water
+		-- would be noise on an action bar.
 		isEligible = function(mountID)
 			local name, _spellID, _icon, _isActive, _isUsable, _sourceType,
 				_isFavorite, _isFactionSpecific, _faction, shouldHideOnChar,
@@ -629,12 +632,11 @@ local function HearthstoneCandidates(outfitID)
 	return OutfitCandidates.Resolve({
 		links = links,
 		pins = Pins.ActiveSet(PinDomain(MogtrotDB, "hearthstones") or {}, time()),
-		isEligible = function(itemID)
-			local entry = ns.HearthstoneDefinitions.Lookup(itemID)
-			if not entry then return false end
-			if entry.kind == "toy" then return hearthstoneAdapter.hasToy(itemID) end
-			return (hearthstoneAdapter.itemCount(itemID) or 0) > 0
-		end,
+		-- The hearth ladder merges only here and owns eligibility below, so
+		-- reading it a second time would be a second answer to the same
+		-- question. What it would drop is mostly cooldown anyway, and an icon
+		-- that changed every time you hearthed would be the same noise.
+		isEligible = function() return true end,
 		hasActiveOutfit = outfitID ~= nil,
 		pinsOptOut = outfitID and optOut and optOut[outfitID] and true or false,
 		allowPinsWithoutOutfit = true,
