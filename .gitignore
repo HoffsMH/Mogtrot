@@ -1,2 +1,5 @@
 # luac writes here when no output path is given.
 luac.out
+
+# Private agent orientation.
+AGENTS.md
