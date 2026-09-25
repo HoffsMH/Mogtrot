@@ -645,6 +645,16 @@ describe("Tree.UntouchedSlot", function()
 		end
 	end)
 
+	-- The login sweep stores a look for every outfit it reads, an unused slot
+	-- included, so an all-empty look is not a sign that anyone touched it.
+	it("calls an outfit whose stored look is all empty an unused slot", function()
+		db.looks = { [7] = { [1] = { 0, 0, 0 }, [5] = { 0, 0, 0 } } }
+		assert.is_true(Tree.UntouchedSlot(db, slot(), DEFAULT))
+
+		db.looks[7][5] = { 123, 0, 0 }
+		assert.is_false(Tree.UntouchedSlot(db, slot(), DEFAULT))
+	end)
+
 	it("reads a measured slot count, so a save brings the row back", function()
 		db.slots[7] = { covered = 0, total = 14 }
 		assert.is_true(Tree.UntouchedSlot(db, slot(), DEFAULT))
