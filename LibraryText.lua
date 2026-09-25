@@ -31,6 +31,18 @@ function LibraryText.Title(record)
 	return ("Look #%s"):format(tostring(record.id or "?"))
 end
 
+-- The line on the snap confirmation. A repeat sighting says so rather than
+-- implying something new was stored.
+function LibraryText.Confirmation(record, isNew)
+	if type(record) ~= "table" then return "" end
+	local line = ("%s %s"):format(LibraryText.Title(record),
+		isNew and "captured" or "seen again")
+	if type(record.name) ~= "string" or record.name == "" then
+		line = line .. ", no name given"
+	end
+	return line
+end
+
 function LibraryText.CardTitle(record, className, colorCode)
 	local title = LibraryText.Title(record)
 	if type(className) ~= "string" or className == "" then return title end

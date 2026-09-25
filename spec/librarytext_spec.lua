@@ -20,6 +20,27 @@ describe("LibraryText", function()
 		return r
 	end
 
+	describe("Confirmation", function()
+		it("says a new look was captured, by name and realm", function()
+			assert.equal("Thunderhoof-Aegwynn captured",
+				LibraryText.Confirmation(Record(), true))
+		end)
+
+		it("says a repeat sighting was seen again rather than captured", function()
+			assert.equal("Thunderhoof-Aegwynn seen again",
+				LibraryText.Confirmation(Record(), false))
+		end)
+
+		it("says so when the capture got no name, rather than inventing one", function()
+			assert.equal("Look #3 captured, no name given",
+				LibraryText.Confirmation(Record({ name = "nil", realm = "nil" }), true))
+		end)
+
+		it("answers nothing for a missing record", function()
+			assert.equal("", LibraryText.Confirmation(nil, true))
+		end)
+	end)
+
 	describe("Title", function()
 		it("names them with their realm", function()
 			assert.equal("Thunderhoof-Aegwynn", LibraryText.Title(Record()))
