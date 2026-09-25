@@ -65,6 +65,44 @@ function HearthstoneCollection.Cooldown(adapter, itemID)
 	return adapter.getCooldown(itemID)
 end
 
+local function PickerName(row)
+	return type(row.name) == "string" and row.name or ("item " .. tostring(row.itemID))
+end
+
+-- What the pairing window lists for hearthstones: the rows matching the
+-- search, collected first and then by name, each marked with whether its
+-- cooldown is running, plus the footer note. options.cooldown(itemID) answers
+-- start and duration on the clock options.now reads, which in the client is
+-- GetTime, not time.
+function HearthstoneCollection.PickerList(rows, options)
+	options = options or {}
+	local query = type(options.query) == "string" and options.query ~= ""
+		and string.lower(options.query) or nil
+	local matches, collected = {}, 0
+	for _, row in ipairs(rows or {}) do
+		if row.owned == true then collected = collected + 1 end
+		if not query or string.find(string.lower(PickerName(row)), query, 1, true) then
+			local start, duration
+			if row.owned == true and options.cooldown then
+				start, duration = options.cooldown(row.itemID)
+			end
+			row.onCooldown = type(start) == "number" and type(duration) == "number"
+				and duration > 0 and start + duration > (options.now or 0)
+			matches[#matches + 1] = row
+		end
+	end
+	table.sort(matches, function(a, b)
+		local ao, bo = a.owned == true, b.owned == true
+		if ao ~= bo then return ao end
+		local an, bn = string.lower(PickerName(a)), string.lower(PickerName(b))
+		if an ~= bn then return an < bn end
+		return a.itemID < b.itemID
+	end)
+	local note = #matches == 0 and "No reviewed hearthstones match."
+		or ("%d of %d collected."):format(collected, #(rows or {}))
+	return { rows = matches, note = note }
+end
+
 -- Initial ownership snapshot: totals for items, ownership booleans for toys.
 -- Nothing is emitted - what the character already owns is baseline, not
 -- acquisition.

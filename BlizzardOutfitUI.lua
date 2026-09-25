@@ -9,6 +9,7 @@ local initialized
 local NO_TRANSMOG = (Constants and Constants.Transmog and Constants.Transmog.NoTransmogID) or 0
 local ASSIGNED = (Enum and Enum.TransmogOutfitDisplayType
 	and Enum.TransmogOutfitDisplayType.Assigned) or 1
+local LookCodec = ns.LookCodec or require("LookCodec")
 
 local function StoredID(info)
 	return info and info.displayType == ASSIGNED and info.transmogID or NO_TRANSMOG
@@ -20,32 +21,35 @@ function BlizzardOutfitUI.CaptureViewedLook(addon)
 	local outfitID = C_TransmogOutfitInfo.GetCurrentlyViewedOutfitID()
 	if not pool or not outfitID or outfitID == 0 then return false end
 
-	local look = {}
+	local entries = {}
 	local diagnostic = {}
 	for slotFrame in pool:EnumerateActive() do
 		local location = slotFrame:GetTransmogLocation()
 		local slotID = location and location:GetSlotID()
-		if slotID then
+		-- A split shoulder's second frame shares the slot ID; the primary
+		-- frame carries it as the secondary appearance.
+		local secondaryFrame = location and location.IsSecondary and location:IsSecondary()
+		if slotID and not secondaryFrame then
 			local slotInfo = slotFrame:GetSlotInfo()
-			local primary = StoredID(slotInfo)
-			local secondary, illusion = NO_TRANSMOG, NO_TRANSMOG
+			local entry = { slotID = slotID, primary = slotInfo }
 			local linked = C_TransmogOutfitInfo.GetLinkedSlotInfo(location:GetSlot())
 			if linked and linked.primarySlotInfo.slot == location:GetSlot() then
 				local option = slotFrame:GetCurrentWeaponOptionInfo().weaponOption
-				secondary = StoredID(C_TransmogOutfitInfo.GetViewedOutfitSlotInfo(
-					linked.secondarySlotInfo.slot, linked.secondarySlotInfo.type, option))
+				entry.secondary = C_TransmogOutfitInfo.GetViewedOutfitSlotInfo(
+					linked.secondarySlotInfo.slot, linked.secondarySlotInfo.type, option)
 			end
 			local illusionFrame = slotFrame:GetIllusionSlotFrame()
-			if illusionFrame then illusion = StoredID(illusionFrame:GetSlotInfo()) end
-			look[slotID] = { primary, secondary, illusion }
+			if illusionFrame then entry.illusion = illusionFrame:GetSlotInfo() end
+			entries[#entries + 1] = entry
 			diagnostic[#diagnostic + 1] = {
 				slotID = slotID,
 				displayType = slotInfo and slotInfo.displayType,
 				apiID = slotInfo and slotInfo.transmogID,
-				storedID = primary,
+				storedID = StoredID(slotInfo),
 			}
 		end
 	end
+	local look = LookCodec.FromSlotInfos(entries, ASSIGNED)
 	MogtrotCharDB.looks[outfitID] = look
 	addon.ingestDiagnostics = addon.ingestDiagnostics or {}
 	addon.ingestDiagnostics[outfitID] = diagnostic

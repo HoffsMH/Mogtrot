@@ -350,4 +350,58 @@ describe("HearthstoneCollection", function()
 			end
 		end)
 	end)
+
+	-- What the pairing window lists: search, collected first then by name, the
+	-- cooldown mark and the footer note.
+	describe("PickerList", function()
+		local function Rows()
+			return {
+				{ itemID = 3, name = "Zeta Stone", owned = true },
+				{ itemID = 1, name = "alpha stone", owned = false },
+				{ itemID = 2, name = "Beta Stone", owned = true },
+				{ itemID = 4, owned = true },
+			}
+		end
+		local function IDs(list)
+			local out = {}
+			for _, row in ipairs(list.rows) do out[#out + 1] = row.itemID end
+			return out
+		end
+
+		it("puts collected first, then sorts by name", function()
+			assert.same({ 2, 4, 3, 1 }, IDs(HearthstoneCollection.PickerList(Rows())))
+		end)
+
+		it("searches names without case, and an unnamed row by its item ID", function()
+			assert.same({ 2 }, IDs(HearthstoneCollection.PickerList(Rows(), { query = "BETA" })))
+			assert.same({ 2, 3, 1 }, IDs(HearthstoneCollection.PickerList(Rows(), { query = "stone" })))
+			assert.same({ 4 }, IDs(HearthstoneCollection.PickerList(Rows(), { query = "item 4" })))
+		end)
+
+		it("counts collected over every row, not only the matches", function()
+			assert.equal("3 of 4 collected.",
+				HearthstoneCollection.PickerList(Rows(), { query = "zeta" }).note)
+		end)
+
+		it("says so when nothing matches", function()
+			assert.equal("No reviewed hearthstones match.",
+				HearthstoneCollection.PickerList(Rows(), { query = "nothing" }).note)
+		end)
+
+		-- The client's item cooldown starts on the GetTime clock. Compared
+		-- against time() it is never running, and the card never says so.
+		it("marks an owned row whose cooldown is still running", function()
+			local list = HearthstoneCollection.PickerList(Rows(), {
+				now = 1000,
+				cooldown = function(itemID)
+					if itemID == 2 then return 900, 900 end
+					if itemID == 3 then return 10, 900 end
+					return 0, 0
+				end,
+			})
+			local marked = {}
+			for _, row in ipairs(list.rows) do marked[row.itemID] = row.onCooldown end
+			assert.same({ [2] = true, [3] = false, [4] = false, [1] = false }, marked)
+		end)
+	end)
 end)

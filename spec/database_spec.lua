@@ -9,7 +9,7 @@ describe("Database.MigrateOrInit", function()
 		assert.is_true(account.previewEnabled)
 		assert.is_false(account.hideEmptyCategories)
 		assert.equal("random", account.titleFallbackMode)
-		assert.equal(5, char.version)
+		assert.equal(6, char.version)
 		assert.same({}, char.titles)
 		assert.same({}, char.titleRotation)
 		assert.same({ "Tier", "Non-tier sets", "Simple", "Unsorted" }, {
@@ -31,7 +31,7 @@ describe("Database.MigrateOrInit", function()
 		}
 		local _, char = Database.MigrateOrInit({}, old)
 
-		assert.equal(5, char.version)
+		assert.equal(6, char.version)
 		assert.is_true(char.cats[7].color.r <= 1)
 		assert.equal("Kept", char.cats[7].name)
 	end)
@@ -87,7 +87,7 @@ describe("Database.MigrateOrInit", function()
 		local _, char = Database.MigrateOrInit({}, old)
 
 		assert.equal(old, char)
-		assert.equal(5, char.version)
+		assert.equal(6, char.version)
 		assert.equal(cats, char.cats)
 		assert.same({ 7 }, char.roots)
 		assert.same({ [42] = 7 }, char.assign)
@@ -123,7 +123,7 @@ describe("Database.MigrateOrInit", function()
 		local account, char = Database.MigrateOrInit({}, old)
 
 		assert.equal(old, char)
-		assert.equal(5, char.version)
+		assert.equal(6, char.version)
 		assert.equal(cats, char.cats)
 		assert.same({ kept = true }, char.custom)
 		assert.same({}, char.roots)
@@ -171,7 +171,7 @@ describe("Database.MigrateOrInit v2/v5", function()
 	it("targets account version 3 and character version 5", function()
 		local account, char = FreshDomains()
 		assert.equal(3, account.version)
-		assert.equal(5, char.version)
+		assert.equal(6, char.version)
 	end)
 
 	it("initializes three distinct pin domains with no baseline records", function()
@@ -264,7 +264,7 @@ describe("Database.MigrateOrInit v2/v5", function()
 			assign = {},
 			noPinnedShuffle = noPinnedShuffle,
 		})
-		assert.equal(5, char.version)
+		assert.equal(6, char.version)
 		assert.equal(noPinnedShuffle, char.pinOptOut.mounts)
 		assert.is_nil(char.noPinnedShuffle)
 	end)
@@ -292,7 +292,7 @@ describe("Database.MigrateOrInit v2/v5", function()
 			titleRotation = refs.titleRotation,
 			assign = refs.assign,
 		})
-		assert.equal(5, char.version)
+		assert.equal(6, char.version)
 		assert.equal(cats, char.cats)
 		assert.equal(refs.looks, char.looks)
 		assert.equal(refs.slots, char.slots)
@@ -315,7 +315,7 @@ describe("Database.MigrateOrInit v2/v5", function()
 			assign = {},
 			mounts = { [42] = 2747 },
 		})
-		assert.equal(5, char.version)
+		assert.equal(6, char.version)
 		assert.is_true(char.cats[7].color.r <= 1)
 		assert.same({ [2747] = true }, char.mounts[42])
 	end)
@@ -377,7 +377,7 @@ describe("Database.MigrateOrInit v2/v5", function()
 			assign = {},
 			mounts = { [42] = 2747 },
 		})
-		assert.equal(5, char.version)
+		assert.equal(6, char.version)
 		assert.is_true(char.cats[7].color.r <= 1)
 		assert.equal("Kept", char.cats[7].name)
 		assert.same({ [2747] = true }, char.mounts[42])
@@ -391,7 +391,7 @@ describe("Database.MigrateOrInit v2/v5", function()
 			assign = {},
 			mounts = { [42] = 2747 },
 		})
-		assert.equal(5, char.version)
+		assert.equal(6, char.version)
 		assert.same({ [2747] = true }, char.mounts[42])
 	end)
 
@@ -413,6 +413,46 @@ describe("Database.MigrateOrInit v2/v5", function()
 		assert.equal(noPinnedShuffle, char.noPinnedShuffle)
 		assert.equal(existing, char.pinOptOut.mounts)
 		assert.equal(4, char.version)
+	end)
+
+	-- v5 looks may hold equipped gear rendered through slots the outfit leaves
+	-- empty, and nothing records which, so every definition is read again once.
+	it("moves v5 to v6 keeping every store and asking for one re-read of looks", function()
+		local input = {
+			version = 5,
+			nextID = 8,
+			cats = { [7] = { id = 7, name = "Kept", color = { r = 0.5, g = 0.5, b = 0.5 },
+				items = { 3 } } },
+			roots = { 7 },
+			assign = { [3] = 7 },
+			looks = { [3] = { [1] = { 302897, 0, 0 }, [4] = { 83202, 0, 0 } } },
+			slots = { [3] = { covered = 9, total = 14, missing = {}, at = 120100 } },
+			mounts = { [3] = { [2747] = true } },
+			wear = { [3] = { seconds = 60, last = 1 } },
+		}
+		local expected = DeepCopy(input)
+		local _, char = Database.MigrateOrInit({}, input)
+
+		assert.equal(6, char.version)
+		assert.is_true(char.rereadLooks)
+		assert.same({}, char.worn)
+		assert.same({ 7 }, char.roots)
+		for _, key in ipairs({ "nextID", "cats", "assign", "looks", "slots", "mounts", "wear" }) do
+			assert.same(expected[key], char[key], key)
+		end
+	end)
+
+	it("asks a fresh character for no re-read", function()
+		local _, char = Database.MigrateOrInit({}, nil)
+		assert.is_nil(char.rereadLooks)
+		assert.same({}, char.worn)
+	end)
+
+	it("leaves a v6 character alone", function()
+		local input = { version = 6, looks = {}, worn = { [3] = {} }, cats = {}, roots = {} }
+		local _, char = Database.MigrateOrInit({}, input)
+		assert.is_nil(char.rereadLooks)
+		assert.same({ [3] = {} }, char.worn)
 	end)
 end)
 

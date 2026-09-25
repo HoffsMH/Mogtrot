@@ -126,7 +126,7 @@ end
 
 local function OpenHearthstonePicker(outfitID)
 	if companionReady and Addon.OpenHearthstonePicker then
-		return Addon.OpenHearthstonePicker(outfitID)
+		return Addon:OpenHearthstonePicker(outfitID)
 	end
 end
 
@@ -303,14 +303,21 @@ function Addon:SyncOutfits()
 		info.index = info.playerFacingOutfitIndex or index
 		self.outfitsByID[info.outfitID] = info
 
-		local catID = char.assign[info.outfitID]
-		if not catID or not char.cats[catID] then
-			catID = unsortedID
-			char.assign[info.outfitID] = catID
-		end
-		local items = char.cats[catID].items
-		if not Tree.IndexInList(items, info.outfitID) then
-			table.insert(items, info.outfitID)
+		-- An outfit slot nobody has used is not an outfit and gets no row. It stays
+		-- in outfitsByID so the rest of the addon can still name it and so the prune
+		-- below reads it as present rather than deleted.
+		if Tree.UntouchedSlot(char, info, TRANSMOG_OUTFIT_NAME_DEFAULT) then
+			Tree.UnfileOutfit(char, info.outfitID)
+		else
+			local catID = char.assign[info.outfitID]
+			if not catID or not char.cats[catID] then
+				catID = unsortedID
+				char.assign[info.outfitID] = catID
+			end
+			local items = char.cats[catID].items
+			if not Tree.IndexInList(items, info.outfitID) then
+				table.insert(items, info.outfitID)
+			end
 		end
 	end
 
@@ -327,6 +334,12 @@ function Addon:SyncOutfits()
 	for outfitID in pairs(char.looks) do
 		if not self.outfitsByID[outfitID] then
 			char.looks[outfitID] = nil
+		end
+	end
+
+	for outfitID in pairs(char.worn or {}) do
+		if not self.outfitsByID[outfitID] then
+			char.worn[outfitID] = nil
 		end
 	end
 
@@ -530,13 +543,13 @@ previewUI = ns.OutfitPreviewUI.Attach(Addon, {
 	mainWindow = frame,
 })
 
-local outfitLibrarySync = ns.OutfitLibrarySyncAdapter.Attach(Addon)
+ns.OutfitLibrarySyncAdapter.Attach(Addon)
 ns.CustomSetLibrarySyncAdapter.Attach(Addon)
 
+-- The wear capture feeds the docked preview only; the library reads looks.
 ns.OutfitLookCapture.Attach(Addon, {
 	onCaptured = function(outfitID)
 		previewUI.OnCaptured(outfitID)
-		outfitLibrarySync.OnCaptured(outfitID)
 	end,
 })
 
@@ -771,11 +784,10 @@ ns.MountPickerUI.Attach(Addon, {
 	validMountTypes = ValidMountTypes,
 	buildDockGlow = previewUI.BuildDockGlow,
 	applyMountEditDock = previewUI.ApplyMountEditDock,
-	showMountEditPreview = previewUI.ShowMountEditPreview,
-	hideMountEditPreview = previewUI.HideMountEditPreview,
+	showEditPreview = previewUI.ShowEditPreview,
+	hideEditPreview = previewUI.HideMountEditPreview,
 	outfitWearPreClick = OutfitWear_PreClick,
 	outfitWearPostClick = OutfitWear_PostClick,
-	onPickerCreated = previewUI.SetMountPicker,
 })
 
 function Addon:ApplyMountToOutfits(mountID, mountName, choices, chosen)
@@ -888,23 +900,13 @@ local function AttachCompanions(account, char)
 
 	companionReady = true
 	RefreshCompanionPins()
-	ns.HearthstonePickerUI.Attach(Addon, {
+	Addon:AttachHearthstones({
 		registry = HearthstoneDefinitions,
 		collection = HearthstoneCollection,
 		adapter = hearthstoneAdapter,
 		links = char.hearthstones,
-		pins = hearthstoneControllerDeps and hearthstoneControllerDeps.pins,
-		pinsOptOut = char.pinOptOut.hearthstones,
-		pinOperations = Pins,
 		account = account,
 		pinsDomain = "hearthstones",
-		rotationStates = char.rotations.hearthstones,
-		random = math.random,
-		now = time,
-		combat = InCombatLockdown,
-		warn = CompanionWarning,
-		hasActiveOutfit = HasActiveOutfit,
-		activeOutfitID = CurrentOutfitID,
 		getLinks = function(outfitID) return Addon:GetOutfitHearthstones(outfitID) end,
 		toggleLink = function(outfitID, itemID)
 			return Addon:ToggleHearthstoneLink(outfitID, itemID)
@@ -912,11 +914,7 @@ local function AttachCompanions(account, char)
 		applyLinks = function(itemID, want)
 			return Addon:ApplyHearthstoneLinks(itemID, want)
 		end,
-		outfitsByID = function() return Addon.outfitsByID or {} end,
 		getCurrentOutfit = CurrentOutfitID,
-		buildDockGlow = previewUI.BuildDockGlow,
-		showEditPreview = previewUI.ShowEditPreview,
-		hideEditPreview = previewUI.HideMountEditPreview,
 	})
 
 	companionReady = true
@@ -1106,7 +1104,7 @@ eventFrame:SetScript("OnEvent", function(_, event, arg1, arg2, arg3, arg4)
 		-- Verified in game: the scan does not need Blizzard's window open, so it
 		-- runs on its own after login and the counts are simply there. Late enough
 		-- that it is not competing with everything else loading.
-		C_Timer.After(8, function() Addon:BeginLintSweep(false) end)
+		C_Timer.After(8, function() OutfitLint.BeginAtLogin(Addon) end)
 		Addon:RegisterSettings()
 		Addon:UpdateOwnedMacroIcons()
 		Addon:RepairSummonMacro()

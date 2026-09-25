@@ -136,6 +136,7 @@ read_globals = {
 	"ScrollUtil",
 	"SendChatMessage",
 	"Settings",
+	"TRANSMOG_OUTFIT_NAME_DEFAULT",
 	"Transmog_LoadUI",
 	"TransmogFrame",
 	"UIErrorsFrame",

@@ -65,6 +65,27 @@ function LookCodec.Decode(text)
 	return look
 end
 
+-- An outfit's definition from the viewed outfit's slot infos. entries are
+-- { slotID, primary, secondary, illusion }, each part a slot info or nil. A
+-- part counts only when its displayType is assigned: an empty slot renders
+-- equipped gear, which the outfit does not choose, so it is stored as 0.
+function LookCodec.FromSlotInfos(entries, assigned)
+	local function Part(info)
+		if type(info) ~= "table" or info.displayType ~= assigned then return 0 end
+		return tonumber(info.transmogID) or 0
+	end
+
+	local look = {}
+	for _, entry in ipairs(entries or {}) do
+		if type(entry) == "table" and type(entry.slotID) == "number" then
+			look[entry.slotID] = {
+				Part(entry.primary), Part(entry.secondary), Part(entry.illusion),
+			}
+		end
+	end
+	return look
+end
+
 -- What the library dedupes on: what they look like, not who they are. Two
 -- characters with the same appearances, race and sex carry no new information.
 -- Lua hashes a string key internally, so an index keyed on this is already the

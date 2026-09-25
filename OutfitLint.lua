@@ -4,6 +4,7 @@ local _, ns = ...
 -- A sweep briefly views each outfit, records its unset slots, then restores the view.
 local OutfitLint = {}
 local Lint = ns.Lint
+local LookCodec = ns.LookCodec or require("LookCodec")
 
 OutfitLint.Colours = {
 	full = { 0.3, 1, 0.3 },
@@ -12,6 +13,8 @@ OutfitLint.Colours = {
 }
 
 local APPEARANCE_TYPE = (Enum and Enum.TransmogType and Enum.TransmogType.Appearance) or 0
+local ASSIGNED = (Enum and Enum.TransmogOutfitDisplayType
+	and Enum.TransmogOutfitDisplayType.Assigned) or 1
 local SWEEP_STEP_DELAY = 0.1
 local SWEEP_TIMEOUT = 3.0
 local SLOT_SETTLE_DELAY = 0.2
@@ -113,6 +116,83 @@ function OutfitLint.MeasureViewed(addon)
 	return outfitID, record
 end
 
+-- The option Blizzard's window opens a weapon slot on: the one the equipped
+-- weapon selects, else the first enabled one.
+local function WeaponOption(slot)
+	local api = C_TransmogOutfitInfo
+	if not api.IsSlotWeaponSlot(slot) then return Lint.OPTION_NONE end
+	local options = api.GetWeaponOptionsForSlot(slot) or {}
+	local equipped = api.GetEquippedSlotOptionFromTransmogSlot(slot)
+	local first
+	for _, info in ipairs(options) do
+		if info.enabled then
+			if info.weaponOption == equipped then return equipped end
+			first = first or info.weaponOption
+		end
+	end
+	return first or Lint.OPTION_NONE
+end
+
+-- The viewed outfit's slot infos per inventory slot, read through the API so
+-- Blizzard's window need not be open. Same parts the ingest reads from the
+-- window's slot frames.
+local function ViewedSlotEntries()
+	local api = C_TransmogOutfitInfo
+	local groups = api.GetSlotGroupInfo()
+	if not groups then return nil end
+	local rangedShown = C_PaperDollInfo.IsRangedSlotShown()
+
+	local entries, bySlot = {}, {}
+	for _, group in ipairs(groups) do
+		for _, info in ipairs(group.appearanceSlotInfo or {}) do
+			if not info.isSecondary and (rangedShown or info.slotName ~= "RANGEDSLOT") then
+				local option = WeaponOption(info.slot)
+				local entry = {
+					slotID = C_PaperDollInfo.GetInventorySlotInfo(info.slotName),
+					option = option,
+					primary = api.GetViewedOutfitSlotInfo(info.slot, APPEARANCE_TYPE, option),
+				}
+				local linked = api.GetLinkedSlotInfo(info.slot)
+				if linked and linked.primarySlotInfo.slot == info.slot then
+					entry.secondary = api.GetViewedOutfitSlotInfo(linked.secondarySlotInfo.slot,
+						linked.secondarySlotInfo.type, option)
+				end
+				entries[#entries + 1] = entry
+				bySlot[info.slot] = entry
+			end
+		end
+	end
+	for _, group in ipairs(groups) do
+		for _, info in ipairs(group.illusionSlotInfo or {}) do
+			local entry = bySlot[info.slot]
+			if entry then
+				entry.illusion = api.GetViewedOutfitSlotInfo(info.slot, info.type, entry.option)
+			end
+		end
+	end
+	return entries
+end
+
+-- Stores the viewed outfit's definition in looks. Returns the outfitID.
+function OutfitLint.StoreViewedLook()
+	local char = MogtrotCharDB
+	local outfitID = C_TransmogOutfitInfo.GetCurrentlyViewedOutfitID()
+	if not char or not char.looks or not outfitID or outfitID == 0 then return end
+	local entries = ViewedSlotEntries()
+	if not entries or #entries == 0 then return end
+	char.looks[outfitID] = LookCodec.FromSlotInfos(entries, ASSIGNED)
+	return outfitID
+end
+
+-- The ingest reads Blizzard's window; every other sweep reads the API.
+local function StoreDefinition(addon, sweep)
+	if sweep.ingest and ns.BlizzardOutfitUI
+		and ns.BlizzardOutfitUI.CaptureViewedLook(addon) then
+		return
+	end
+	if OutfitLint.StoreViewedLook() then sweep.stored = true end
+end
+
 function OutfitLint.Record(outfitID)
 	local char = MogtrotCharDB
 	return char and char.slots and char.slots[outfitID]
@@ -186,9 +266,13 @@ function OutfitLint.Begin(addon, all, verbose, ingest)
 	local outfits = C_TransmogOutfitInfo.GetOutfitsInfo()
 	if not outfits or #outfits == 0 then return end
 
+	local char = MogtrotCharDB
+	local looks = char and char.looks or {}
+	all = all or (char and char.rereadLooks == true)
 	local build, queue = OutfitLint.Build(), {}
 	for _, info in ipairs(outfits) do
-		if all or Lint.State(OutfitLint.Record(info.outfitID), build) == "unknown" then
+		if all or looks[info.outfitID] == nil
+			or Lint.State(OutfitLint.Record(info.outfitID), build) == "unknown" then
 			table.insert(queue, info.outfitID)
 		end
 	end
@@ -229,9 +313,7 @@ function OutfitLint.Step(addon)
 
 	if C_TransmogOutfitInfo.GetCurrentlyViewedOutfitID() == outfitID then
 		OutfitLint.MeasureViewed(addon)
-		if sweep.ingest and ns.BlizzardOutfitUI then
-			ns.BlizzardOutfitUI.CaptureViewedLook(addon)
-		end
+		StoreDefinition(addon, sweep)
 		return OutfitLint.Step(addon)
 	end
 
@@ -260,9 +342,7 @@ local function ProcessViewedSlotsReady(addon)
 	if outfitID and outfitID ~= sweep.expect then
 		return OutfitLint.Abandon(addon, "the view changed")
 	end
-	if sweep.ingest and ns.BlizzardOutfitUI then
-		ns.BlizzardOutfitUI.CaptureViewedLook(addon)
-	end
+	StoreDefinition(addon, sweep)
 
 	sweep.waiting = false
 	local token = sweep.token
@@ -299,8 +379,19 @@ function OutfitLint.Finish(addon)
 		for _ in pairs(addon.ingestDiagnostics or {}) do captured = captured + 1 end
 		addon:Say("ingest diagnostics captured %d of %d outfits.", captured, #sweep.queue)
 	end
-	if sweep.ingest and addon.SyncOutfitLibrary then addon.SyncOutfitLibrary() end
+	if MogtrotCharDB then MogtrotCharDB.rereadLooks = nil end
+	if (sweep.ingest or sweep.stored) and addon.SyncOutfitLibrary then
+		addon.SyncOutfitLibrary()
+	end
 	addon:Changed()
+end
+
+-- The sweep after a loading screen. Not inside an instance, so it never runs
+-- on a dungeon's loading screen; leaving the instance is another loading
+-- screen, which runs it then.
+function OutfitLint.BeginAtLogin(addon)
+	if IsInInstance() then return end
+	return OutfitLint.Begin(addon, false)
 end
 
 function OutfitLint.Abandon(addon, why)

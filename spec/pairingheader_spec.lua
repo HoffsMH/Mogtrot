@@ -111,12 +111,12 @@ describe("PairingHeader toggles", function()
 	end)
 end)
 
--- The library wears the same header. Its two exclusive modes are the same
--- shape as the pairing window's domain word, so the mode is a word in the
--- sentence and the library has no title and no tabs either.
+-- The library wears the same header. The wall it is on is boxed like the
+-- pairing window's words but is not a control; the switch after the count is,
+-- the way the pairing window's "switch to pins" is.
 describe("PairingHeader.LibrarySegments", function()
-	it("names the wall first and counts it after", function()
-		assert.equal("Showing my characters - 50 of 247 looks",
+	it("names the wall first, counts it, then offers the other", function()
+		assert.equal("Showing my characters - 50 of 247 looks   switch to snapshots",
 			Text(PairingHeader.LibrarySegments({ mode = "mine", shown = 50,
 				total = 247 })))
 	end)
@@ -124,59 +124,73 @@ describe("PairingHeader.LibrarySegments", function()
 	-- The filter line below says why 50 of 247; saying "of 247" when nothing
 	-- was filtered out would invent a filter.
 	it("drops the comparison when nothing is filtered out", function()
-		assert.equal("Showing snapshots - 247 looks",
+		assert.equal("Showing snapshots - 247 looks   switch to my characters",
 			Text(PairingHeader.LibrarySegments({ mode = "snapshots", shown = 247,
 				total = 247 })))
 	end)
 
 	it("counts one look singular", function()
-		assert.equal("Showing snapshots - 1 look",
+		assert.equal("Showing snapshots - 1 look   switch to my characters",
 			Text(PairingHeader.LibrarySegments({ mode = "snapshots", shown = 1,
 				total = 1 })))
 	end)
 
 	it("says an empty library is empty rather than counting to zero", function()
-		assert.equal("Showing my characters - no looks",
+		assert.equal("Showing my characters - no looks   switch to snapshots",
 			Text(PairingHeader.LibrarySegments({ mode = "mine", shown = 0,
 				total = 0 })))
 	end)
 
 	it("counts none of a full library when every look is filtered out", function()
-		assert.equal("Showing snapshots - 0 of 247 looks",
+		assert.equal("Showing snapshots - 0 of 247 looks   switch to my characters",
 			Text(PairingHeader.LibrarySegments({ mode = "snapshots", shown = 0,
 				total = 247 })))
 	end)
 
-	-- The wall is the first thing the sentence says, because it is what you
-	-- switch and the count is only true of whichever one you are on.
-	it("puts the mode word ahead of the count", function()
+	it("puts the wall ahead of the count", function()
 		local parts = PairingHeader.LibrarySegments({ mode = "snapshots",
 			shown = 50, total = 247 })
-		assert.equal("libraryMode", parts[2].action)
+		assert.equal("snapshots", parts[2].text)
 		assert.is_true(parts[3].text:find("50 of 247", 1, true) ~= nil)
 	end)
 
-	it("offers the mode as its only control", function()
+	-- Boxed so it reads as the same kind of word as the switch, but only the
+	-- switch takes a click.
+	it("boxes the wall without making it a control", function()
+		local parts = PairingHeader.LibrarySegments({ mode = "mine" })
+		assert.is_true(parts[2].boxed)
+		assert.is_nil(parts[2].action)
+		assert.equal("characters", parts[2].icon)
+	end)
+
+	it("offers the switch as its only control", function()
 		assert.same({ "libraryMode" },
 			Actions(PairingHeader.LibrarySegments({ mode = "mine", shown = 3,
 				total = 3 })))
 	end)
 
-	it("names the mode it is showing", function()
-		local function IconFor(state)
+	-- The switch names where it takes you, so it wears that wall's icon.
+	it("gives the switch the other wall's icon", function()
+		local function SwitchIcon(state)
 			for _, segment in ipairs(PairingHeader.LibrarySegments(state)) do
 				if segment.action == "libraryMode" then return segment.icon end
 			end
 		end
-		assert.equal("characters", IconFor({ mode = "mine" }))
-		assert.equal("snapshots", IconFor({ mode = "snapshots" }))
+		assert.equal("snapshots", SwitchIcon({ mode = "mine" }))
+		assert.equal("characters", SwitchIcon({ mode = "snapshots" }))
 	end)
 
 	it("falls back to a whole sentence for a malformed state", function()
-		assert.equal("Showing snapshots - no looks",
+		assert.equal("Showing snapshots - no looks   switch to my characters",
 			Text(PairingHeader.LibrarySegments(nil)))
-		assert.equal("Showing snapshots - no looks",
+		assert.equal("Showing snapshots - no looks   switch to my characters",
 			Text(PairingHeader.LibrarySegments({})))
+	end)
+
+	it("switches to the other wall", function()
+		assert.equal("snapshots", PairingHeader.OtherLibraryMode("mine"))
+		assert.equal("mine", PairingHeader.OtherLibraryMode("snapshots"))
+		assert.equal("mine", PairingHeader.OtherLibraryMode(nil))
 	end)
 
 	-- Same default as LibraryFilter's: anything that is not "mine" is the
@@ -216,8 +230,81 @@ describe("PairingHeader.Choices", function()
 		assert.equal("snapshots", choices[2].icon)
 	end)
 
+	it("offers both bodies behind the library's body word", function()
+		assert.same({ "original", "mine" }, Values(PairingHeader.Choices("body")))
+	end)
+
+	-- Words and no icon: there is no stock glyph that says whose body a look
+	-- is standing on, and an atlas that does not exist draws nothing without
+	-- saying so.
+	it("gives the body choices words and no icon", function()
+		local choices = PairingHeader.Choices("body")
+		assert.equal("original race", choices[1].text)
+		assert.equal("my race", choices[2].text)
+		assert.is_nil(choices[1].icon)
+		assert.is_nil(choices[2].icon)
+	end)
+
 	it("offers nothing for a word that is not one of a fixed set", function()
 		assert.same({}, PairingHeader.Choices("outfit"))
 		assert.same({}, PairingHeader.Choices(nil))
+	end)
+end)
+
+-- A word standing on its own rather than inside a sentence still has to say
+-- which of its choices it is on, so it looks that one up here rather than
+-- keeping a second copy of the wording.
+describe("PairingHeader.Choice", function()
+	it("answers the row a word is standing on", function()
+		local choice = PairingHeader.Choice("libraryMode", "mine")
+		assert.equal("my characters", choice.text)
+		assert.equal("characters", choice.icon)
+	end)
+
+	it("answers nothing for a value with no row behind it", function()
+		assert.is_nil(PairingHeader.Choice("libraryMode", "bananas"))
+		assert.is_nil(PairingHeader.Choice("outfit", "brick chillin"))
+	end)
+end)
+
+-- Whose body the library stands a look on. The Show row asks this the same
+-- way the sentence above it asks which wall you are on, so the two words come
+-- from one vocabulary and cannot drift apart.
+describe("PairingHeader.Body", function()
+	-- Original race is the point of the library, so anything unrecognised
+	-- lands there rather than on your own body.
+	it("resolves an unknown body to original race", function()
+		assert.equal("original", PairingHeader.Body("bananas"))
+		assert.equal("original", PairingHeader.Body(nil))
+		assert.equal("mine", PairingHeader.Body("mine"))
+	end)
+
+	it("offers original race first", function()
+		assert.equal("original", PairingHeader.Choices("body")[1].value)
+	end)
+end)
+
+-- The domain menu moves the one window between mounts and hearthstones. It
+-- keeps the outfit while pairing and stays on pins while choosing pins.
+describe("PairingHeader.SwitchDomain", function()
+	it("keeps the outfit when pairing", function()
+		assert.same({ domain = "hearthstones", mode = "outfit", outfitID = 7 },
+			PairingHeader.SwitchDomain({ domain = "mounts", mode = "outfit", outfitID = 7 },
+				"hearthstones"))
+	end)
+
+	it("stays on pins and names no outfit", function()
+		assert.same({ domain = "mounts", mode = "pins" },
+			PairingHeader.SwitchDomain({ domain = "hearthstones", mode = "pins", outfitID = 7 },
+				"mounts"))
+	end)
+
+	it("answers nothing for the domain already shown", function()
+		assert.is_nil(PairingHeader.SwitchDomain({ domain = "mounts", mode = "outfit" },
+			"mounts"))
+	end)
+
+	it("answers nothing for a domain that does not exist", function()
+		assert.is_nil(PairingHeader.SwitchDomain({ domain = "mounts" }, "pets"))
 	end)
 end)

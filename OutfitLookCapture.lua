@@ -1,7 +1,8 @@
 local _, ns = ...
 
--- Captures the appearance of the outfit the player is wearing so previews can
--- show it later when Blizzard no longer exposes the outfit's appearances.
+-- Captures how the player looks while wearing an outfit, into worn. Slots the
+-- outfit leaves empty render equipped gear, so this is not the outfit's
+-- definition; that lives in looks, written by OutfitLint's sweep and the ingest.
 local OutfitLookCapture = {}
 ns.OutfitLookCapture = OutfitLookCapture
 
@@ -61,7 +62,8 @@ function OutfitLookCapture.Attach(Addon, callbacks)
 			return
 		end
 
-		MogtrotCharDB.looks[outfitID] = look
+		MogtrotCharDB.worn = MogtrotCharDB.worn or {}
+		MogtrotCharDB.worn[outfitID] = look
 		self.captureOutfitID = nil
 
 		if verbose then

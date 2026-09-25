@@ -234,6 +234,9 @@ local characterPool
 local showMounts = false
 local raceFilter
 local nameQuery
+-- The archived card whose Delete has been clicked once. Keyed by record, not
+-- by card, because cards are pooled.
+local armedDelete
 
 local function Mounted(record)
 	if not record.mount then return false end
@@ -252,6 +255,17 @@ local function Records()
 	local library = Library()
 	if not library or type(Store) ~= "table" then return {} end
 	return Store.Sorted(library)
+end
+
+-- What the wall draws from: the archive when the Archived switch is on,
+-- otherwise the records.
+local function WallRecords()
+	local Store, Filter, library = ns.Library, ns.LibraryFilter, Library()
+	if library and Store and Store.Archived and Filter
+		and Filter.ShowsArchived(raceFilter) then
+		return Store.Archived(library)
+	end
+	return Records()
 end
 
 -- The client owns the class palette and players expect it, so it is read
@@ -338,20 +352,16 @@ local function OpenCharacterPicker()
 	})
 end
 
--- What the changeable word in the header sentence does. How it looks is
--- PairingHeaderUI's, and what it says is PairingHeader's.
---
--- A menu of the two rather than a toggle, the same as the pairing window's
--- domain word: the two walls are unrelated collections, and a word that hides
--- the other one makes you click it to find out what it was.
-local function HeaderAction(action, segment)
+-- What the switch in the header sentence does. How it looks is
+-- PairingHeaderUI's, and what it says is PairingHeader's. It names the wall it
+-- takes you to, so a click goes straight there.
+local function HeaderAction(action)
 	if action ~= "libraryMode" then return end
 	local Filter = ns.LibraryFilter
 	if not (Filter and raceFilter) then return end
-	ns.PairingHeaderUI.ShowMenu(segment, action, function(mode)
-		Filter.SetMode(raceFilter, mode)
-		LibraryUI.Refresh()
-	end)
+	local current = Filter.IsSnapshotMode(raceFilter) and "snapshots" or "mine"
+	Filter.SetMode(raceFilter, ns.PairingHeader.OtherLibraryMode(current))
+	LibraryUI.Refresh()
 end
 
 -- Turns one card to the shared angle.
@@ -449,9 +459,10 @@ local fullFidelity = false
 local bodiesWanted = false
 
 -- What you asked to see, as opposed to what can be shown. Original race is the
--- default because it is the point of the library, but it is only reachable
--- once every body has been borrowed, and you can always ask for your own body
--- instead.
+-- default because it is the point of the library; it is granted only once
+-- every body has been borrowed, and until then the wall stands every look on
+-- you and turns over the moment the last body arrives. You can always ask for
+-- your own body instead and keep it.
 local viewMode = "original"
 
 local SWITCH_H = 22
@@ -1093,8 +1104,10 @@ local function BuildCard(card)
 	if archiveNormal then archiveNormal:SetVertexColor(0.9, 0.2, 0.2) end
 	local archiveHighlight = card.Archive:GetHighlightTexture()
 	if archiveHighlight then archiveHighlight:SetVertexColor(1, 0.4, 0.4) end
+	-- Tooltips below the button: the card that slides under the pointer after
+	-- an archive shows one at once, and to the left it would cover the flash.
 	card.Archive:SetScript("OnEnter", function(self)
-		GameTooltip:SetOwner(self, "ANCHOR_LEFT")
+		GameTooltip:SetOwner(self, "ANCHOR_BOTTOM")
 		GameTooltip:SetText("Archive this snapshot")
 		GameTooltip:AddLine("Takes it off the wall without deleting it.",
 			0.6, 0.6, 0.6, true)
@@ -1109,6 +1122,78 @@ local function BuildCard(card)
 			if ns.LibraryDetailUI and ns.LibraryDetailUI.Shown() == record then
 				ns.LibraryDetailUI.Hide()
 			end
+			lastApply[record.id] = nil
+			lastNote[record.id] = nil
+			GameTooltip:Hide()
+			LibraryUI.Refresh()
+			LibraryUI.Flash("Archived. To restore or delete it, turn on"
+				.. " Show: Archived, top right.")
+		end
+	end)
+
+	-- On an archived card the X gives way to these two. Text rather than
+	-- atlases, so neither can be an invisible hotspot.
+	local function CardButton(label, width)
+		local button = CreateFrame("Button", nil, card, "BackdropTemplate")
+		button:SetSize(width, 18)
+		button:SetBackdrop({ bgFile = "Interface\\Buttons\\WHITE8X8",
+			edgeFile = "Interface\\Buttons\\WHITE8X8", edgeSize = 1 })
+		button:SetBackdropColor(0, 0, 0, 0.75)
+		button.Text = button:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+		button.Text:SetPoint("CENTER")
+		button.Text:SetText(label)
+		button:SetScript("OnLeave", GameTooltip_Hide)
+		button:Hide()
+		return button
+	end
+
+	card.Delete = CardButton("Delete", 54)
+	card.Delete:SetPoint("TOPRIGHT", -4, -4)
+	card.Delete:SetScript("OnEnter", function(self)
+		local record = self:GetParent().record
+		GameTooltip:SetOwner(self, "ANCHOR_BOTTOM")
+		GameTooltip:SetText("Delete this snapshot for good")
+		if record and armedDelete == record.id then
+			GameTooltip:AddLine("Click again to delete it. This cannot be undone.",
+				1, 0.3, 0.3, true)
+		else
+			GameTooltip:AddLine("Click twice. It cannot be undone.",
+				0.6, 0.6, 0.6, true)
+		end
+		GameTooltip:Show()
+	end)
+	card.Delete:SetScript("OnClick", function(self)
+		local record = self:GetParent().record
+		if not record then return end
+		if armedDelete ~= record.id then
+			armedDelete = record.id
+			LibraryUI.PaintControls()
+			if GameTooltip:IsOwned(self) then self:GetScript("OnEnter")(self) end
+			return
+		end
+		armedDelete = nil
+		GameTooltip:Hide()
+		lastNote[record.id] = nil
+		Delete(record)
+	end)
+
+	card.Restore = CardButton("Restore", 58)
+	card.Restore:SetPoint("RIGHT", card.Delete, "LEFT", -4, 0)
+	card.Restore:SetBackdropBorderColor(1, 0.82, 0, 1)
+	card.Restore:SetScript("OnEnter", function(self)
+		GameTooltip:SetOwner(self, "ANCHOR_BOTTOM")
+		GameTooltip:SetText("Restore this snapshot")
+		GameTooltip:AddLine("Puts it back on the wall and out of the archive.",
+			0.6, 0.6, 0.6, true)
+		GameTooltip:Show()
+	end)
+	card.Restore:SetScript("OnClick", function(self)
+		local record = self:GetParent().record
+		local Store, library = ns.Library, Library()
+		if not (record and Store and library) then return end
+		armedDelete = nil
+		GameTooltip:Hide()
+		if Store.Restore(library, record.id) then
 			lastApply[record.id] = nil
 			lastNote[record.id] = nil
 			LibraryUI.Refresh()
@@ -1189,10 +1274,40 @@ local function BuildCard(card)
 	end)
 end
 
+-- Every control on every paint: a pooled card keeps whatever the last record
+-- left on it otherwise.
+local function PaintControls(card)
+	local record = card.record
+	local Store = ns.Library
+	local controls = record and Store and Store.CardControls(record)
+		or { archive = record ~= nil and record.source ~= "mine" }
+	card.Archive:SetShown(controls.archive == true)
+	card.Restore:SetShown(controls.restore == true)
+	card.Delete:SetShown(controls.delete == true)
+	local armed = controls.delete and armedDelete == record.id
+	card.Delete.Text:SetText(armed and "Delete?" or "Delete")
+	if armed then
+		card.Delete:SetBackdropColor(0.6, 0, 0, 0.9)
+		card.Delete:SetBackdropBorderColor(1, 0.3, 0.3, 1)
+		card.Delete.Text:SetTextColor(1, 1, 1)
+	else
+		card.Delete:SetBackdropColor(0, 0, 0, 0.75)
+		card.Delete:SetBackdropBorderColor(0.9, 0.2, 0.2, 1)
+		card.Delete.Text:SetTextColor(1, 0.4, 0.4)
+	end
+end
+
+function LibraryUI.PaintControls()
+	if not (window and window.Box) then return end
+	window.Box:ForEachFrame(function(card)
+		if card.built then PaintControls(card) end
+	end)
+end
+
 local function InitCard(card, record)
 	BuildCard(card)
 	card.record = record
-	card.Archive:SetShown(record.source ~= "mine")
+	PaintControls(card)
 	local classAtlas = ClassAtlas(record.classID)
 	if classAtlas then card.ClassIcon:SetAtlas(classAtlas, false) end
 	card.ClassIcon:SetShown(classAtlas ~= nil)
@@ -1256,6 +1371,28 @@ local function Ensure()
 	window.Status:SetPoint("TOPLEFT", MARGIN + 2, -68)
 	window.Status:SetJustifyH("LEFT")
 
+	-- A brief note in the status line's place, then the status line again.
+	window.Flash = window:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+	window.Flash:SetPoint("LEFT", window.Status, "LEFT")
+	window.Flash:SetJustifyH("LEFT")
+	window.Flash:Hide()
+	window.FlashFade = window.Flash:CreateAnimationGroup()
+	local fade = window.FlashFade:CreateAnimation("Alpha")
+	fade:SetFromAlpha(1)
+	fade:SetToAlpha(0)
+	fade:SetStartDelay(4)
+	fade:SetDuration(1)
+	local function EndFlash()
+		window.Flash:Hide()
+		window.Status:Show()
+	end
+	window.FlashFade:SetScript("OnFinished", EndFlash)
+	window.FlashFade:SetScript("OnStop", EndFlash)
+	window:HookScript("OnHide", function()
+		armedDelete = nil
+		window.FlashFade:Stop()
+	end)
+
 	window.Search = CreateFrame("EditBox", nil, window, "SearchBoxTemplate")
 	window.Search:SetSize(250, 20)
 	window.Search:SetAutoFocus(false)
@@ -1289,7 +1426,7 @@ local function Ensure()
 	end)
 	window.FilterDropdown:SetupMenu(function(_dropdown, root)
 		if not (Filter and raceFilter) then return end
-		local records = Records()
+		local records = WallRecords()
 		local races = Filter.Races(records)
 		local classes = Filter.Classes(records)
 		local function Changed()
@@ -1405,22 +1542,21 @@ local function Ensure()
 		window.SnapDrag:SetPoint("LEFT", window.CharacterButton, "RIGHT", 12, 0)
 	end
 
-	-- Two exclusive buttons in the header, the same shape as the mount
-	-- picker's mode switch. Original race is disabled rather than hidden while
-	-- no body has been borrowed, because a control you cannot use still has to
-	-- say what it would do and why it will not.
-	local function BuildSwitch(label, width)
-		local button = CreateFrame("Button", nil, window, "BackdropTemplate")
-		button:SetSize(width, SWITCH_H)
+	-- A boxed button in the header, the same shape as the mount picker's mode
+	-- switch. The height and the font are arguments because the zoom row is
+	-- deliberately smaller than the row above it.
+	local function BuildSwitch(parent, label, width, height, font)
+		local button = CreateFrame("Button", nil, parent, "BackdropTemplate")
+		button:SetSize(width, height or SWITCH_H)
 		button:SetBackdrop({ edgeFile = "Interface\\Buttons\\WHITE8X8", edgeSize = 1 })
-		button.Text = button:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+		button.Text = button:CreateFontString(nil, "OVERLAY", font or "GameFontNormal")
 		button.Text:SetPoint("CENTER")
 		button.Text:SetText(label)
 		button:SetScript("OnLeave", GameTooltip_Hide)
 		return button
 	end
 
-	window.CharacterButton = BuildSwitch("Characters: All", 150)
+	window.CharacterButton = BuildSwitch(window, "Characters: All", 150)
 	window.CharacterButton:SetPoint("LEFT", window.FilterDropdown, "RIGHT", 8, 0)
 	window.CharacterButton:SetBackdropBorderColor(1, 0.82, 0, 1)
 	window.CharacterButton.Text:SetTextColor(1, 0.82, 0)
@@ -1433,33 +1569,58 @@ local function Ensure()
 		GameTooltip:Show()
 	end)
 
-	window.Original = BuildSwitch("Original race", 110)
-	window.Original:SetScript("OnClick", function()
-		if not fullFidelity then return end
-		viewMode = "original"
-		LibraryUI.Refresh()
-	end)
-	window.Original:SetScript("OnEnter", function(self)
-		GameTooltip:SetOwner(self, "ANCHOR_BOTTOM")
-		GameTooltip:SetText("Original race and sex")
-		if fullFidelity then
-			GameTooltip:AddLine("Every look on the body of whoever wore it.",
-				0.6, 0.6, 0.6, true)
-		else
-			GameTooltip:AddLine("Not available yet.", 1, 0.3, 0.3)
-			GameTooltip:AddLine("A body of the other sex can only be built from a"
-				.. " living player, and none is in reach. Hover or target anyone of"
-				.. " the other sex and every look switches over at once.",
-				0.9, 0.9, 0.9, true)
-			GameTooltip:AddLine("Friendly player nameplates are off by default, so"
-				.. " a crowd does not count. Turning on nameplateShowFriendlyPlayers"
-				.. " makes this happen on its own. So does being in a group.",
-				0.6, 0.6, 0.6, true)
-		end
+	-- The two control rows, stacked against the close button and sharing a
+	-- left edge, so "Show:" and "Zoom:" line up and what follows each of them
+	-- starts in the same place. The rows are laid out left to right from that
+	-- edge and their right edges are ragged; the width is what the Show row
+	-- needs at its longest, so neither row can reach the close button.
+	local CONTROLS_W = 322
+	local LABEL_W = 46
+	local ZOOM_H = 16
+
+	window.ShowRow = CreateFrame("Frame", nil, window)
+	window.ShowRow:SetSize(CONTROLS_W, SWITCH_H)
+	window.ShowRow:SetPoint("TOPRIGHT", window.Close, "TOPLEFT", -6, -8)
+
+	window.ZoomRow = CreateFrame("Frame", nil, window)
+	window.ZoomRow:SetSize(CONTROLS_W, ZOOM_H)
+	window.ZoomRow:SetPoint("TOPLEFT", window.ShowRow, "BOTTOMLEFT", 0, -6)
+
+	window.ShowLabel = window.ShowRow:CreateFontString(nil, "OVERLAY",
+		"GameFontNormal")
+	window.ShowLabel:SetPoint("LEFT")
+	window.ShowLabel:SetText("Show:")
+
+	-- Whose body a look stands on, as the same dropdown word the sentence
+	-- above uses for the wall. What it sets is what you asked for, not what is
+	-- on screen: original race is granted the moment the last body has been
+	-- borrowed, and until then the line under the wall says so.
+	window.Body = ns.PairingHeaderUI.Word(window.ShowRow, SWITCH_H, "body",
+		function(value)
+			viewMode = ns.PairingHeader.Body(value)
+			LibraryUI.Refresh()
+		end)
+	window.Body:SetPoint("LEFT", window.ShowLabel, "LEFT", LABEL_W, 0)
+	window.Body:HookScript("OnEnter", function()
+		if fullFidelity then return end
+		GameTooltip:AddLine("Original race is not available yet.", 1, 0.3, 0.3)
+		GameTooltip:AddLine("A body of the other sex can only be built from a"
+			.. " living player, and none is in reach. Hover or target anyone of"
+			.. " the other sex and every look switches over at once.",
+			0.9, 0.9, 0.9, true)
+		GameTooltip:AddLine("Friendly player nameplates are off by default, so"
+			.. " a crowd does not count. Turning on nameplateShowFriendlyPlayers"
+			.. " makes this happen on its own. So does being in a group.",
+			0.6, 0.6, 0.6, true)
 		GameTooltip:Show()
 	end)
 
-	window.Mounted = BuildSwitch("Mounted", 76)
+	-- The third thing the Show row says. A toggle rather than a word in the
+	-- dropdown, because it answers a different question from the body one and
+	-- because it has a state neither body has: nothing here was captured
+	-- riding, so there is nothing to mount.
+	window.Mounted = BuildSwitch(window.ShowRow, "Mounted", 76)
+	window.Mounted:SetPoint("LEFT", window.Body, "RIGHT", 6, 0)
 	window.Mounted:SetScript("OnClick", function()
 		if not window.anyMounts then return end
 		showMounts = not showMounts
@@ -1481,25 +1642,54 @@ local function Ensure()
 		GameTooltip:Show()
 	end)
 
-	window.Mine = BuildSwitch("My race", 82)
-	window.Mine:SetScript("OnClick", function()
-		viewMode = "mine"
+	-- The fourth, and only on the snapshot wall: the archive holds nothing
+	-- else. On, the wall is the archive instead of the records.
+	window.Archived = BuildSwitch(window.ShowRow, "Archived", 76)
+	window.Archived:SetPoint("LEFT", window.Mounted, "RIGHT", 6, 0)
+	window.Archived:SetScript("OnClick", function(self)
+		if not (Filter and raceFilter) then return end
+		local on = Filter.ShowsArchived(raceFilter)
+		if not on and not window.anyArchived then return end
+		Filter.SetArchived(raceFilter, not on)
+		armedDelete = nil
+		window.FlashFade:Stop()
 		LibraryUI.Refresh()
+		window.Box:ScrollToBegin()
+		if GameTooltip:IsOwned(self) then self:GetScript("OnEnter")(self) end
 	end)
-	window.Mine:SetScript("OnEnter", function(self)
+	window.Archived:SetScript("OnEnter", function(self)
 		GameTooltip:SetOwner(self, "ANCHOR_BOTTOM")
-		GameTooltip:SetText("Your race and sex")
-		GameTooltip:AddLine("Every look on your own body, as you are standing now.",
-			0.6, 0.6, 0.6, true)
+		GameTooltip:SetText("Archived snapshots")
+		if Filter and Filter.ShowsArchived(raceFilter) then
+			GameTooltip:AddLine("Showing only the snapshots you archived. Restore"
+				.. " puts one back on the wall; Delete removes it for good.",
+				0.6, 0.6, 0.6, true)
+			GameTooltip:AddLine("Click to go back to the wall.", 0.9, 0.9, 0.9, true)
+		elseif window.anyArchived then
+			GameTooltip:AddLine("Show only the snapshots you archived, to restore"
+				.. " or delete them.", 0.6, 0.6, 0.6, true)
+		else
+			GameTooltip:AddLine("Nothing archived.", 1, 0.3, 0.3)
+			GameTooltip:AddLine("The X on a snapshot archives it.",
+				0.9, 0.9, 0.9, true)
+		end
+		local days = type(MogtrotDB) == "table" and tonumber(MogtrotDB.archiveDays)
+		if days and days > 0 then
+			GameTooltip:AddLine(("Archived snapshots are dropped after %d days.")
+				:format(days), 0.6, 0.6, 0.6, true)
+		end
 		GameTooltip:Show()
 	end)
 
-	-- Zoom, on the row under the view switches. Dragging a card up and down
-	-- does the same thing, but a drag is invisible until somebody tries it,
-	-- and it cannot offer the way back: the readout is that, and says how far
-	-- from its normal framing the wall has been taken.
+	-- Zoom, on its own row under the Show row and smaller than it: this is a
+	-- nudge, not a mode, and at the same weight it read as a third thing you
+	-- choose between. Dragging a card up and down does the same, but a drag is
+	-- invisible until somebody tries it, and it cannot offer the way back: the
+	-- readout is that, and says how far from its normal framing the wall has
+	-- been taken.
 	local function BuildZoomButton(label, width, steps)
-		local button = BuildSwitch(label, width)
+		local button = BuildSwitch(window.ZoomRow, label, width, ZOOM_H,
+			"GameFontNormalSmall")
 		button:SetBackdropBorderColor(1, 0.82, 0, 1)
 		button.Text:SetTextColor(1, 0.82, 0)
 		button:SetScript("OnClick", function()
@@ -1510,7 +1700,13 @@ local function Ensure()
 		return button
 	end
 
-	window.ZoomOut = BuildZoomButton("-", 24, -1)
+	window.ZoomLabel = window.ZoomRow:CreateFontString(nil, "OVERLAY",
+		"GameFontNormal")
+	window.ZoomLabel:SetPoint("LEFT")
+	window.ZoomLabel:SetText("Zoom:")
+
+	window.ZoomOut = BuildZoomButton("-", 18, -1)
+	window.ZoomOut:SetPoint("LEFT", window.ZoomLabel, "LEFT", LABEL_W, 0)
 	window.ZoomOut:SetScript("OnEnter", function(self)
 		GameTooltip:SetOwner(self, "ANCHOR_BOTTOM")
 		GameTooltip:SetText("Zoom out")
@@ -1519,16 +1715,9 @@ local function Ensure()
 		GameTooltip:Show()
 	end)
 
-	window.ZoomIn = BuildZoomButton("+", 24, 1)
-	window.ZoomIn:SetScript("OnEnter", function(self)
-		GameTooltip:SetOwner(self, "ANCHOR_BOTTOM")
-		GameTooltip:SetText("Zoom in")
-		GameTooltip:AddLine("Every model a step closer. Dragging a card up"
-			.. " does the same.", 0.6, 0.6, 0.6, true)
-		GameTooltip:Show()
-	end)
-
-	window.ZoomLevel = BuildSwitch("", 54)
+	window.ZoomLevel = BuildSwitch(window.ZoomRow, "", 44, ZOOM_H,
+		"GameFontNormalSmall")
+	window.ZoomLevel:SetPoint("LEFT", window.ZoomOut, "RIGHT", 4, 0)
 	window.ZoomLevel:SetBackdropBorderColor(0.5, 0.5, 0.5, 1)
 	window.ZoomLevel.Text:SetTextColor(0.7, 0.7, 0.7)
 	window.ZoomLevel:SetScript("OnClick", function()
@@ -1543,13 +1732,15 @@ local function Ensure()
 		GameTooltip:Show()
 	end)
 
-	window.ZoomLabel = window:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-	window.ZoomLabel:SetText("Zoom:")
-
-	window.ShowLabel = window:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-	window.ShowLabel:SetText("Show:")
-	window.OrLabel = window:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-	window.OrLabel:SetText("or")
+	window.ZoomIn = BuildZoomButton("+", 18, 1)
+	window.ZoomIn:SetPoint("LEFT", window.ZoomLevel, "RIGHT", 4, 0)
+	window.ZoomIn:SetScript("OnEnter", function(self)
+		GameTooltip:SetOwner(self, "ANCHOR_BOTTOM")
+		GameTooltip:SetText("Zoom in")
+		GameTooltip:AddLine("Every model a step closer. Dragging a card up"
+			.. " does the same.", 0.6, 0.6, 0.6, true)
+		GameTooltip:Show()
+	end)
 
 	window.Box = CreateFrame("Frame", nil, window, "WowScrollBoxList")
 	window.Box:SetPoint("TOPLEFT", MARGIN, -HEADER)
@@ -1579,20 +1770,10 @@ local function Ensure()
 		window.Box:OnMouseWheel(delta)
 	end)
 
-	-- Anchored once all three exist, right to left from the close button.
-	window.Mine:SetPoint("TOPRIGHT", window.Close, "TOPLEFT", -6, -8)
-	window.OrLabel:SetPoint("RIGHT", window.Mine, "LEFT", -6, 0)
-	window.Original:SetPoint("RIGHT", window.OrLabel, "LEFT", -6, 0)
-	window.ShowLabel:SetPoint("RIGHT", window.Original, "LEFT", -8, 0)
-	window.Mounted:SetPoint("TOPRIGHT", window.Close, "TOPLEFT", -6, -34)
-	window.ZoomIn:SetPoint("RIGHT", window.Mounted, "LEFT", -8, 0)
-	window.ZoomLevel:SetPoint("RIGHT", window.ZoomIn, "LEFT", -4, 0)
-	window.ZoomOut:SetPoint("RIGHT", window.ZoomLevel, "LEFT", -4, 0)
-	window.ZoomLabel:SetPoint("RIGHT", window.ZoomOut, "LEFT", -8, 0)
-	-- The sentence shares its row with the body switches, so it ends where
-	-- they begin. The zoom controls are on the row below, with the body
-	-- switch, so neither row has to make space for the other.
-	window.HeaderRow:SetPoint("RIGHT", window.ShowLabel, "LEFT", -10, 0)
+	-- The sentence shares its row with the Show controls, so it ends where
+	-- they begin. Against the rows rather than the first word in them, so the
+	-- sentence keeps its room whatever the Show row happens to read.
+	window.HeaderRow:SetPoint("RIGHT", window.ShowRow, "LEFT", -10, 0)
 
 	-- A body can only be borrowed from somebody the client will name, and in a
 	-- crowd that is almost never a nameplate: friendly player nameplates are
@@ -1745,7 +1926,7 @@ function LibraryUI.WarmAll(donorUnit)
 	if not bodiesWanted then return 0 end
 
 	local built = 0
-	for _, record in ipairs(Records()) do
+	for _, record in ipairs(WallRecords()) do
 		if LibraryUI.WarmBody(record, donorUnit) then built = built + 1 end
 	end
 	return built
@@ -1960,7 +2141,7 @@ end
 function LibraryUI.Refresh()
 	if not window or not window:IsShown() then return end
 
-	local allRecords = Records()
+	local allRecords = WallRecords()
 	local Filter = ns.LibraryFilter
 	local searched = {}
 	for _, record in ipairs(allRecords) do
@@ -2058,6 +2239,24 @@ function LibraryUI.Refresh()
 	ShowZoom()
 
 	local snapshotMode = not Filter or Filter.IsSnapshotMode(raceFilter)
+	local showsArchived = Filter and Filter.ShowsArchived(raceFilter) or false
+
+	-- The same three looks as Mounted: on, off, and nothing to show.
+	local library = Library()
+	window.anyArchived = library ~= nil and type(library.archive) == "table"
+		and #library.archive > 0
+	window.Archived:SetShown(snapshotMode)
+	window.Archived:SetEnabled(showsArchived or window.anyArchived)
+	if showsArchived then
+		window.Archived:SetBackdropBorderColor(1, 0.82, 0, 1)
+		window.Archived.Text:SetTextColor(1, 0.82, 0)
+	elseif not window.anyArchived then
+		window.Archived:SetBackdropBorderColor(0.4, 0.3, 0.3, 1)
+		window.Archived.Text:SetTextColor(0.5, 0.45, 0.45)
+	else
+		window.Archived:SetBackdropBorderColor(0.5, 0.5, 0.5, 1)
+		window.Archived.Text:SetTextColor(0.7, 0.7, 0.7)
+	end
 	-- The sentence says which wall you are on and how much of it is showing;
 	-- the line under it says why that is not all of it.
 	window.PaintHeader({
@@ -2083,25 +2282,18 @@ function LibraryUI.Refresh()
 			and "Search character name" or "Search set name")
 	end
 
-	-- Selected is gold, available is dim, unavailable is red-grey and unclickable.
+	-- What is on the wall, as opposed to what was asked for.
 	local showing = fullFidelity and viewMode == "original"
-	window.Original:SetEnabled(fullFidelity)
-	if not fullFidelity then
-		window.Original:SetBackdropBorderColor(0.4, 0.3, 0.3, 1)
-		window.Original.Text:SetTextColor(0.5, 0.45, 0.45)
-	elseif showing then
-		window.Original:SetBackdropBorderColor(1, 0.82, 0, 1)
-		window.Original.Text:SetTextColor(1, 0.82, 0)
-	else
-		window.Original:SetBackdropBorderColor(0.5, 0.5, 0.5, 1)
-		window.Original.Text:SetTextColor(0.7, 0.7, 0.7)
-	end
-	if showing then
-		window.Mine:SetBackdropBorderColor(0.5, 0.5, 0.5, 1)
-		window.Mine.Text:SetTextColor(0.7, 0.7, 0.7)
-	else
-		window.Mine:SetBackdropBorderColor(1, 0.82, 0, 1)
-		window.Mine.Text:SetTextColor(1, 0.82, 0)
+
+	-- The word says what you asked for. Asking for original race where no body
+	-- has been borrowed is pending rather than refused: the wall turns over on
+	-- its own the moment the last one arrives. So the word goes red-grey
+	-- instead of being taken away, its tooltip says what is missing, and the
+	-- line under the wall says what is actually on it.
+	window.Body:Say(viewMode)
+	if viewMode == "original" and not fullFidelity then
+		window.Body:SetBackdropBorderColor(0.4, 0.3, 0.3, 1)
+		window.Body.Text:SetTextColor(0.5, 0.45, 0.45)
 	end
 
 	window.Box:SetDataProvider(CreateDataProvider(list),
@@ -2114,7 +2306,9 @@ function LibraryUI.Refresh()
 		and window.FilterDropdown.mogtrotStatus
 		or "Race: All | Class: All | Armor: All"
 	if #list == 0 then
-		if #allRecords == 0 then
+		if #allRecords == 0 and showsArchived then
+			window.Status:SetText("nothing archived")
+		elseif #allRecords == 0 then
 			window.Status:SetText("nothing captured yet: target someone and /mogtrot snap")
 		else
 			window.Status:SetText(filterStatus)
@@ -2132,6 +2326,18 @@ function LibraryUI.Refresh()
 	end
 end
 
+-- A short note where the status line is, for a few seconds. Not a dialog: the
+-- window stays live under it.
+function LibraryUI.Flash(text)
+	if not (window and window:IsShown()) then return end
+	window.FlashFade:Stop()
+	window.Flash:SetText(text)
+	window.Flash:SetAlpha(1)
+	window.Status:Hide()
+	window.Flash:Show()
+	window.FlashFade:Play()
+end
+
 -- On screen right now, which is what a shortcut to it needs to know.
 -- IsVisible rather than IsShown: IsShown answers only for the frame's own
 -- flag and stays true under a hidden parent.
@@ -2146,7 +2352,6 @@ local function CloseOthers()
 	local addon = ns.Addon
 	if not addon then return end
 	if addon.ClosePicker then addon:ClosePicker() end
-	if addon.CloseHearthstonePicker then addon.CloseHearthstonePicker() end
 end
 
 function LibraryUI.Show()

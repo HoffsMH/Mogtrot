@@ -9,6 +9,10 @@ local _, ns = ...
 -- twice they would drift, and the first sign of that is a window you can
 -- switch out of but not back into.
 --
+-- A window that wants one of those words on its own, outside a sentence, takes
+-- it from here too, so the two are one control rather than two that resemble
+-- each other.
+--
 -- The window supplies what each word does; this knows only how one looks.
 local PairingHeaderUI = {}
 
@@ -30,6 +34,8 @@ local TIP = {
 		"Your own characters' outfits and custom sets, or the snapshots you took"
 			.. " of other players. Snapshots are account-wide and are narrowed by"
 			.. " race, class and armour." },
+	body = { "Switch whose body a look is on",
+		"Every look on the body of whoever wore it, or all of them on your own." },
 }
 
 -- Returns the texture and whether it is an atlas, because the two need
@@ -104,6 +110,78 @@ local function Segment_OnEnter(self)
 	GameTooltip:Show()
 end
 
+-- A word, and how one is painted. A word standing alone and a word inside a
+-- sentence are the same control, so both are made here rather than once per
+-- window that wants one.
+local function NewSegment(parent, height, onClick)
+	local segment = CreateFrame("Button", nil, parent, "BackdropTemplate")
+	segment:SetHeight(height)
+	segment.Icon = segment:CreateTexture(nil, "ARTWORK")
+	segment.Icon:SetSize(ICON, ICON)
+	segment.Icon:SetTexCoord(0.07, 0.93, 0.07, 0.93)
+	segment.Icon:Hide()
+	segment.Text = segment:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+	segment.Text:SetPoint("LEFT")
+	segment:SetScript("OnEnter", Segment_OnEnter)
+	segment:SetScript("OnLeave", GameTooltip_Hide)
+	segment:SetScript("OnClick", onClick)
+	return segment
+end
+
+local function Paint(segment, part, outfitIcon)
+	segment.action = part.action
+	segment.Text:SetText(part.text)
+	segment.Text:ClearAllPoints()
+	-- A clickable word is boxed in gold and takes the mouse; the prose
+	-- between is plain and lets clicks through to the window behind. A boxed
+	-- word with no action looks the same and takes no clicks.
+	if part.action or part.boxed then
+		local icon, isAtlas = IconFor(part.icon, outfitIcon)
+		segment.Icon:ClearAllPoints()
+		segment.Icon:SetPoint("LEFT", segment, "LEFT", PAD, 0)
+		if icon and isAtlas then
+			segment.Icon:SetAtlas(icon, false)
+		elseif icon then
+			segment.Icon:SetTexture(icon)
+		end
+		segment.Icon:SetShown(icon ~= nil)
+		local room = icon and (ICON + 4) or 0
+		segment.Text:SetTextColor(1, 0.82, 0)
+		segment.Text:SetPoint("LEFT", segment, "LEFT", PAD + room, 0)
+		segment:SetBackdrop(BACKDROP)
+		segment:SetBackdropBorderColor(1, 0.82, 0, 1)
+		segment:SetWidth(segment.Text:GetStringWidth() + room + PAD * 2)
+	else
+		segment.Icon:Hide()
+		segment.Text:SetTextColor(0.85, 0.85, 0.85)
+		segment.Text:SetPoint("LEFT")
+		if segment.ClearBackdrop then segment:ClearBackdrop()
+		else segment:SetBackdrop(nil) end
+		segment:SetWidth(math.max(segment.Text:GetStringWidth(), 1))
+	end
+	segment:EnableMouse(part.action ~= nil)
+end
+
+-- One changeable word standing on its own, outside any sentence: the same box,
+-- the same menu and the same tooltip as a word inside one. Two dropdowns that
+-- look different are two controls as far as anyone reading the window is
+-- concerned, and this window already says one of these sentences above it.
+--
+-- The action never changes, so the word always opens the same menu. Say(value)
+-- puts it on one of that menu's choices.
+function PairingHeaderUI.Word(parent, height, action, onChoose)
+	local word
+	word = NewSegment(parent, height, function()
+		PairingHeaderUI.ShowMenu(word, action, onChoose)
+	end)
+	function word:Say(value)
+		local choice = ns.PairingHeader.Choice(action, value)
+		Paint(self, { text = choice and choice.text or tostring(value),
+			action = action, icon = choice and choice.icon })
+	end
+	return word
+end
+
 -- row is the frame the sentence is laid out in, left to right. height is the
 -- row's own height so a boxed word fills it. onClick(action, segment) is
 -- called with the action the word carries and the widget clicked.
@@ -124,17 +202,7 @@ function PairingHeaderUI.New(row, height, onClick, sentence)
 	local function Acquire(index)
 		local segment = segments[index]
 		if segment then return segment end
-		segment = CreateFrame("Button", nil, row, "BackdropTemplate")
-		segment:SetHeight(height)
-		segment.Icon = segment:CreateTexture(nil, "ARTWORK")
-		segment.Icon:SetSize(ICON, ICON)
-		segment.Icon:SetTexCoord(0.07, 0.93, 0.07, 0.93)
-		segment.Icon:Hide()
-		segment.Text = segment:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-		segment.Text:SetPoint("LEFT")
-		segment:SetScript("OnEnter", Segment_OnEnter)
-		segment:SetScript("OnLeave", GameTooltip_Hide)
-		segment:SetScript("OnClick", Segment_OnClick)
+		segment = NewSegment(row, height, Segment_OnClick)
 		segments[index] = segment
 		return segment
 	end
@@ -146,36 +214,7 @@ function PairingHeaderUI.New(row, height, onClick, sentence)
 		local anchor
 		for index, part in ipairs(parts) do
 			local segment = Acquire(index)
-			segment.action = part.action
-			segment.Text:SetText(part.text)
-			segment.Text:ClearAllPoints()
-			-- A clickable word is boxed in gold and takes the mouse; the prose
-			-- between is plain and lets clicks through to the window behind.
-			if part.action then
-				local icon, isAtlas = IconFor(part.icon, state and state.outfitIcon)
-				segment.Icon:ClearAllPoints()
-				segment.Icon:SetPoint("LEFT", segment, "LEFT", PAD, 0)
-				if icon and isAtlas then
-					segment.Icon:SetAtlas(icon, false)
-				elseif icon then
-					segment.Icon:SetTexture(icon)
-				end
-				segment.Icon:SetShown(icon ~= nil)
-				local room = icon and (ICON + 4) or 0
-				segment.Text:SetTextColor(1, 0.82, 0)
-				segment.Text:SetPoint("LEFT", segment, "LEFT", PAD + room, 0)
-				segment:SetBackdrop(BACKDROP)
-				segment:SetBackdropBorderColor(1, 0.82, 0, 1)
-				segment:SetWidth(segment.Text:GetStringWidth() + room + PAD * 2)
-			else
-				segment.Icon:Hide()
-				segment.Text:SetTextColor(0.85, 0.85, 0.85)
-				segment.Text:SetPoint("LEFT")
-				if segment.ClearBackdrop then segment:ClearBackdrop()
-				else segment:SetBackdrop(nil) end
-				segment:SetWidth(math.max(segment.Text:GetStringWidth(), 1))
-			end
-			segment:EnableMouse(part.action ~= nil)
+			Paint(segment, part, state and state.outfitIcon)
 			segment:ClearAllPoints()
 			if anchor then
 				segment:SetPoint("LEFT", anchor, "RIGHT", 0, 0)

@@ -229,6 +229,62 @@ function Tree.MoveOutfitBySteps(db, outfitID, delta)
 	return Tree.MoveOutfit(db, outfitID, catID, delta < 0 and (at - 1) or (at + 2))
 end
 
+-- Takes an outfit out of the tree and leaves everything stored against it alone.
+-- For an entry that should never have been filed; a player's own move is
+-- MoveOutfit.
+function Tree.UnfileOutfit(db, outfitID)
+	local catID = db.assign[outfitID]
+	local cat = catID and db.cats[catID]
+	db.assign[outfitID] = nil
+	if not cat then return false end
+
+	local at = Tree.IndexInList(cat.items, outfitID)
+	if not at then return false end
+	table.remove(cat.items, at)
+	return true
+end
+
+local function Holds(store, outfitID)
+	return type(store) == "table" and store[outfitID] ~= nil
+end
+
+-- A character gets far more outfit slots than anyone fills and the client reports
+-- every one of them, so filing the whole list buries a new character's library
+-- under rows called "Outfit". The client is what names an unused slot: pass
+-- TRANSMOG_OUTFIT_NAME_DEFAULT as defaultName, and since the only way to change a
+-- name is the editor that sets the icon alongside it, a slot still carrying that
+-- name is one nobody has opened. The two entry flags answer different questions -
+-- isEventOutfit is Trial of Style, isDisabled is "cannot be worn" - and contents
+-- are readable only for the single outfit the client has viewed, so there is no
+-- piece count to take here.
+--
+-- Everything after the name leans towards keeping the row. Anything stored against
+-- the outfit, or a category the player picked for it, outranks the name, so the
+-- look and the slot count that a save records bring the row straight back and
+-- nothing already sorted can disappear.
+function Tree.UntouchedSlot(db, info, defaultName)
+	if type(defaultName) ~= "string" or defaultName == "" then return false end
+	if type(info) ~= "table" or info.name ~= defaultName then return false end
+
+	local outfitID = info.outfitID
+	if outfitID == nil then return false end
+
+	if type(info.situationCategories) == "table" and next(info.situationCategories) then
+		return false
+	end
+	if Holds(db.looks, outfitID) or Holds(db.mounts, outfitID)
+		or Holds(db.hearthstones, outfitID) or Holds(db.titles, outfitID)
+		or Holds(db.wear, outfitID) then
+		return false
+	end
+
+	local record = type(db.slots) == "table" and db.slots[outfitID]
+	if type(record) == "table" and (tonumber(record.covered) or 0) > 0 then return false end
+
+	local cat = db.cats[db.assign[outfitID] or 0]
+	return not (cat and not cat.protected)
+end
+
 function Tree.CountOutfits(db, catID, depth)
 	depth = depth or 0
 	local cat = db.cats[catID]

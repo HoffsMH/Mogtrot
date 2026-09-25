@@ -31,6 +31,7 @@ function LibraryFilter.New()
 		sources = { outfits = true, customSets = true },
 		hideEmptyOutfits = true,
 		allOwners = true, owners = {},
+		archived = false,
 	}
 end
 
@@ -41,6 +42,18 @@ end
 
 function LibraryFilter.IsSnapshotMode(state)
 	return type(state) ~= "table" or state.mode ~= "mine"
+end
+
+function LibraryFilter.SetArchived(state, on)
+	if type(state) ~= "table" then return end
+	state.archived = on == true
+end
+
+-- The archive holds only snapshots, so on your own characters the switch
+-- means nothing and the wall is the ordinary one.
+function LibraryFilter.ShowsArchived(state)
+	return type(state) == "table" and state.archived == true
+		and LibraryFilter.IsSnapshotMode(state)
 end
 
 function LibraryFilter.SetHideEmptyOutfits(state, hide)
