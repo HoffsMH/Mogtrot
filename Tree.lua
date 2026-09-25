@@ -248,6 +248,18 @@ local function Holds(store, outfitID)
 	return type(store) == "table" and store[outfitID] ~= nil
 end
 
+-- The login sweep stores a look for every outfit it reads, so a look counts only
+-- when some slot in it holds an appearance.
+local function AssignsAnything(looks, outfitID)
+	local look = type(looks) == "table" and looks[outfitID]
+	if look == nil then return false end
+	if type(look) ~= "table" then return true end
+	for _, slot in pairs(look) do
+		if type(slot) ~= "table" or (tonumber(slot[1]) or 0) ~= 0 then return true end
+	end
+	return false
+end
+
 -- A character gets far more outfit slots than anyone fills and the client reports
 -- every one of them, so filing the whole list buries a new character's library
 -- under rows called "Outfit". The client is what names an unused slot: pass
@@ -272,7 +284,7 @@ function Tree.UntouchedSlot(db, info, defaultName)
 	if type(info.situationCategories) == "table" and next(info.situationCategories) then
 		return false
 	end
-	if Holds(db.looks, outfitID) or Holds(db.mounts, outfitID)
+	if AssignsAnything(db.looks, outfitID) or Holds(db.mounts, outfitID)
 		or Holds(db.hearthstones, outfitID) or Holds(db.titles, outfitID)
 		or Holds(db.wear, outfitID) then
 		return false
