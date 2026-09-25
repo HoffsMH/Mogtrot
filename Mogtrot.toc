@@ -54,7 +54,6 @@ HearthstoneDefinitions.lua
 HearthstoneCollection.lua
 HearthPick.lua
 HearthstoneController.lua
-HearthstonePickerUI.lua
 MountPickerUI.lua
 SettingsUI.lua
 SettingsUI.xml
