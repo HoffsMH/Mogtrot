@@ -409,11 +409,11 @@ function Addon:OpenFallbackPicker()
 	local mode = self:FallbackMode()
 
 	local items = {
-		{ name = "Random mount", note = "default - a favourite if you have one",
+		{ name = "Random mount", note = "a favourite if you have one",
 			noteDim = true, mode = "random",
 			preselected = (mode == "random") or nil },
 		{ name = "Pinned mount", mode = "pinned",
-			note = "choose among active pins", noteDim = true,
+			note = "default - choose among active pins", noteDim = true,
 			preselected = (mode == "pinned") or nil },
 	}
 	if LiteMountFallbackAvailable() then

@@ -29,7 +29,6 @@ local function BuildOutfitPreview(name, parent)
 	preview.Model = CreateFrame("DressUpModel", nil, preview)
 	preview.Model:SetPoint("TOPLEFT", 8, -8)
 	preview.Model:SetPoint("BOTTOMRIGHT", -8, 8)
-	preview.Model:SetUseTransmogChoices(true)
 	preview.Model:SetAutoDress(false)
 
 	preview.Message = preview:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")

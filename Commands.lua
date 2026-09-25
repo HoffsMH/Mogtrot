@@ -21,7 +21,7 @@ local HELP = {
 	{ "capture", "re-capture the outfit you are wearing" },
 	{ "slots scan", "check every outfit again, including ones already checked" },
 	{ "slots wipe", "forget every measurement, so the next scan redoes it" },
-	{ "macro", "check the three action bar macros, for a bug report" },
+	{ "macro", "check the open, summon, least and hearth macros, for a bug report" },
 	{ "state", "print what Mogtrot can see, for a bug report" },
 	{ "snap", "save the look of the player you target into the library" },
 	{ "library", "every look you have captured, four to a row" },
