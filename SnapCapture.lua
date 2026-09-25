@@ -15,6 +15,24 @@ local INSPECT_TIMEOUT = 5
 
 local waiter
 
+-- How long the confirmation stays up. A ceiling, not a target.
+SnapCapture.CONFIRM_SECONDS = 2
+
+-- What is left of the confirmation's bar, 1 at the start and 0 at the end.
+function SnapCapture.ConfirmFraction(elapsed, duration)
+	if type(duration) ~= "number" or duration <= 0 then return 0 end
+	if type(elapsed) ~= "number" then return 0 end
+	local left = 1 - elapsed / duration
+	if left < 0 then return 0 end
+	if left > 1 then return 1 end
+	return left
+end
+
+-- Quiet means quiet, and a pop-up in the middle of a fight is noise.
+function SnapCapture.ShouldConfirm(quiet, inCombat)
+	return not quiet and not inCombat
+end
+
 local function Cancel(clearInspect)
 	if not waiter then return end
 	waiter:UnregisterAllEvents()
@@ -255,6 +273,12 @@ function SnapCapture.Target(Addon)
 		return
 	end
 	local pinnedGUID = facts.guid
+	-- Identity not flagged secret can still leave the GUID secret or empty.
+	-- Either way there is nothing to pin, so nothing is captured.
+	if not pinnedGUID then
+		Addon:Warn("can't snap your target; the client would not say who they are.")
+		return
+	end
 
 	-- The inspect list is global: it holds whoever was last inspected, with no
 	-- unit argument to ask with. Left alone, the first read can hand back the
@@ -291,6 +315,12 @@ function SnapCapture.Target(Addon)
 			pcall(ns.LibraryUI.WarmAll, unit)
 		end
 		if ns.LibraryUI then ns.LibraryUI.Refresh() end
+
+		local ui = ns.LibraryUI
+		if ui and ui.ConfirmSnap and SnapCapture.ShouldConfirm(MogtrotDB.quiet,
+			InCombatLockdown and InCombatLockdown()) then
+			pcall(ui.ConfirmSnap, library.records[id] or record, isNew)
+		end
 	end
 
 	-- INSPECT_READY names the player it answers for, which is the only thing
@@ -307,7 +337,7 @@ function SnapCapture.Target(Addon)
 			tostring(facts.name), INSPECT_TIMEOUT)
 	end)
 	waiter:SetScript("OnEvent", function(_self, _event, inspecteeGUID)
-		if pinnedGUID and inspecteeGUID ~= pinnedGUID then return end
+		if inspecteeGUID ~= pinnedGUID then return end
 		Cancel(false)
 
 		local ok, list = pcall(C_TransmogCollection.GetInspectItemTransmogInfoList)

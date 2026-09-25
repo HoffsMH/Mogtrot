@@ -70,6 +70,13 @@ describe("SnapCapture inspect ownership", function()
 				Add = function() saves = saves + 1 return 1, true end,
 			},
 		}
+		local confirmed = {}
+		ns.LibraryUI = {
+			Refresh = function() end,
+			ConfirmSnap = function(record, isNew)
+				confirmed[#confirmed + 1] = { record = record, isNew = isNew }
+			end,
+		}
 		local addon = {
 			Say = function(_, text) notices[#notices + 1] = text end,
 			Warn = function(_, text) notices[#notices + 1] = text end,
@@ -77,7 +84,7 @@ describe("SnapCapture inspect ownership", function()
 		local capture = assert(loadfile("SnapCapture.lua"))("Mogtrot", ns)
 		return {
 			capture = capture, addon = addon, scripts = scripts, timers = timers,
-			notices = notices,
+			notices = notices, confirmed = confirmed,
 			reads = function() return reads end,
 			saves = function() return saves end,
 			clears = function() return clears end,
@@ -126,6 +133,34 @@ describe("SnapCapture inspect ownership", function()
 		assert.truthy(h.notices[1]:find("identity is hidden", 1, true))
 	end)
 
+	it("refuses a target with no GUID, before inspecting", function()
+		local h = Load()
+		local notified = 0
+		_G.NotifyInspect = function() notified = notified + 1 end
+		_G.C_Secrets = { ShouldUnitIdentityBeSecret = function() return false end }
+		h.setGUID(nil)
+		h.capture.Target(h.addon)
+		assert.equal(0, notified)
+		assert.is_nil(h.scripts.OnEvent)
+		assert.equal(0, h.saves())
+		assert.equal(1, #h.notices)
+		assert.truthy(h.notices[1]:find("can't snap", 1, true))
+	end)
+
+	it("refuses a target whose GUID comes back secret, before inspecting", function()
+		local h = Load()
+		local notified = 0
+		_G.NotifyInspect = function() notified = notified + 1 end
+		_G.C_Secrets = { ShouldUnitIdentityBeSecret = function() return false end }
+		_G.issecretvalue = function(value) return value == "Player-target" end
+		h.capture.Target(h.addon)
+		assert.equal(0, notified)
+		assert.is_nil(h.scripts.OnEvent)
+		assert.equal(0, h.saves())
+		assert.equal(1, #h.notices)
+		assert.truthy(h.notices[1]:find("can't snap", 1, true))
+	end)
+
 	it("inspects a target whose identity is not secret", function()
 		local h = Load()
 		local notified = 0
@@ -135,5 +170,64 @@ describe("SnapCapture inspect ownership", function()
 		h.scripts.OnEvent(nil, "INSPECT_READY", "Player-target")
 		assert.equal(1, notified)
 		assert.equal(1, h.saves())
+	end)
+	describe("confirmation", function()
+		it("confirms a saved capture with the stored record", function()
+			local h = Load()
+			h.capture.Target(h.addon)
+			h.scripts.OnEvent(nil, "INSPECT_READY", "Player-target")
+			assert.equal(1, #h.confirmed)
+			assert.equal("Target", h.confirmed[1].record.name)
+			assert.is_true(h.confirmed[1].isNew)
+		end)
+
+		it("stays silent when chat output is silenced", function()
+			local h = Load()
+			MogtrotDB.quiet = true
+			h.capture.Target(h.addon)
+			h.scripts.OnEvent(nil, "INSPECT_READY", "Player-target")
+			assert.equal(1, h.saves())
+			assert.equal(0, #h.confirmed)
+		end)
+
+		it("stays silent when the answer lands in combat", function()
+			local h = Load()
+			h.capture.Target(h.addon)
+			_G.InCombatLockdown = function() return true end
+			h.scripts.OnEvent(nil, "INSPECT_READY", "Player-target")
+			assert.equal(1, h.saves())
+			assert.equal(0, #h.confirmed)
+		end)
+
+		it("confirms nothing when nothing was saved", function()
+			local h = Load()
+			h.capture.Target(h.addon)
+			h.scripts.OnEvent(nil, "INSPECT_READY", "Player-somebody-else")
+			assert.equal(0, #h.confirmed)
+		end)
+	end)
+
+	describe("ConfirmFraction", function()
+		local capture = assert(loadfile("SnapCapture.lua"))("Mogtrot", {})
+
+		it("starts full and empties over the duration", function()
+			assert.equal(1, capture.ConfirmFraction(0, 2))
+			assert.equal(0.5, capture.ConfirmFraction(1, 2))
+			assert.equal(0, capture.ConfirmFraction(2, 2))
+		end)
+
+		it("never leaves the bar's range", function()
+			assert.equal(0, capture.ConfirmFraction(5, 2))
+			assert.equal(1, capture.ConfirmFraction(-1, 2))
+		end)
+
+		it("reads a missing or zero duration as over", function()
+			assert.equal(0, capture.ConfirmFraction(0, 0))
+			assert.equal(0, capture.ConfirmFraction(nil, nil))
+		end)
+
+		it("lasts no more than two seconds", function()
+			assert.truthy(capture.CONFIRM_SECONDS > 0 and capture.CONFIRM_SECONDS <= 2)
+		end)
 	end)
 end)

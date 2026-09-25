@@ -2376,5 +2376,93 @@ function LibraryUI.Toggle()
 	return frame
 end
 
+-- The snap confirmation: who was captured, their look, and a bar that empties
+-- until it goes. One frame; a second capture replaces the first and restarts
+-- the bar. Its single scene is built into the way the detail pane builds its
+-- own, through RenderInto, so it borrows nothing from the wall's pool. A look
+-- that would need a borrowed body shows text only.
+local CONFIRM_W, CONFIRM_H = 220, 300
+local confirm
+local confirmGeneration = 0
+
+local function EnsureConfirm()
+	if confirm then return confirm end
+	local frame = CreateFrame("Frame", nil, UIParent, "BackdropTemplate")
+	frame:SetSize(CONFIRM_W, CONFIRM_H)
+	frame:SetPoint("TOP", UIParent, "TOP", 0, -140)
+	frame:SetFrameStrata("FULLSCREEN_DIALOG")
+	frame:SetBackdrop(BACKDROP)
+	frame:SetBackdropColor(0, 0, 0, 0.9)
+	-- Passes clicks through: it is gone before anybody could use it.
+	frame:EnableMouse(false)
+
+	frame.Title = frame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+	frame.Title:SetPoint("TOPLEFT", 10, -10)
+	frame.Title:SetPoint("TOPRIGHT", -10, -10)
+	frame.Title:SetJustifyH("CENTER")
+	frame.Title:SetWordWrap(true)
+
+	frame.Scene = CreateFrame("ModelScene", nil, frame, "ModelSceneMixinTemplate")
+	frame.Scene:SetPoint("TOPLEFT", 8, -40)
+	frame.Scene:SetPoint("BOTTOMRIGHT", -8, 24)
+	frame.Scene:EnableMouse(false)
+	frame.Scene:EnableMouseWheel(false)
+
+	frame.NoModel = frame:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+	frame.NoModel:SetPoint("CENTER", 0, -8)
+	frame.NoModel:SetWidth(CONFIRM_W - 32)
+	frame.NoModel:SetJustifyH("CENTER")
+
+	frame.Bar = CreateFrame("StatusBar", nil, frame)
+	frame.Bar:SetPoint("BOTTOMLEFT", 10, 10)
+	frame.Bar:SetPoint("BOTTOMRIGHT", -10, 10)
+	frame.Bar:SetHeight(6)
+	frame.Bar:SetStatusBarTexture("Interface\\Buttons\\WHITE8X8")
+	frame.Bar:SetStatusBarColor(1, 0.82, 0)
+	frame.Bar:SetMinMaxValues(0, 1)
+	local track = frame.Bar:CreateTexture(nil, "BACKGROUND")
+	track:SetAllPoints()
+	track:SetColorTexture(1, 1, 1, 0.12)
+
+	frame:SetScript("OnUpdate", function(self)
+		local capture = ns.SnapCapture
+		if not capture then return end
+		self.Bar:SetValue(capture.ConfirmFraction(GetTime() - self.startedAt, self.duration))
+	end)
+	frame:Hide()
+	confirm = frame
+	return frame
+end
+
+function LibraryUI.ConfirmSnap(record, isNew)
+	local text, capture = ns.LibraryText, ns.SnapCapture
+	if type(record) ~= "table" or not (text and capture) then return end
+	local frame = EnsureConfirm()
+
+	-- A dismiss timer from an earlier capture must not close this one.
+	confirmGeneration = confirmGeneration + 1
+	local generation = confirmGeneration
+
+	frame.Title:SetText(text.Confirmation(record, isNew))
+	local drawn = false
+	if record.look ~= "" and LibraryUI.BodyIsDeterministic(record) then
+		local actor, how = LibraryUI.RenderInto(frame.Scene, record)
+		drawn = how ~= nil
+		if drawn then TurnCard({ actor = actor }, yaw) end
+	end
+	frame.Scene:SetShown(drawn)
+	frame.NoModel:SetText(drawn and "" or "Open the library to see this look.")
+
+	frame.startedAt = GetTime()
+	frame.duration = capture.CONFIRM_SECONDS
+	frame.Bar:SetValue(1)
+	frame:Show()
+	frame:Raise()
+	C_Timer.After(frame.duration, function()
+		if generation ~= confirmGeneration then return end
+		frame:Hide()
+	end)
+end
+
 ns.LibraryUI = LibraryUI
 return LibraryUI
