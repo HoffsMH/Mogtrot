@@ -112,4 +112,28 @@ describe("SnapCapture inspect ownership", function()
 		assert.equal(0, h.reads())
 		assert.equal(0, h.saves())
 	end)
+
+	it("refuses a target whose identity is secret, before inspecting", function()
+		local h = Load()
+		local notified = 0
+		_G.NotifyInspect = function() notified = notified + 1 end
+		_G.C_Secrets = { ShouldUnitIdentityBeSecret = function() return true end }
+		h.capture.Target(h.addon)
+		assert.equal(0, notified)
+		assert.is_nil(h.scripts.OnEvent)
+		assert.equal(0, h.saves())
+		assert.equal(1, #h.notices)
+		assert.truthy(h.notices[1]:find("identity is hidden", 1, true))
+	end)
+
+	it("inspects a target whose identity is not secret", function()
+		local h = Load()
+		local notified = 0
+		_G.NotifyInspect = function() notified = notified + 1 end
+		_G.C_Secrets = { ShouldUnitIdentityBeSecret = function() return false end }
+		h.capture.Target(h.addon)
+		h.scripts.OnEvent(nil, "INSPECT_READY", "Player-target")
+		assert.equal(1, notified)
+		assert.equal(1, h.saves())
+	end)
 end)
