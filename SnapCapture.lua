@@ -248,6 +248,12 @@ function SnapCapture.Target(Addon)
 	-- GUID is held for the rest of the capture. Reading it when the answer
 	-- arrives instead would describe whoever is targeted by then.
 	local facts, identified = Gather(unit)
+	-- Without a GUID to pin, an answer about anybody would pass the check in
+	-- the event handler, so a hidden identity is refused rather than guessed.
+	if not identified then
+		Addon:Warn("can't snap your target here; their identity is hidden.")
+		return
+	end
 	local pinnedGUID = facts.guid
 
 	-- The inspect list is global: it holds whoever was last inspected, with no
@@ -273,8 +279,7 @@ function SnapCapture.Target(Addon)
 
 		local who = record.name or "someone whose name is hidden here"
 		if isNew then
-			Addon:Say("saved %s as look #%d: %d slot(s)%s.", who, id, filled,
-				identified and "" or ", outfit only")
+			Addon:Say("saved %s as look #%d: %d slot(s).", who, id, filled)
 		else
 			Addon:Say("%s wears look #%d, already in the library; seen %d time(s).",
 				who, id, library.records[id].seenCount or 1)
