@@ -37,12 +37,11 @@ describe("pairing window", function()
 		assert.is_truthy(PAIRING:match("auctionhouse%-icon%-favorite%-off"))
 	end)
 
-	-- A removed file stays loaded until the client restarts, so it is emptied
-	-- rather than dropped from the TOC. Code left in it would still run.
-	it("leaves no code in the old hearthstone window", function()
-		local body = Read("HearthstonePickerUI.lua")
-		body = body:gsub("%-%-[^\n]*", ""):gsub("%s+", "")
-		assert.equal("", body)
+	it("leaves no old hearthstone window file behind", function()
+		assert.is_nil(io.open("HearthstonePickerUI.lua", "r"))
+		for _, toc in ipairs({ "Mogtrot.toc", "MogtrotDev.toc" }) do
+			assert.is_nil(Read(toc):find("HearthstonePickerUI", 1, true), toc)
+		end
 	end)
 
 	it("creates no second window", function()

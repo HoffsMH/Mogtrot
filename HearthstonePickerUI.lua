@@ -1,3 +1,0 @@
--- Empty. The hearthstone picker is the pairing window's hearthstone domain in
--- MountPickerUI.lua. This file stays in both TOCs only until the next client
--- restart, since a file dropped from a TOC is not unloaded by a reload.
