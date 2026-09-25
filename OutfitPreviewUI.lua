@@ -40,7 +40,10 @@ local function BuildOutfitPreview(name, parent)
 end
 
 local function RenderOutfitPreview(preview, outfitID)
-	local look = MogtrotCharDB.looks and MogtrotCharDB.looks[outfitID]
+	-- The last worn appearance first, equipped gear included; the outfit's
+	-- definition until it has been worn.
+	local worn, looks = MogtrotCharDB.worn, MogtrotCharDB.looks
+	local look = (worn and worn[outfitID]) or (looks and looks[outfitID])
 	if not look then
 		preview.outfitID = outfitID
 		preview.renderToken = (preview.renderToken or 0) + 1
@@ -94,7 +97,7 @@ local function PaintDockGlow(glow, side)
 end
 
 function OutfitPreviewUI.Attach(Addon, callbacks)
-	local previewFrame, mountEditPreview, searchPickerPreview, mountPicker, dockOwner
+	local previewFrame, mountEditPreview, searchPickerPreview, dockOwner
 	local mountEditDock = { side = "right", position = 0.5 }
 	local mainWindow = callbacks.mainWindow
 
@@ -269,11 +272,6 @@ function OutfitPreviewUI.Attach(Addon, callbacks)
 		BuildDockGlow = BuildDockGlow,
 		ApplyMountEditDock = ApplyMountEditDock,
 		ShowEditPreview = ShowEditPreview,
-		ShowMountEditPreview = function(outfitID)
-			local info = Addon.outfitsByID and Addon.outfitsByID[outfitID]
-			ShowEditPreview(mountPicker, outfitID, ("Editing mounts for %s"):format(
-				info and info.name or tostring(outfitID)))
-		end,
 		HideMountEditPreview = function()
 			if not mountEditPreview then return end
 			mountEditPreview:Hide()
@@ -295,7 +293,6 @@ function OutfitPreviewUI.Attach(Addon, callbacks)
 		HideSearchPickerPreview = function()
 			if searchPickerPreview then searchPickerPreview:Hide() end
 		end,
-		SetMountPicker = function(picker) mountPicker = picker end,
 		OnCaptured = function(outfitID)
 			if previewFrame and previewFrame.outfitID == outfitID then
 				if previewFrame:IsShown() then Addon:ShowPreview(outfitID) end

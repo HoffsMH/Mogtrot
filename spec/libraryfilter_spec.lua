@@ -399,3 +399,32 @@ describe("LibraryFilter.ModeCount", function()
 		assert.equal(0, LibraryFilter.ModeCount(nil, nil))
 	end)
 end)
+
+-- The Archived switch belongs to the snapshot wall; the archive holds nothing
+-- else, so on your own characters it means nothing.
+describe("LibraryFilter archived", function()
+	it("is off by default", function()
+		assert.is_false(LibraryFilter.ShowsArchived(LibraryFilter.New()))
+	end)
+
+	it("shows the archive on the snapshot wall when on", function()
+		local state = LibraryFilter.New()
+		LibraryFilter.SetArchived(state, true)
+		assert.is_true(LibraryFilter.ShowsArchived(state))
+		LibraryFilter.SetArchived(state, false)
+		assert.is_false(LibraryFilter.ShowsArchived(state))
+	end)
+
+	it("never shows the archive on your own characters", function()
+		local state = LibraryFilter.New()
+		LibraryFilter.SetArchived(state, true)
+		LibraryFilter.SetMode(state, "mine")
+		assert.is_false(LibraryFilter.ShowsArchived(state))
+		LibraryFilter.SetMode(state, "snapshots")
+		assert.is_true(LibraryFilter.ShowsArchived(state))
+	end)
+
+	it("survives no state", function()
+		assert.is_false(LibraryFilter.ShowsArchived(nil))
+	end)
+end)

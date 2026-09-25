@@ -2,6 +2,13 @@ local _, ns = ...
 
 local Pins = ns.Pins or require("Pins")
 
+-- The pairing window: what is paired with one outfit, or pinned account-wide,
+-- in one of two domains, mounts or hearthstones. One frame, one sentence
+-- header, one grid of pooled cards. The domain decides which rows fill the
+-- grid and which renderer paints a card's body; everything else is shared.
+--
+-- Cards are pooled by the scroll box and move between domains, so every card
+-- property is set on every paint, never at build.
 local MountPickerUI = {}
 
 function MountPickerUI.Attach(Addon, deps)
@@ -11,11 +18,14 @@ function MountPickerUI.Attach(Addon, deps)
 	local ValidMountTypes = deps.validMountTypes
 	local BuildDockGlow = deps.buildDockGlow
 	local ApplyMountEditDock = deps.applyMountEditDock
-	local ShowMountEditPreview = deps.showMountEditPreview
-	local HideMountEditPreview = deps.hideMountEditPreview
+	local ShowEditPreview = deps.showEditPreview
+	local HideEditPreview = deps.hideEditPreview
 	local OutfitWear_PreClick = deps.outfitWearPreClick
 	local OutfitWear_PostClick = deps.outfitWearPostClick
 	local mountPicker
+	-- Hearthstone reads and writes, from AttachHearthstones once the
+	-- character's store is known to carry them. Until then the domain is off.
+	local hearth
 
 local function MountPinDomain()
 	local db = MogtrotDB
@@ -29,10 +39,21 @@ local function MountPinDomain()
 	return domain
 end
 
-local function ActiveMountPins()
-	local domain = MountPinDomain()
-	if not domain then return {} end
-	return Pins.ActiveSet(domain, time())
+local function HearthPinDomain()
+	local account = hearth and hearth.account
+	local pins = type(account) == "table" and account.pins
+	return type(pins) == "table" and pins[hearth.pinsDomain or "hearthstones"] or nil
+end
+
+local function PinDomain(domain)
+	if domain == "hearthstones" then return HearthPinDomain() end
+	return MountPinDomain()
+end
+
+local function ActivePins(domain)
+	local store = PinDomain(domain)
+	if not store then return {} end
+	return Pins.ActiveSet(store, time())
 end
 
 -- The picker shows a three-by-three grid; resizing changes the cards, not the count.
@@ -55,6 +76,11 @@ local PICKER_HEADER_CONTROL_H = 26
 local PICKER_MIN_SCALE = 1
 local PICKER_MAX_SCALE = 1.8
 
+local CHOSEN_COLORS = { 0.18, 0.14, 0.02, 0.9, 1, 0.82, 0 }
+local PLAIN_COLORS = { 0.05, 0.05, 0.06, 0.9, 0.3, 0.3, 0.3 }
+local FALLBACK_ICON = "Interface\\Icons\\INV_Misc_QuestionMark"
+local SEARCH_HINT = { mounts = "Search mounts", hearthstones = "Search hearthstones" }
+
 local function PickerScale()
 	local scale = MogtrotDB.pickerScale or 1
 	return math.max(PICKER_MIN_SCALE, math.min(scale, PICKER_MAX_SCALE))
@@ -72,12 +98,32 @@ local function PickerSize()
 		PICKER_HEADER + GRID_PAD * 2 + GRID_ROWS * cardH
 			+ (GRID_ROWS - 1) * CARD_GAP + PICKER_FOOTER
 end
+
+local function Domain()
+	return mountPicker and mountPicker.domain or "mounts"
+end
+
 function Addon:IsPickerOpen()
 	return mountPicker ~= nil and mountPicker:IsShown()
 end
 
+function Addon:IsHearthstonePickerOpen()
+	return self:IsPickerOpen() and Domain() == "hearthstones"
+end
+
 function Addon:ClosePicker()
 	if mountPicker then mountPicker:Hide() end
+end
+
+local function OutfitName(outfitID)
+	local info = Addon.outfitsByID and Addon.outfitsByID[outfitID]
+	return info and info.name or tostring(outfitID)
+end
+
+local function ShowPreview()
+	if not mountPicker or mountPicker.mode ~= "outfit" then return end
+	ShowEditPreview(mountPicker, mountPicker.outfitID, ("Editing %s for %s"):format(
+		Domain(), OutfitName(mountPicker.outfitID)))
 end
 
 -- Moves the mount model upward inside its card.
@@ -123,12 +169,81 @@ local function CaseInsensitive(a, b)
 	return strlower(a) < strlower(b)
 end
 
+local function SummonMountFromCard(mountID)
+	if InCombatLockdown() then
+		UIErrorsFrame:AddMessage("Mogtrot: can't summon in combat.", 1, 0.3, 0.3)
+		return
+	end
+	C_MountJournal.SummonByID(mountID)
+end
+
+-- What each domain does with a card. Mounts and hearthstones pair the same
+-- way; they differ in what a card is called, how its links and pins are
+-- stored, and what shift-click means.
+local DOMAINS = {}
+
+DOMAINS.mounts = {
+	noun = "mount",
+	IsPinned = function(id) return Addon:IsMountPinned(id) end,
+	TogglePin = function(id) Addon:ToggleMountPin(id) end,
+	SetPinDays = function(id, days) return Addon:SetMountPinDays(id, days) end,
+	ToggleLink = function(outfitID, id) Addon:ToggleOutfitMount(outfitID, id) end,
+	LinkElsewhere = function(id, name) Addon:OpenAddMountToOutfits(id, name) end,
+	LinkIndex = function() return ns.MountIndex.Build(MogtrotCharDB) end,
+	Selected = function(outfitID) return Addon:GetOutfitMounts(outfitID) end,
+	ShiftClick = SummonMountFromCard,
+	shiftHint = "Shift-left-click to mount it",
+}
+
+local function ToggleHearthPin(itemID)
+	local store = HearthPinDomain()
+	if not store then return end
+	if Pins.IsPinned(store, itemID, time()) then
+		Pins.Unpin(store, itemID)
+	else
+		Pins.Pin(store, itemID, time())
+	end
+	Addon:CompanionChoiceChanged()
+end
+
+local OpenHearthstoneLinks
+
+DOMAINS.hearthstones = {
+	noun = "hearthstone",
+	IsPinned = function(id)
+		local store = HearthPinDomain()
+		return store and Pins.IsPinned(store, id, time()) or false
+	end,
+	TogglePin = function(id) ToggleHearthPin(id); Addon:RepaintMountCards() end,
+	SetPinDays = function(id, days)
+		local store = HearthPinDomain()
+		if not store or not Pins.SetDaysRemaining(store, id, days, time()) then
+			return false
+		end
+		Addon:CompanionChoiceChanged()
+		return true
+	end,
+	ToggleLink = function(outfitID, id) hearth.toggleLink(outfitID, id) end,
+	LinkElsewhere = function(id, name) OpenHearthstoneLinks(id, name) end,
+	LinkIndex = function() return ns.OutfitLinks.IndexByLinked(hearth.links) end,
+	Selected = function(outfitID) return hearth.getLinks(outfitID) or {} end,
+	ShiftClick = function(id, name) OpenHearthstoneLinks(id, name) end,
+	shiftHint = "Shift-click to link it to other outfits",
+}
+
 local function Card_OnEnter(self)
 	self.Hover:Show()
-	if not self.mountID then return end
+	if not self.id then return end
+	local domain = DOMAINS[self.domain]
 
 	GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-	GameTooltip:SetText(self.mountName or "Mount", 1, 0.82, 0)
+	GameTooltip:SetText(self.name or domain.noun, 1, 0.82, 0)
+
+	if self.owned == false then
+		GameTooltip:AddLine("You have not collected this one", 1, 0.5, 0.5)
+		GameTooltip:Show()
+		return
+	end
 
 	local names = {}
 	for _, outfitID in ipairs(self.linkedOutfits or {}) do
@@ -146,15 +261,18 @@ local function Card_OnEnter(self)
 
 	GameTooltip:AddLine(" ")
 	if mountPicker and mountPicker.mode == "pins" then
-		GameTooltip:AddLine("Click to pin or unpin this mount", 0.6, 0.6, 0.6)
+		GameTooltip:AddLine(("Click to pin or unpin this %s"):format(domain.noun),
+			0.6, 0.6, 0.6)
 	else
 		GameTooltip:AddLine("Left-click to link or unlink it from this outfit",
 			0.6, 0.6, 0.6)
 	end
-	GameTooltip:AddLine("Shift-left-click to mount it", 0.6, 0.6, 0.6)
-	GameTooltip:AddLine("Right-click for mount options", 0.6, 0.6, 0.6)
+	GameTooltip:AddLine(domain.shiftHint, 0.6, 0.6, 0.6)
+	GameTooltip:AddLine(("Right-click for %s options"):format(domain.noun), 0.6, 0.6, 0.6)
 	if self.isPinned then
-		GameTooltip:AddLine("Pinned for outfit shuffle and pinned fallback", 1, 0.82, 0)
+		GameTooltip:AddLine(self.domain == "mounts"
+			and "Pinned for outfit shuffle and pinned fallback"
+			or "Pinned: used when the outfit has no hearthstone of its own", 1, 0.82, 0)
 	end
 	GameTooltip:Show()
 end
@@ -164,53 +282,48 @@ local function Card_OnLeave(self)
 	GameTooltip:Hide()
 end
 
-local function SummonMountFromCard(mountID)
-	if InCombatLockdown() then
-		UIErrorsFrame:AddMessage("Mogtrot: can't summon in combat.", 1, 0.3, 0.3)
-		return
-	end
-	C_MountJournal.SummonByID(mountID)
-end
-
-local function ShowMountCardMenu(card)
-	local mountID = card.mountID
-	local mountName = card.mountName
-	local isPinned = card.isPinned
-	if not mountID then return end
+local function ShowCardMenu(card)
+	local id, name, isPinned = card.id, card.name, card.isPinned
+	local domain = DOMAINS[card.domain]
+	if not id then return end
 
 	MenuUtil.CreateContextMenu(card, function(_owner, root)
-		root:CreateTitle(mountName or "Mount")
+		root:CreateTitle(name or domain.noun)
 		root:CreateButton(isPinned and "Unpin" or "Pin", function()
-			Addon:ToggleMountPin(mountID)
+			domain.TogglePin(id)
 		end)
 		root:CreateButton("Link to other outfit", function()
-			Addon:OpenAddMountToOutfits(mountID, mountName)
+			domain.LinkElsewhere(id, name)
 		end)
-		root:CreateDivider()
-		root:CreateButton("Mount (Shift-click)", function()
-			SummonMountFromCard(mountID)
-		end)
+		-- A hearthstone is never used from here: a cast from a picker would
+		-- move the character with no warning.
+		if card.domain == "mounts" then
+			root:CreateDivider()
+			root:CreateButton("Mount (Shift-click)", function()
+				SummonMountFromCard(id)
+			end)
+		end
 	end)
 end
 
 local function Card_OnClick(self, button)
-	if not self.mountID then return end
+	if not self.id or self.owned == false then return end
+	local domain = DOMAINS[self.domain]
+	local chosenOnly = (mountPicker.filter.chosenMode or "all") ~= "all"
 
 	if button == "RightButton" then
-		ShowMountCardMenu(self)
+		ShowCardMenu(self)
 	elseif button == "LeftButton" and IsShiftKeyDown() then
-		SummonMountFromCard(self.mountID)
-	elseif button == "LeftButton" and mountPicker and mountPicker.mode == "pins" then
+		domain.ShiftClick(self.id, self.name)
+	elseif button == "LeftButton" and mountPicker.mode == "pins" then
 		-- In pin mode the whole card is the pin, the same as its star. Falling
 		-- through to the outfit link here is what made a click in the middle of
 		-- a card do nothing while you were choosing pinned mounts.
-		Addon:ToggleMountPin(self.mountID)
-		if (mountPicker.filter.chosenMode or "all") ~= "all" then
-			Addon:RefreshMountPicker()
-		end
+		domain.TogglePin(self.id)
+		if chosenOnly then Addon:RefreshMountPicker() end
 	elseif button == "LeftButton" and self.outfitID then
-		Addon:ToggleOutfitMount(self.outfitID, self.mountID)
-		if (mountPicker.filter.chosenMode or "all") ~= "all" then
+		domain.ToggleLink(self.outfitID, self.id)
+		if chosenOnly then
 			Addon:RefreshMountPicker()
 		else
 			Addon:RepaintMountCards()
@@ -224,14 +337,59 @@ local function CommitPinDays(edit)
 		edit:SetText(tostring(edit.previousDays or 0))
 		return
 	end
-	if Addon:SetMountPinDays(edit.mountID, days) then
+	if edit.id and DOMAINS[edit.domain].SetPinDays(edit.id, days) then
 		edit.previousDays = days
 		Addon:RepaintMountCards()
 	end
 end
 
--- Creates the controls shared by every recycled mount card.
-local function BuildMountCard(card)
+-- The mount body: the model scene.
+local function BuildMountBody(card)
+	local body = CreateFrame("Frame", nil, card)
+	body:SetAllPoints()
+	card.MountBody = body
+
+	card.Scene = CreateFrame("ModelScene", nil, body, "NonInteractableModelSceneMixinTemplate")
+	card.Scene:SetPoint("TOPLEFT", 5, -34)
+	card.Scene:SetPoint("BOTTOMRIGHT", -5, 5)
+	card.Scene:EnableMouse(false)
+	card.Scene:EnableMouseWheel(false)
+	if card.Scene.SetMouseClickEnabled then card.Scene:SetMouseClickEnabled(false) end
+	if card.Scene.SetMouseMotionEnabled then card.Scene:SetMouseMotionEnabled(false) end
+	if card.Scene.SetPropagateMouseClicks then card.Scene:SetPropagateMouseClicks(true) end
+	if card.Scene.SetPropagateMouseMotion then card.Scene:SetPropagateMouseMotion(true) end
+end
+
+-- The hearthstone body: a large icon, what kind of thing it is, whether it is
+-- owned, and its cooldown. No model: the client exposes no item-to-effect
+-- mapping, so nothing here claims to show the cast.
+local function BuildHearthBody(card)
+	local body = CreateFrame("Frame", nil, card)
+	body:SetAllPoints()
+	card.HearthBody = body
+
+	card.BigIcon = body:CreateTexture(nil, "ARTWORK")
+	card.BigIcon:SetSize(64, 64)
+	card.BigIcon:SetPoint("TOPLEFT", 12, -38)
+	card.BigIcon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+
+	local lines = {}
+	for i, font in ipairs({ "GameFontNormalSmall", "GameFontNormalSmall",
+		"GameFontDisable", "GameFontNormalSmall" }) do
+		local line = body:CreateFontString(nil, "OVERLAY", font)
+		line:SetPoint("TOPLEFT", card.BigIcon, "TOPRIGHT", 8, -2 - (i - 1) * 16)
+		line:SetPoint("RIGHT", body, "RIGHT", -8, 0)
+		line:SetJustifyH("LEFT")
+		lines[i] = line
+	end
+	card.KindBadge, card.Cooldown, card.OwnedState, card.PinState =
+		lines[1], lines[2], lines[3], lines[4]
+end
+
+-- Creates the controls shared by every recycled card, whichever domain it is
+-- painted for: background, border, name row, pin star, pin expiry and the
+-- linked-outfit chips. Each domain's body sits in its own layer.
+local function BuildCard(card)
 	if card.built then return end
 	card.built = true
 
@@ -267,6 +425,9 @@ local function BuildMountCard(card)
 	card.Hover:SetColorTexture(1, 1, 1, 0.08)
 	card.Hover:Hide()
 
+	BuildMountBody(card)
+	BuildHearthBody(card)
+
 	card.Icon = card:CreateTexture(nil, "ARTWORK")
 	card.Icon:SetSize(22, 22)
 	card.Icon:SetPoint("TOPLEFT", 6, -6)
@@ -282,8 +443,8 @@ local function BuildMountCard(card)
 	card.PinButton = CreateFrame("Button", nil, card)
 	card.PinButton:SetSize(22, 22)
 	card.PinButton:SetPoint("TOPRIGHT", -1, -1)
-	card.PinButton:SetScript("OnClick", function(self)
-		if self.mountID then Addon:ToggleMountPin(self.mountID) end
+	card.PinButton:SetScript("OnClick", function()
+		if card.id and card.owned ~= false then DOMAINS[card.domain].TogglePin(card.id) end
 	end)
 	card.FallbackStar = card.PinButton:CreateTexture(nil, "ARTWORK")
 	card.FallbackStar:SetSize(14, 14)
@@ -318,10 +479,6 @@ local function BuildMountCard(card)
 	card.PinSuffix:SetPoint("LEFT", card.PinDays, "RIGHT", 5, 0)
 	card.PinSuffix:SetText("days")
 	card.PinRow:Hide()
-
-	card.Scene = CreateFrame("ModelScene", nil, card, "NonInteractableModelSceneMixinTemplate")
-	card.Scene:SetPoint("TOPLEFT", 5, -34)
-	card.Scene:SetPoint("BOTTOMRIGHT", -5, 5)
 
 	card.LinkLayer = CreateFrame("Frame", nil, card)
 	card.LinkLayer:SetAllPoints()
@@ -380,13 +537,6 @@ local function BuildMountCard(card)
 	card.LinkedText:SetJustifyH("LEFT")
 	card.LinkedText:SetWordWrap(false)
 	card.LinkedText:Hide()
-
-	card.Scene:EnableMouse(false)
-	card.Scene:EnableMouseWheel(false)
-	if card.Scene.SetMouseClickEnabled then card.Scene:SetMouseClickEnabled(false) end
-	if card.Scene.SetMouseMotionEnabled then card.Scene:SetMouseMotionEnabled(false) end
-	if card.Scene.SetPropagateMouseClicks then card.Scene:SetPropagateMouseClicks(true) end
-	if card.Scene.SetPropagateMouseMotion then card.Scene:SetPropagateMouseMotion(true) end
 
 	card:SetScript("OnEnter", Card_OnEnter)
 	card:SetScript("OnLeave", Card_OnLeave)
@@ -483,64 +633,84 @@ function Addon:PaintCardLinks(card, outfitIDs, excludedOutfitID)
 	end
 end
 
--- Updates a recycled card with one mount and its linked outfits.
-function Addon:PaintMountCard(card, mount)
-	card.mountID = mount.mountID
-	card.mountName = mount.name
+-- The domain's own body. Everything above and below it is PaintCard's.
+local BODY_PAINTERS = {
+	mounts = function(card, mount)
+		ApplyCardNudge(card)
+		SetCardModel(card, mount.mountID)
+	end,
+	hearthstones = function(card, row)
+		card.BigIcon:SetTexture(row.icon or FALLBACK_ICON)
+		card.BigIcon:SetDesaturated(not card.owned)
+		card.KindBadge:SetText(row.kind == "toy" and "toy" or "item")
+		card.Cooldown:SetText(card.owned and row.onCooldown and "on cooldown" or nil)
+		if type(row.count) == "number" then
+			card.OwnedState:SetText(("carried: %d"):format(row.count))
+		else
+			card.OwnedState:SetText(card.owned and "owned" or "not collected")
+		end
+		card.PinState:SetText(card.owned and card.isPinned and "pinned" or nil)
+	end,
+}
+
+-- Updates a recycled card with one row of the domain on show. Rows carry
+-- mountID for mounts and itemID for hearthstones.
+function Addon:PaintMountCard(card, row)
+	local domain = Domain()
+	card.domain = domain
+	card.id = row.mountID or row.itemID
+	card.name = type(row.name) == "string" and row.name or ("item " .. tostring(card.id))
+	-- Only a hearthstone can be listed without being owned; every mount row
+	-- comes from the player's own collection.
+	card.owned = domain == "mounts" or row.owned == true
 	card.outfitID = mountPicker.mode == "outfit" and mountPicker.outfitID or nil
-	card.PinButton.mountID = mount.mountID
-	card.Icon:SetTexture(mount.icon)
-	card.Name:SetText(mount.name)
+	card.Icon:SetTexture(row.icon or FALLBACK_ICON)
+	card.Icon:SetDesaturated(not card.owned)
+	card.Name:SetText(card.name)
+	card:SetAlpha(card.owned and 1 or 0.45)
+	card.MountBody:SetShown(domain == "mounts")
+	card.HearthBody:SetShown(domain == "hearthstones")
 
 	card:SetSize(CardSize())
-	ApplyCardNudge(card)
 
-	card.linkedOutfits = mountPicker.linkIndex[mount.mountID]
+	card.linkedOutfits = mountPicker.linkIndex[card.id]
 	if mountPicker.mode == "pins" then
 		self:PaintCardLinks(card, {})
 	else
 		self:PaintCardLinks(card, card.linkedOutfits, mountPicker.outfitID)
 	end
 
-	local isChosen = mountPicker.selected[mount.mountID] == true
-
-	local isPinned = self:IsMountPinned(mount.mountID)
+	local isPinned = DOMAINS[domain].IsPinned(card.id)
 	card.isPinned = isPinned
-	card.FallbackStar:SetSize(14, 14)
-	card.FallbackStar:ClearAllPoints()
-	card.FallbackStar:SetPoint("TOPRIGHT", -4, -4)
 	card.FallbackStar:SetAtlas(isPinned and "auctionhouse-icon-favorite"
 		or "auctionhouse-icon-favorite-off", false)
-	card.FallbackStar:Show()
-	local domain = MountPinDomain()
-	local days = domain and Pins.DaysRemaining(domain, mount.mountID, time()) or nil
+	card.PinButton:SetShown(card.owned)
+	local store = PinDomain(domain)
+	local days = store and Pins.DaysRemaining(store, card.id, time()) or nil
 	card.PinRow:SetShown(mountPicker.mode == "pins" and days ~= nil)
 	if mountPicker.mode == "pins" and days ~= nil then
-		card.PinDays.mountID = mount.mountID
+		card.PinDays.id = card.id
+		card.PinDays.domain = domain
 		card.PinDays.previousDays = days
 		if not card.PinDays:HasFocus() then card.PinDays:SetText(tostring(days)) end
 	end
 
-	if isChosen then
-		card:SetCardColors(0.18, 0.14, 0.02, 0.9, 1, 0.82, 0)
+	if card.owned and mountPicker.selected[card.id] == true then
+		card:SetCardColors(unpack(CHOSEN_COLORS))
 	else
-		card:SetCardColors(0.05, 0.05, 0.06, 0.9, 0.3, 0.3, 0.3)
+		card:SetCardColors(unpack(PLAIN_COLORS))
 	end
 
+	BODY_PAINTERS[domain](card, row)
 	card.Hover:Hide()
 end
 
-function Addon:InitMountCard(card, mount)
-	BuildMountCard(card)
-	self:PaintMountCard(card, mount)
-	SetCardModel(card, mount.mountID)
-end
-
 local function RefreshPickerState()
+	local domain = DOMAINS[Domain()]
 	mountPicker.selected = mountPicker.mode == "pins"
-		and ActiveMountPins()
-		or Addon:GetOutfitMounts(mountPicker.outfitID)
-	mountPicker.linkIndex = ns.MountIndex.Build(MogtrotCharDB)
+		and ActivePins(Domain())
+		or domain.Selected(mountPicker.outfitID)
+	mountPicker.linkIndex = domain.LinkIndex()
 end
 
 -- An outfit reads as its icon, its name and the category it lives in, in that
@@ -558,7 +728,7 @@ end
 -- children, which is the order the main window's list is built from. Reusing
 -- it means the two can never drift, and an alphabetical sort here would have
 -- put the list in an order that appears nowhere else in the addon.
-local function OutfitChoices()
+local function OutfitChoices(preselect)
 	local choices = ns.Tree.OutfitChoices(MogtrotCharDB, Addon.outfitsByID)
 	for _, choice in ipairs(choices) do
 		local info = (Addon.outfitsByID or {})[choice.outfitID]
@@ -566,7 +736,7 @@ local function OutfitChoices()
 		choice.icon = info and info.icon
 		choice.tag = category
 		choice.tagColor = color
-		choice.preselected = mountPicker.outfitID == choice.outfitID or nil
+		choice.preselected = preselect(choice.outfitID) or nil
 		-- The category rides on the name line, so the breadcrumb would only
 		-- add a second line saying the same thing.
 		choice.path = nil
@@ -579,10 +749,38 @@ local function ChoosePickerOutfit()
 		title = "Choose an outfit",
 		searchHint = "Search outfits",
 		emptyText = "No outfits match.",
-		items = OutfitChoices(),
+		items = OutfitChoices(function(outfitID)
+			return mountPicker.outfitID == outfitID
+		end),
 		onChoose = function(chosen)
 			Addon:SetMountPickerOutfit(chosen.outfitID)
 		end,
+	})
+end
+
+-- Every outfit, ticked where the hearthstone is linked; Apply links the
+-- ticked ones and unlinks the rest.
+function OpenHearthstoneLinks(itemID, name)
+	local linked = {}
+	for _, outfitID in ipairs(ns.OutfitLinks.IndexByLinked(hearth.links)[itemID] or {}) do
+		linked[outfitID] = true
+	end
+	local choices = OutfitChoices(function(outfitID) return linked[outfitID] end)
+
+	ns.OpenSearchPicker({
+		title = ("Outfits using %s"):format(name or "hearthstone"),
+		searchHint = "Search outfits",
+		emptyText = "No outfits match.",
+		multi = true,
+		items = choices,
+		buttons = { {
+			text = "Apply",
+			allowEmpty = true,
+			onClick = function(chosen)
+				hearth.applyLinks(itemID, ns.OutfitLinks.Want(choices, chosen))
+				Addon:RepaintMountCards()
+			end,
+		} },
 	})
 end
 
@@ -590,29 +788,24 @@ function Addon:SetMountPickerOutfit(outfitID)
 	if not mountPicker then return end
 	mountPicker.mode = "outfit"
 	mountPicker.outfitID = outfitID
-	mountPicker.mounts, mountPicker.typeNote = CollectMounts(outfitID)
-	ShowMountEditPreview(outfitID)
+	if Domain() == "mounts" then
+		mountPicker.mounts, mountPicker.typeNote = CollectMounts(outfitID)
+	end
+	ShowPreview()
 	self:RefreshMountPicker({ preserveScrollOffset = true })
 end
 
 function Addon:SetMountPickerPinMode()
 	if not mountPicker then return end
 	mountPicker.mode = "pins"
-	mountPicker.mounts, mountPicker.typeNote = CollectMounts(nil)
-	HideMountEditPreview()
+	if Domain() == "mounts" then
+		mountPicker.mounts, mountPicker.typeNote = CollectMounts(nil)
+	end
+	HideEditPreview()
 	self:RefreshMountPicker()
 end
 
-local function ShowDomain(domain)
-	if domain == "mounts" then return end
-	-- Opening the other window closes this one, so the switch is a handover
-	-- rather than a second window.
-	if mountPicker.mode == "pins" then
-		if Addon.OpenHearthstonePins then Addon.OpenHearthstonePins() end
-	elseif Addon.OpenHearthstonePicker then
-		Addon.OpenHearthstonePicker(mountPicker.outfitID)
-	end
-end
+local OpenPairing
 
 -- What each changeable word does. How they look is PairingHeaderUI's.
 --
@@ -626,7 +819,12 @@ local function HeaderAction(action, segment)
 		return Addon:SetMountPickerPinMode()
 	end
 	if action ~= "domain" then return end
-	ns.PairingHeaderUI.ShowMenu(segment, "domain", ShowDomain)
+	ns.PairingHeaderUI.ShowMenu(segment, "domain", function(choice)
+		if choice == "hearthstones" and not hearth then return end
+		local target = ns.PairingHeader.SwitchDomain({ domain = Domain(),
+			mode = mountPicker.mode, outfitID = mountPicker.outfitID }, choice)
+		if target then OpenPairing(target.domain, target.mode, target.outfitID) end
+	end)
 end
 
 function Addon:PaintPickerChrome()
@@ -634,10 +832,8 @@ function Addon:PaintPickerChrome()
 	for _ in pairs(mountPicker.selected) do chosen = chosen + 1 end
 
 	local info = self.outfitsByID and self.outfitsByID[mountPicker.outfitID]
-	mountPicker.Title:SetText("")
-	mountPicker.TitleIcon:Hide()
 	mountPicker.PaintHeader({
-		domain = "mounts",
+		domain = Domain(),
 		mode = mountPicker.mode,
 		outfitName = info and info.name,
 		outfitIcon = info and info.icon,
@@ -658,15 +854,27 @@ function Addon:ApplyPickerSize()
 	mountPicker.Box:FullUpdate(ScrollBoxConstants.UpdateImmediately)
 	ApplyMountEditDock()
 end
--- Rebuilds the visible grid after search or filter controls change.
-function Addon:RefreshMountPicker(options)
-	if not mountPicker or not mountPicker:IsShown() then return end
-	if InCombatLockdown() then return end
-	local scrollOffset = options and options.preserveScrollOffset
-		and mountPicker.Box:GetDerivedScrollOffset()
 
-	RefreshPickerState()
+-- The rows the hearthstone domain lists: the collection read, or the bare
+-- registry when that read fails, so the window never opens empty.
+local function HearthRows()
+	local ok, rows = pcall(hearth.collection.Rows, hearth.adapter, hearth.registry)
+	local found = {}
+	for _, row in ipairs(ok and type(rows) == "table" and rows or {}) do
+		if type(row) == "table" and type(row.itemID) == "number" then
+			found[#found + 1] = row
+		end
+	end
+	if #found > 0 then return found end
+	for itemID, entry in pairs(hearth.registry.entries or {}) do
+		if type(itemID) == "number" and type(entry) == "table" then
+			found[#found + 1] = { itemID = itemID, kind = entry.kind }
+		end
+	end
+	return found
+end
 
+local function MountMatches()
 	local matches = ns.MountFilter.Apply(mountPicker.mounts, mountPicker.filter,
 		mountPicker.selected)
 	if mountPicker.mode == "pins" then
@@ -684,6 +892,32 @@ function Addon:RefreshMountPicker(options)
 			return original[a.mountID] < original[b.mountID]
 		end)
 	end
+	mountPicker.Note:SetText("")
+	return matches
+end
+
+local function HearthMatches()
+	local list = ns.HearthstoneCollection.PickerList(HearthRows(), {
+		query = mountPicker.filter.query,
+		now = GetTime(),
+		cooldown = function(itemID)
+			return hearth.collection.Cooldown(hearth.adapter, itemID)
+		end,
+	})
+	mountPicker.Note:SetText(list.note)
+	return list.rows
+end
+
+-- Rebuilds the visible grid after search or filter controls change.
+function Addon:RefreshMountPicker(options)
+	if not mountPicker or not mountPicker:IsShown() then return end
+	if InCombatLockdown() then return end
+	local scrollOffset = options and options.preserveScrollOffset
+		and mountPicker.Box:GetDerivedScrollOffset()
+
+	RefreshPickerState()
+
+	local matches = Domain() == "hearthstones" and HearthMatches() or MountMatches()
 	mountPicker.shownCount = #matches
 
 	local retain = ScrollBoxConstants.RetainScrollPosition
@@ -695,6 +929,12 @@ function Addon:RefreshMountPicker(options)
 	if scrollOffset then mountPicker.Box:ScrollToOffset(scrollOffset, 0, 0) end
 
 	self:PaintPickerChrome()
+end
+
+-- Cooldowns, bag counts and toy ownership move under an open hearthstone
+-- window; nothing else needs the refresh.
+function Addon:RefreshHearthstonePicker()
+	if self:IsHearthstonePickerOpen() then self:RefreshMountPicker() end
 end
 
 function Addon:OnPickerFilterChanged()
@@ -710,18 +950,17 @@ function Addon:RepaintMountCards()
 	if InCombatLockdown() then return end
 
 	RefreshPickerState()
-	mountPicker.Box:ForEachFrame(function(card, mount) self:PaintMountCard(card, mount) end)
+	mountPicker.Box:ForEachFrame(function(card, row) self:PaintMountCard(card, row) end)
 	self:PaintPickerChrome()
 end
 
--- Builds the mount picker window the first time users open it.
+-- Builds the pairing window the first time it is opened.
 local function EnsureMountPicker()
 	if mountPicker then return mountPicker end
 
 	local width, height = PickerSize()
 
 	mountPicker = CreateFrame("Frame", "MogtrotMountPicker", UIParent, "BackdropTemplate")
-	if deps.onPickerCreated then deps.onPickerCreated(mountPicker) end
 	mountPicker:SetSize(width, height)
 	mountPicker:SetFrameStrata("HIGH")
 	mountPicker:SetClampedToScreen(true)
@@ -746,21 +985,9 @@ local function EnsureMountPicker()
 	mountPicker:SetBackdropColor(0, 0, 0, 0.94)
 	mountPicker.DockGlow = BuildDockGlow(mountPicker)
 
-	mountPicker.TitleIcon = mountPicker:CreateTexture(nil, "ARTWORK")
-	mountPicker.TitleIcon:SetSize(24, 24)
-	mountPicker.TitleIcon:SetPoint("TOPLEFT", UI.Pad, -UI.Pad + 1)
-	mountPicker.TitleIcon:SetTexCoord(0.07, 0.93, 0.07, 0.93)
-
-	mountPicker.Title = mountPicker:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-	mountPicker.Title:SetPoint("LEFT", mountPicker.TitleIcon, "RIGHT", 6, -1)
-
 	mountPicker.CloseButton = CreateFrame("Button", nil, mountPicker, "UIPanelCloseButton")
 	mountPicker.CloseButton:SetSize(PICKER_HEADER_CONTROL_H, PICKER_HEADER_CONTROL_H)
 	mountPicker.CloseButton:SetPoint("TOPRIGHT", -UI.CloseButtonInset, -UI.CloseButtonInset)
-
-	mountPicker.Title:SetPoint("RIGHT", mountPicker.CloseButton, "LEFT", -4, 0)
-	mountPicker.Title:SetJustifyH("LEFT")
-	mountPicker.Title:SetWordWrap(false)
 
 	mountPicker.HeaderRow = CreateFrame("Frame", nil, mountPicker)
 	mountPicker.HeaderRow:SetPoint("TOPLEFT", UI.Pad, -UI.Pad)
@@ -777,9 +1004,6 @@ local function EnsureMountPicker()
 	mountPicker.SearchBox:SetSize(220, 20)
 	mountPicker.SearchBox:SetAutoFocus(false)
 	mountPicker.SearchBox:SetPoint("TOPLEFT", UI.Pad + 6, -(UI.Pad + 32))
-	if mountPicker.SearchBox.Instructions then
-		mountPicker.SearchBox.Instructions:SetText("Search mounts")
-	end
 	mountPicker.SearchBox:HookScript("OnTextChanged", function(self)
 		if not mountPicker.filter then return end
 		local text = strtrim(self:GetText() or "")
@@ -884,6 +1108,9 @@ local function EnsureMountPicker()
 		end
 	end)
 
+	mountPicker.Note = mountPicker:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+	mountPicker.Note:SetPoint("BOTTOMLEFT", UI.Pad + 6, 8)
+
 	mountPicker.Box = CreateFrame("Frame", nil, mountPicker, "WowScrollBoxList")
 	mountPicker.Box:SetPoint("TOPLEFT", mountPicker, "TOPLEFT", UI.Pad, -PICKER_HEADER)
 	mountPicker.Box:SetPoint("BOTTOMRIGHT", mountPicker, "BOTTOMRIGHT",
@@ -898,8 +1125,9 @@ local function EnsureMountPicker()
 		GRID_PAD, GRID_PAD, GRID_PAD, GRID_PAD, CARD_GAP, CARD_GAP)
 	mountPicker.View:SetElementSize(cardW, cardH)
 	mountPicker.View:SetPanExtent(cardH)
-	mountPicker.View:SetElementInitializer("Button", function(card, mount)
-		Addon:InitMountCard(card, mount)
+	mountPicker.View:SetElementInitializer("Button", function(card, row)
+		BuildCard(card)
+		Addon:PaintMountCard(card, row)
 	end)
 
 	ScrollUtil.InitScrollBoxListWithScrollBar(mountPicker.Box, mountPicker.Bar, mountPicker.View)
@@ -945,14 +1173,14 @@ local function EnsureMountPicker()
 	mountPicker.ResizeGrip:SetScript("OnEnter", function(self)
 		GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
 		GameTooltip:SetText("Drag to resize the cards")
-		GameTooltip:AddLine("Always three by three; the mounts get bigger.",
+		GameTooltip:AddLine("Always three by three; the cards get bigger.",
 			0.6, 0.6, 0.6, true)
 		GameTooltip:Show()
 	end)
 	mountPicker.ResizeGrip:SetScript("OnLeave", GameTooltip_Hide)
 
 	mountPicker:SetScript("OnHide", function()
-		HideMountEditPreview()
+		HideEditPreview()
 		for _, texture in ipairs(mountPicker.DockGlow or {}) do texture:Hide() end
 	end)
 
@@ -967,63 +1195,81 @@ local function EnsureMountPicker()
 	return mountPicker
 end
 
--- Opens a fresh mount picker for one outfit.
-function Addon:OpenMountPicker(outfitID)
+-- Opens the window on one domain and mode with fresh search and filters.
+-- Opening while it is shown for the same domain only changes the outfit, so
+-- a second click on a row keeps what was typed.
+function OpenPairing(domain, mode, outfitID)
 	if InCombatLockdown() then return end
+	if domain == "hearthstones" and not hearth then return end
 
-	-- One pairing window at a time: mounts and hearthstones are two views of
-	-- the same question, and two of them open at once is two answers.
-	if Addon.CloseHearthstonePicker then Addon.CloseHearthstonePicker() end
-		-- The library is the other full-size window about these outfits, so
-		-- it closes too rather than sitting underneath.
-		if ns.LibraryUI and ns.LibraryUI.Hide then ns.LibraryUI.Hide() end
+	-- The library is the other full-size window about these outfits, so it
+	-- closes rather than sitting underneath.
+	if ns.LibraryUI and ns.LibraryUI.Hide then ns.LibraryUI.Hide() end
 
 	local picker = EnsureMountPicker()
-	if picker:IsShown() then
-		self:SetMountPickerOutfit(outfitID)
+	if picker:IsShown() and picker.domain == domain and mode == "outfit" then
+		Addon:SetMountPickerOutfit(outfitID)
 		picker.SearchBox:SetFocus()
 		return
 	end
 
+	picker.domain = domain
 	picker.outfitID = outfitID
-	picker.mode = "outfit"
-	picker.mounts, picker.typeNote = CollectMounts(outfitID)
+	picker.mode = mode
+	if domain == "mounts" then
+		picker.mounts, picker.typeNote = CollectMounts(outfitID)
+	else
+		picker.mounts, picker.typeNote = nil, nil
+	end
 	picker.filter = ns.MountFilter.DefaultState(ValidMountTypes())
 	picker.Filter:ValidateResetState()
+	picker.Filter:SetShown(domain == "mounts")
+	if picker.SearchBox.Instructions then
+		picker.SearchBox.Instructions:SetText(SEARCH_HINT[domain])
+	end
 	picker.SearchBox:SetText("")
 	picker.scrollToTop = true
 
-	self:HidePreview()
+	Addon:HidePreview()
 	picker:Show()
-	ShowMountEditPreview(outfitID)
-	self:RefreshMountPicker()
+	if mode == "pins" then HideEditPreview() else ShowPreview() end
+	Addon:RefreshMountPicker()
 	picker.SearchBox:SetFocus()
 end
 
+function Addon:OpenMountPicker(outfitID)
+	OpenPairing("mounts", "outfit", outfitID)
+end
+
 function Addon:OpenMountPins()
-	if InCombatLockdown() then return end
+	OpenPairing("mounts", "pins")
+end
 
-	-- One pairing window at a time: mounts and hearthstones are two views of
-	-- the same question, and two of them open at once is two answers.
-	if Addon.CloseHearthstonePicker then Addon.CloseHearthstonePicker() end
-		-- The library is the other full-size window about these outfits, so
-		-- it closes too rather than sitting underneath.
-		if ns.LibraryUI and ns.LibraryUI.Hide then ns.LibraryUI.Hide() end
+-- Wires the hearthstone domain once the character's store carries it.
+--
+-- hdeps = {
+--     registry,     -- curated HearthstoneDefinitions
+--     collection,   -- HearthstoneCollection (Rows, Cooldown)
+--     adapter,      -- live-ownership adapter handed to collection
+--     links,        -- outfitID -> { [itemID] = true }
+--     account,      -- store carrying account.pins[pinsDomain]
+--     pinsDomain,   -- default "hearthstones"
+--     getLinks = function(outfitID) -> { [itemID] = true },
+--     toggleLink = function(outfitID, itemID) -> added,
+--     applyLinks = function(itemID, want) -> added, removed,
+--     getCurrentOutfit = function() -> outfitID or nil,
+-- }
+function Addon:AttachHearthstones(hdeps)
+	hearth = hdeps
+end
 
-	local picker = EnsureMountPicker()
-	picker.outfitID = nil
-	picker.mode = "pins"
-	picker.mounts, picker.typeNote = CollectMounts(nil)
-	picker.filter = ns.MountFilter.DefaultState(ValidMountTypes())
-	picker.Filter:ValidateResetState()
-	picker.SearchBox:SetText("")
-	picker.scrollToTop = true
+function Addon:OpenHearthstonePicker(outfitID)
+	local current = hearth and hearth.getCurrentOutfit and hearth.getCurrentOutfit()
+	OpenPairing("hearthstones", "outfit", outfitID or current)
+end
 
-	self:HidePreview()
-	picker:Show()
-	HideMountEditPreview()
-	self:RefreshMountPicker()
-	picker.SearchBox:SetFocus()
+function Addon:OpenHearthstonePins()
+	OpenPairing("hearthstones", "pins")
 end
 
 	return Addon

@@ -66,7 +66,6 @@ function Adapter.Attach(Addon)
 	Addon.SyncOutfitLibrary = Sync
 	Addon.ScheduleOutfitLibrarySync = Later
 	Addon.OutfitLibrarySyncState = function() return lastStats end
-	return { OnCaptured = function() Sync() end }
 end
 
 ns.OutfitLibrarySyncAdapter = Adapter

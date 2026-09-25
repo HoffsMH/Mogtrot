@@ -275,12 +275,26 @@ function Library.Add(library, record, now, index)
 	return id, true
 end
 
-function Library.Delete(library, id)
-	if type(library) ~= "table" or type(library.records) ~= "table" then
-		return false
+local function ArchiveIndex(library, id)
+	if type(library) ~= "table" or type(library.archive) ~= "table" then
+		return nil
 	end
-	if library.records[id] == nil then return false end
-	library.records[id] = nil
+	for index, record in ipairs(library.archive) do
+		if record.id == id then return index end
+	end
+	return nil
+end
+
+-- Gone for good, from the wall or from the archive.
+function Library.Delete(library, id)
+	if type(library) ~= "table" then return false end
+	if type(library.records) == "table" and library.records[id] ~= nil then
+		library.records[id] = nil
+		return true
+	end
+	local index = ArchiveIndex(library, id)
+	if not index then return false end
+	table.remove(library.archive, index)
 	return true
 end
 
@@ -329,6 +343,50 @@ function Library.Archive(library, id, now)
 	-- ordered by construction and eviction only ever looks at the front.
 	library.archive[#library.archive + 1] = record
 	return true
+end
+
+-- Newest archived first, so what just left the wall leads the archived one.
+function Library.Archived(library)
+	local list = {}
+	if type(library) ~= "table" or type(library.archive) ~= "table" then
+		return list
+	end
+	for index = #library.archive, 1, -1 do list[#list + 1] = library.archive[index] end
+	return list
+end
+
+-- Puts an archived record back on the wall under its own id, and answers the
+-- id now on the wall and whether the record went back as itself. If the same
+-- look was captured again while this one was archived, the wall already holds
+-- it: the archived copy folds into that one rather than standing beside it.
+function Library.Restore(library, id)
+	local index = ArchiveIndex(library, id)
+	if not index then return nil, false end
+	library.records = type(library.records) == "table" and library.records or {}
+	local record = table.remove(library.archive, index)
+	record.archivedAt = nil
+	local key = Library.KeyOf(record)
+	local heldID = key and Library.BuildIndex(library)[key]
+	if heldID then
+		local held = library.records[heldID]
+		held.seenCount = (held.seenCount or 1) + (record.seenCount or 1)
+		if record.savedAt and (held.savedAt == nil or record.savedAt < held.savedAt) then
+			held.savedAt = record.savedAt
+		end
+		return heldID, false
+	end
+	library.records[record.id] = record
+	return record.id, true
+end
+
+-- Which controls a card carries. Outfits and custom sets have none, since
+-- the client reads them again; a snapshot on the wall can be archived, and
+-- an archived one restored or deleted for good.
+function Library.CardControls(record)
+	local snapshot = type(record) == "table" and record.source ~= "mine"
+	local archived = snapshot and record.archivedAt ~= nil
+	return { archive = snapshot and not archived, restore = archived,
+		delete = archived }
 end
 
 -- Drops whatever has been archived longer than the window, oldest first.

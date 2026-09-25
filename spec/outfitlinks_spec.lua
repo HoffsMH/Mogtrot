@@ -298,3 +298,21 @@ describe("OutfitLinks.RepresentativePreferring", function()
 		assert.is_nil(OutfitLinks.RepresentativePreferring({}, { [64] = true }))
 	end)
 end)
+
+-- A multi-select over every outfit hands back only the ticked ones. Apply
+-- changes only the outfits it is told about, so an unticked outfit has to be
+-- named false or its link survives.
+describe("OutfitLinks.Want", function()
+	it("names every choice, ticked true and the rest false", function()
+		local choices = { { outfitID = 1 }, { outfitID = 2 }, { outfitID = 3 } }
+		assert.same({ [1] = false, [2] = true, [3] = false },
+			OutfitLinks.Want(choices, { choices[2] }))
+	end)
+
+	it("unlinks an outfit that was unticked", function()
+		local store = { [1] = { [50] = true }, [2] = { [50] = true } }
+		local choices = { { outfitID = 1 }, { outfitID = 2 } }
+		OutfitLinks.Apply(store, 50, OutfitLinks.Want(choices, { choices[2] }))
+		assert.same({ [2] = { [50] = true } }, store)
+	end)
+end)

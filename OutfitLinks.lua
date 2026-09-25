@@ -62,6 +62,15 @@ end
 
 -- want: { [outfitID] = true } for outfits that should carry linkedID.
 -- Returns added, removed.
+-- The want map Apply takes, from a multi-select over every outfit: ticked
+-- choices true and the rest false, so unticking an outfit unlinks it.
+function OutfitLinks.Want(choices, chosen)
+	local want = {}
+	for _, choice in ipairs(choices or {}) do want[choice.outfitID] = false end
+	for _, choice in ipairs(chosen or {}) do want[choice.outfitID] = true end
+	return want
+end
+
 function OutfitLinks.Apply(store, linkedID, want)
 	local added, removed = 0, 0
 	for outfitID, selected in pairs(want or {}) do

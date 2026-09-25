@@ -8,8 +8,8 @@ local Library = ns.Library or require("Library")
 -- Initializes and upgrades the account settings and per-character outfit data
 -- saved by Mogtrot.
 --
--- Targets: account version 3 (generic pin domains, outfit library), character version 5
--- (link maps, pin opt-outs, rotations). Migration order matters: version
+-- Targets: account version 3 (generic pin domains, outfit library), character version 6
+-- (link maps, pin opt-outs, rotations, worn looks apart from definitions). Migration order matters: version
 -- checks gate everything; legacy records are normalized before keys move;
 -- old keys are deleted only after a successful move; the version field is
 -- written last. Unsupported future versions return their stores untouched -
@@ -17,7 +17,7 @@ local Library = ns.Library or require("Library")
 local Database = {}
 
 local ACCOUNT_VERSION = 3
-local CHAR_VERSION = 5
+local CHAR_VERSION = 6
 local DEFAULT_CATEGORIES = { "Tier", "Non-tier sets", "Simple" }
 
 -- Only absent values fall back to defaults: false and 0 are caller choices.
@@ -124,6 +124,7 @@ end
 
 local function InitCharacter(char)
 	char.looks = char.looks or {}
+	char.worn = char.worn or {}
 	char.slots = char.slots or {}
 	char.mounts = char.mounts or {}
 	char.wear = char.wear or {}
@@ -193,6 +194,7 @@ end
 local function MigrateCharacter(char)
 	local hadSavedTree = HasSavedTree(char)
 	local knownCharacter = char.version == 2 or char.version == 3 or char.version == 4
+		or char.version == 5
 	local legacyCharacter = char.version == nil and hadSavedTree
 
 	-- Collision check before any mutation: a distinct destination table for
@@ -205,6 +207,10 @@ local function MigrateCharacter(char)
 
 	if knownCharacter or legacyCharacter then
 		NormalizeCharacter(char)
+		-- Before v6 the wear capture wrote looks, and a slot the outfit leaves
+		-- empty rendered equipped gear. Nothing says which slots, so the next
+		-- sweep reads every definition again and clears this.
+		char.rereadLooks = true
 	else
 		-- A fresh character can still carry old single-mount links.
 		for outfitID, value in pairs(char.mounts) do

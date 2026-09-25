@@ -137,3 +137,48 @@ describe("LookCodec negatives", function()
 		assert.is_nil(LookCodec.Decode("16:219536,--1,0"))
 	end)
 end)
+
+-- An outfit's definition, from what the viewed outfit says about each slot.
+-- Shaped on Devnull's Outfit 2: shirt, weapons and tabard left empty while
+-- gear is equipped there.
+describe("LookCodec.FromSlotInfos", function()
+	local ASSIGNED, UNASSIGNED, EQUIPPED, HIDDEN = 1, 0, 2, 3
+	local function Info(displayType, transmogID)
+		return { displayType = displayType, transmogID = transmogID }
+	end
+
+	it("keeps assigned parts and stores every other slot as empty", function()
+		local look = LookCodec.FromSlotInfos({
+			{ slotID = 1, primary = Info(ASSIGNED, 302897) },
+			{ slotID = 3, primary = Info(ASSIGNED, 302899), secondary = Info(ASSIGNED, 302899) },
+			{ slotID = 4, primary = Info(UNASSIGNED, 83202) },
+			{ slotID = 16, primary = Info(EQUIPPED, 219532), illusion = Info(UNASSIGNED, 0) },
+			{ slotID = 17, primary = Info(HIDDEN, 219583) },
+		}, ASSIGNED)
+
+		assert.same({ 302897, 0, 0 }, look[1])
+		assert.same({ 302899, 302899, 0 }, look[3])
+		assert.same({ 0, 0, 0 }, look[4])
+		assert.same({ 0, 0, 0 }, look[16])
+		assert.same({ 0, 0, 0 }, look[17])
+	end)
+
+	it("keeps an assigned illusion and an assigned secondary on their own", function()
+		local look = LookCodec.FromSlotInfos({
+			{ slotID = 16, primary = Info(ASSIGNED, 168940), illusion = Info(ASSIGNED, 8553) },
+			{ slotID = 3, primary = Info(ASSIGNED, 5), secondary = Info(UNASSIGNED, 6) },
+		}, ASSIGNED)
+
+		assert.same({ 168940, 0, 8553 }, look[16])
+		assert.same({ 5, 0, 0 }, look[3])
+	end)
+
+	it("reads a missing slot info as empty and skips entries with no slot", function()
+		local look = LookCodec.FromSlotInfos({
+			{ slotID = 5 },
+			{ primary = Info(ASSIGNED, 9) },
+		}, ASSIGNED)
+
+		assert.same({ [5] = { 0, 0, 0 } }, look)
+	end)
+end)

@@ -568,3 +568,93 @@ describe("Tree.CategoryChoices skipID", function()
     assert.same({ "Other" }, names(Tree.CategoryChoices(db(), 1)))
   end)
 end)
+
+describe("Tree.UnfileOutfit", function()
+	local db, tier
+
+	before_each(function()
+		db = H.NewDB()
+		tier = H.AddRoot(db, "Tier")
+	end)
+
+	it("removes the outfit from its category and forgets the assignment", function()
+		H.AddOutfit(db, tier, 7)
+		H.AddOutfit(db, tier, 8)
+
+		assert.is_true(Tree.UnfileOutfit(db, 7))
+		assert.same({ 8 }, db.cats[tier].items)
+		assert.is_nil(db.assign[7])
+	end)
+
+	it("reports nothing removed for an outfit that was never filed", function()
+		assert.is_false(Tree.UnfileOutfit(db, 7))
+		assert.same({}, db.cats[tier].items)
+	end)
+end)
+
+describe("Tree.UntouchedSlot", function()
+	local DEFAULT = "Outfit"
+	local db, unsorted, tier
+
+	local function slot(overrides)
+		local info = { outfitID = 7, name = DEFAULT }
+		for key, value in pairs(overrides or {}) do info[key] = value end
+		return info
+	end
+
+	before_each(function()
+		db = H.NewDB()
+		db.slots, db.wear, db.hearthstones = {}, {}, {}
+		tier = H.AddRoot(db, "Tier")
+		unsorted = H.AddRoot(db, "Unsorted", true)
+	end)
+
+	it("calls an entry the client still names for us an unused slot", function()
+		assert.is_true(Tree.UntouchedSlot(db, slot(), DEFAULT))
+	end)
+
+	it("keeps an outfit the player has named", function()
+		assert.is_false(Tree.UntouchedSlot(db, slot({ name = "milktoast" }), DEFAULT))
+	end)
+
+	it("keeps everything when the client has no default name to compare against", function()
+		assert.is_false(Tree.UntouchedSlot(db, slot(), nil))
+		assert.is_false(Tree.UntouchedSlot(db, slot(), ""))
+	end)
+
+	it("still calls it unused after an earlier sync filed it into Unsorted", function()
+		H.AddOutfit(db, unsorted, 7)
+		assert.is_true(Tree.UntouchedSlot(db, slot(), DEFAULT))
+	end)
+
+	it("keeps an outfit the player sorted into a category", function()
+		H.AddOutfit(db, tier, 7)
+		assert.is_false(Tree.UntouchedSlot(db, slot(), DEFAULT))
+	end)
+
+	it("keeps an outfit with situations set on it", function()
+		local info = slot({ situationCategories = { "Dungeons" } })
+		assert.is_false(Tree.UntouchedSlot(db, info, DEFAULT))
+	end)
+
+	it("keeps an outfit anything at all is stored against", function()
+		for _, store in ipairs({ "looks", "mounts", "hearthstones", "titles", "wear" }) do
+			db[store] = { [7] = { 1 } }
+			assert.is_false(Tree.UntouchedSlot(db, slot(), DEFAULT))
+			db[store] = {}
+		end
+	end)
+
+	it("reads a measured slot count, so a save brings the row back", function()
+		db.slots[7] = { covered = 0, total = 14 }
+		assert.is_true(Tree.UntouchedSlot(db, slot(), DEFAULT))
+
+		db.slots[7] = { covered = 1, total = 14 }
+		assert.is_false(Tree.UntouchedSlot(db, slot(), DEFAULT))
+	end)
+
+	it("survives a store the character file has not created yet", function()
+		db.slots, db.wear, db.hearthstones = nil, nil, nil
+		assert.is_true(Tree.UntouchedSlot(db, slot(), DEFAULT))
+	end)
+end)
