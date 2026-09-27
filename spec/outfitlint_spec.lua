@@ -137,7 +137,6 @@ describe("OutfitLint sweep stores definitions", function()
 		addon = {
 			Say = function() end,
 			Changed = function() end,
-			WarnOnce = function() end,
 			SyncOutfitLibrary = function() synced = synced + 1 end,
 			Synced = function() return synced end,
 		}
@@ -150,6 +149,7 @@ describe("OutfitLint sweep stores definitions", function()
 
 	it("stores only assigned slots, with split shoulders and the illusion", function()
 		MogtrotCharDB.rereadLooks = true
+		MogtrotCharDB.looks[3] = nil
 		lint.BeginAtLogin(addon)
 
 		local look = MogtrotCharDB.looks[3]
@@ -162,6 +162,7 @@ describe("OutfitLint sweep stores definitions", function()
 
 	it("re-reads every outfit once when asked, then stops asking", function()
 		MogtrotCharDB.rereadLooks = true
+		MogtrotCharDB.looks[3] = nil
 		lint.BeginAtLogin(addon)
 		assert.is_nil(MogtrotCharDB.rereadLooks)
 		assert.equal(1, addon.Synced())
@@ -175,6 +176,84 @@ describe("OutfitLint sweep stores definitions", function()
 		lint.BeginAtLogin(addon)
 		assert.same({ 186245, 0, 0 }, MogtrotCharDB.looks[4][1])
 		assert.same({ [4] = { 83202, 0, 0 } }, MogtrotCharDB.looks[3])
+	end)
+
+	-- A clock that runs timers in order, and an outfit that answers only its
+	-- shoulders until landAfter seconds past the view change, with a second
+	-- slot refresh when the rest lands. Measured on Bitrot: the first read after
+	-- ChangeViewedOutfit showed 2 of 15 parts assigned, the next frame all 15.
+	local function SlowLanding(landAfter)
+		local now, queue, landAt = 0, {}, 0
+		_G.C_Timer = { After = function(delay, callback)
+			queue[#queue + 1] = { at = now + delay, callback = callback, order = #queue }
+		end }
+		local api = C_TransmogOutfitInfo
+		local landed = api.GetViewedOutfitSlotInfo
+		api.GetViewedOutfitSlotInfo = function(slot, transmogType, option)
+			if now >= landAt or slot == SLOT.ShoulderRight then
+				return landed(slot, transmogType, option)
+			end
+			return { displayType = 0, transmogID = 77345 }
+		end
+		api.ChangeViewedOutfit = function(outfitID)
+			viewed, landAt = outfitID, now + landAfter
+			lint.OnViewedSlotsReady(addon)
+			C_Timer.After(landAfter, function() lint.OnViewedSlotsReady(addon) end)
+		end
+		return function(untilTime)
+			while #queue > 0 do
+				table.sort(queue, function(a, b)
+					if a.at ~= b.at then return a.at < b.at end
+					return a.order < b.order
+				end)
+				if queue[1].at > untilTime then return end
+				local nextTimer = table.remove(queue, 1)
+				now = nextTimer.at
+				nextTimer.callback()
+			end
+		end
+	end
+
+	it("waits for a definition that lands after the first slot refresh", function()
+		MogtrotCharDB.rereadLooks = true
+		MogtrotCharDB.looks[3] = nil
+		local run = SlowLanding(0.5)
+		lint.BeginAtLogin(addon)
+		run(60)
+
+		assert.same({ 302897, 0, 0 }, MogtrotCharDB.looks[3][1])
+		assert.same({ 302899, 302900, 0 }, MogtrotCharDB.looks[3][3])
+		assert.same({ 0, 0, 8553 }, MogtrotCharDB.looks[3][16])
+	end)
+
+	it("keeps a stored definition that a read which never lands would shrink", function()
+		local stored = {
+			[1] = { 302897, 0, 0 }, [3] = { 302899, 302900, 0 },
+			[4] = { 0, 0, 0 }, [16] = { 0, 0, 8553 },
+		}
+		MogtrotCharDB.looks[3] = stored
+		MogtrotCharDB.rereadLooks = true
+		local run = SlowLanding(1000)
+		lint.BeginAtLogin(addon)
+		run(60)
+
+		assert.equal(stored, MogtrotCharDB.looks[3])
+		assert.equal(9, MogtrotCharDB.slots[3].covered)
+	end)
+
+	it("accepts a smaller definition read the same way in two sweeps", function()
+		MogtrotCharDB.looks[3] = {
+			[1] = { 302897, 0, 0 }, [3] = { 302899, 302900, 0 }, [16] = { 0, 0, 8553 },
+		}
+		MogtrotCharDB.rereadLooks = true
+		local run = SlowLanding(1000)
+		lint.BeginAtLogin(addon)
+		run(60)
+		lint.BeginAtLogin(addon)
+		run(120)
+
+		assert.same({ 0, 0, 0 }, MogtrotCharDB.looks[3][1])
+		assert.same({ 302899, 0, 0 }, MogtrotCharDB.looks[3][3])
 	end)
 
 	it("does not start inside an instance", function()

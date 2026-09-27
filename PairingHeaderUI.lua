@@ -20,6 +20,12 @@ local PAD = 7
 local ICON = 16
 local BACKDROP = { edgeFile = "Interface\\Buttons\\WHITE8X8", edgeSize = 1 }
 
+-- A plain triangle with no button around it, tinted the same gold as the word.
+-- The font has no glyph for a down triangle, so text cannot draw it.
+local CARET_ATLAS = "friendslist-categorybutton-arrow-down"
+local CARET = 12
+local CARET_ROOM = 12
+
 -- The same two the macro handles wear, so one thing has one icon everywhere.
 local RANDOM_FAVOURITE_SPELL_ID = 150544
 local HEARTHSTONE_ITEM_ID = 6948
@@ -120,6 +126,12 @@ local function NewSegment(parent, height, onClick)
 	segment.Icon:SetSize(ICON, ICON)
 	segment.Icon:SetTexCoord(0.07, 0.93, 0.07, 0.93)
 	segment.Icon:Hide()
+	segment.Caret = segment:CreateTexture(nil, "ARTWORK")
+	segment.Caret:SetAtlas(CARET_ATLAS, false)
+	segment.Caret:SetSize(CARET, CARET)
+	segment.Caret:SetDesaturated(true)
+	segment.Caret:SetVertexColor(1, 0.82, 0)
+	segment.Caret:Hide()
 	segment.Text = segment:CreateFontString(nil, "OVERLAY", "GameFontNormal")
 	segment.Text:SetPoint("LEFT")
 	segment:SetScript("OnEnter", Segment_OnEnter)
@@ -150,9 +162,14 @@ local function Paint(segment, part, outfitIcon)
 		segment.Text:SetPoint("LEFT", segment, "LEFT", PAD + room, 0)
 		segment:SetBackdrop(BACKDROP)
 		segment:SetBackdropBorderColor(1, 0.82, 0, 1)
-		segment:SetWidth(segment.Text:GetStringWidth() + room + PAD * 2)
+		local caret = part.menu and CARET_ROOM or 0
+		segment.Caret:ClearAllPoints()
+		segment.Caret:SetPoint("CENTER", segment.Text, "RIGHT", 4 + CARET_ROOM / 2, -1)
+		segment.Caret:SetShown(part.menu == true)
+		segment:SetWidth(segment.Text:GetStringWidth() + room + caret + PAD * 2)
 	else
 		segment.Icon:Hide()
+		segment.Caret:Hide()
 		segment.Text:SetTextColor(0.85, 0.85, 0.85)
 		segment.Text:SetPoint("LEFT")
 		if segment.ClearBackdrop then segment:ClearBackdrop()
@@ -177,7 +194,8 @@ function PairingHeaderUI.Word(parent, height, action, onChoose)
 	function word:Say(value)
 		local choice = ns.PairingHeader.Choice(action, value)
 		Paint(self, { text = choice and choice.text or tostring(value),
-			action = action, icon = choice and choice.icon })
+			action = action, icon = choice and choice.icon,
+			menu = ns.PairingHeader.OpensMenu(action) })
 	end
 	return word
 end

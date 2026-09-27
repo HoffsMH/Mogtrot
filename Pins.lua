@@ -27,6 +27,27 @@ local Pins = {}
 
 Pins.DefaultAutoPinDays = 7
 
+-- The named domain in an account's pin store, or nil unless it carries
+-- records, autoNew and days. Callers treat nil as "pins are not usable yet".
+function Pins.Domain(account, name)
+	local pins = type(account) == "table" and account.pins
+	if type(pins) ~= "table" then return nil end
+	local domain = pins[name]
+	if type(domain) ~= "table" or type(domain.records) ~= "table"
+		or domain.autoNew == nil or domain.days == nil then
+		return nil
+	end
+	return domain
+end
+
+-- A character's per-outfit opt-out table for the named domain, keyed by
+-- outfit ID, or nil when the store does not carry one.
+function Pins.OptOut(char, name)
+	local optOut = type(char) == "table" and char.pinOptOut
+	if type(optOut) ~= "table" or type(optOut[name]) ~= "table" then return nil end
+	return optOut[name]
+end
+
 local function Records(domain)
 	domain.records = domain.records or {}
 	return domain.records
@@ -79,10 +100,6 @@ function Pins.Pin(domain, id, now)
 	SetExpiration(record, Days(domain), now)
 	record.suppressed = nil
 	records[id] = record
-end
-
-function Pins.Keep(domain, id, now)
-	Pins.Pin(domain, id, now)
 end
 
 function Pins.SetDaysRemaining(domain, id, days, now)

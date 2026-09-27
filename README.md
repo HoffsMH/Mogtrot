@@ -25,7 +25,6 @@ files. The test suite rejects mismatches.
 ## Commands
 
 `/mogtrot` or `/mogt` opens the window. `/mogtrot help` lists the commands below.
-There are a few more behind `/mogtrot debug`, for reporting a bug.
  
 ### Outfit companions
 
@@ -53,7 +52,8 @@ It decides by the first sentence of each Use line, the one naming the home you
 set at an innkeeper: a toy bound to a fixed place names somewhere else, so it
 cannot match by accident.
 
-Drag the fourth action-bar handle to create the account macro:
+Drag the Hearth icon from the outfit window's sidebar to create the account
+macro:
 
 ```text
 #mogtrot:hearth
@@ -71,8 +71,8 @@ visual kit.
 
 ## Reporting a bug
 
-`/mogtrot state` prints what Mogtrot can see. Include that, and whatever
-BugSack shows, if anything.
+Include what you did, what you expected, and whatever BugSack shows, if
+anything.
 
 (caution) Note that WoW blames whichever addon tainted the execution path, which is not
 always the addon at fault - an error naming Mogtrot may belong to something else,

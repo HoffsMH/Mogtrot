@@ -1,56 +1,26 @@
 local _, ns = ...
 
 -- The library window: every stored look, four to a row, each on a body of its
--- own race.
+-- own race. This file is the window, its header, filters and status line;
+-- LibraryCards draws each card and LibraryBodies lends the bodies.
 --
--- A card is a portrait. Left-click opens the detail pane on it, right-click
--- offers More info, Delete, and the two ways of showing a body. Snapshots and
--- mirrored Blizzard outfits share the wall and can be filtered by source.
+-- Snapshots and your own outfits and custom sets are two exclusive walls,
+-- switched from the header sentence.
 --
 -- The grid is Blizzard's scroll box, the same one the mount picker uses, so
--- the wheel and the bar behave here the way they do there. Dragging a card
--- moves every model at once, side to side to turn and up and down to zoom: a
--- wall of portraits is for comparing them, and comparing them means seeing
--- them the same way.
+-- the wheel and the bar behave here the way they do there.
 local LibraryUI = {}
 
+local Bodies, Cards = ns.LibraryBodies, ns.LibraryCards
+local Library = Cards.Library
+
 local COLS = 4
-local CARD_W, CARD_H = 210, 320
+local CARD_W, CARD_H = Bodies.CARD_W, Bodies.CARD_H
 local GAP, MARGIN = 10, 14
 local HEADER, FOOTER = 88, 12
 local BAR_GUTTER, BAR_GAP = 14, 6
 local ROWS_SHOWN = 2
 local LIBRARY_STRATA = "DIALOG"
-
--- Degrees of yaw per pixel dragged, slow enough to stop on a detail.
-local TURN_PER_PIXEL = 0.6
-
--- A mount scene is framed for the mount journal's big panel, so in a card it
--- reads as a distant speck until it is brought closer, while a dress-up scene
--- is already framed for something card-shaped. Correcting for that is a
--- property of the scene rather than a matter of taste, so it is a fraction of
--- whatever distance the scene shipped with and it holds across mounts of very
--- different sizes. Gentle on purpose: a big mount pulled in hard leaves
--- nothing but a wing in frame once it turns.
---
--- The mount picker frames its cards by sliding the scene frame instead, which
--- suits it: those cards show a mount alone and the complaint there was dead
--- space under the name. Here the rider is the subject and has to be legible,
--- which is a distance problem, not a position one.
-local MOUNT_FRAMING = 0.85
-
--- What the wall is zoomed to on top of that framing, so one at the default
--- means every card shows what it was framed to show. Dragging a card up and
--- down moves it, the zoom buttons step it, and it is saved.
-local DEFAULT_ZOOM = 1
-
--- Saved under mountZoom. The bounds read back here are wider than the ones
--- the controls write: LibraryZoom clamps inside them.
-local function Zoom()
-	local saved = MogtrotDB and tonumber(MogtrotDB.mountZoom)
-	if saved and saved > 0.05 and saved <= 6 then return saved end
-	return DEFAULT_ZOOM
-end
 
 local BACKDROP = {
 	bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
@@ -59,196 +29,15 @@ local BACKDROP = {
 	insets = { left = 4, right = 4, top = 4, bottom = 4 },
 }
 
+-- Shared with the snap pop-up, which is drawn the same way.
+LibraryUI.BACKDROP = BACKDROP
+
 local window
 
--- One angle for the whole wall, kept while the window lives.
-local yaw = 0
-
--- What the last render of each record reported, per slot. Runtime only: it
--- describes this client's answer now, not the record.
-local lastApply = {}
--- Whether each slot was drawn, as opposed to accepted.
-local lastVisible = {}
--- The line the card printed, kept whole. The card truncates it, and the half
--- that falls off the end is the half that says why.
-local lastNote = {}
-
--- A decision note says what the code chose, not what the client drew, so it
--- reads innocent whenever the choice was right and the draw was not.
---
--- This is the readback. A body key already names a race, a form and a sex, and
--- each of those is a different model file, so one key must only ever be one
--- file. A key seen carrying two is proof that some card rendered a body other
--- than the one it asked for, and it holds without knowing a single file ID in
--- advance: the wall calibrates itself from its own first correct render.
-local bodySeen = {}
-
-local function NoteBody(recordID, key, actor)
-	if type(key) ~= "string" or actor == nil then return end
-	if type(actor.GetModelFileID) ~= "function" then return end
-	local ok, fileID = pcall(actor.GetModelFileID, actor)
-	if not ok or fileID == nil then return end
-	local loaded = true
-	if type(actor.IsLoaded) == "function" then
-		local gotLoaded, value = pcall(actor.IsLoaded, actor)
-		loaded = (not gotLoaded) or value ~= false
-	end
-	local seen = bodySeen[key]
-	if not seen then
-		seen = { files = {}, order = {} }
-		bodySeen[key] = seen
-	end
-	local file = seen.files[fileID]
-	if not file then
-		file = { count = 0, firstRecord = recordID, loaded = loaded }
-		seen.files[fileID] = file
-		seen.order[#seen.order + 1] = fileID
-	end
-	file.count = file.count + 1
-	file.lastRecord = recordID
-end
-
--- Every key the wall has drawn, and every model file each was drawn with.
---
--- The naive rule, "a file under more than one key is suspect", is wrong in
--- both directions. A model loads asynchronously, so a sample can catch a
--- placeholder that then shows up under every key at once. And a wrongly drawn
--- body is a real body, so it appears under its own key as well as the one it
--- leaked into, which a "more than one key" rule would discount as noise: it
--- would hide precisely the thing being hunted.
---
--- Sex is the discriminator. A file drawn under two keys that disagree about
--- sex cannot be right for both, whatever else it is. Two keys that differ
--- only by faction race ID are the same body and are left alone.
-local PLACEHOLDER_KEYS = 4
-
-local function KeySex(key)
-	return select(3, strsplit("|", key))
-end
-
-function LibraryUI.BodyAudit()
-	local keys = {}
-	for key in pairs(bodySeen) do keys[#keys + 1] = key end
-	table.sort(keys)
-
-	local where = {}
-	for _, key in ipairs(keys) do
-		for _, fileID in ipairs(bodySeen[key].order) do
-			where[fileID] = where[fileID] or {}
-			table.insert(where[fileID], key)
-		end
-	end
-
-	local placeholder, leaked = {}, {}
-	for fileID, holders in pairs(where) do
-		if #holders >= PLACEHOLDER_KEYS then
-			placeholder[fileID] = #holders
-		elseif #holders > 1 then
-			local sex = KeySex(holders[1])
-			for _, key in ipairs(holders) do
-				if KeySex(key) ~= sex then leaked[fileID] = holders break end
-			end
-		end
-	end
-
-	-- A pipe is WoW's escape prefix, so a raw key prints as nonsense: the "|t"
-	-- in "|true" is eaten as a texture and "|N" starts a new line.
-	local function Show(text) return (tostring(text):gsub("|", "||")) end
-
-	local lines, anomalies = { "body key -> model files actually drawn" }, 0
-	for _, key in ipairs(keys) do
-		local seen, parts, bad = bodySeen[key], {}, false
-		for _, fileID in ipairs(seen.order) do
-			if not placeholder[fileID] then
-				local file = seen.files[fileID]
-				local leak = leaked[fileID] and " WRONG SEX" or ""
-				if leak ~= "" then bad = true end
-				parts[#parts + 1] = ("%s x%d (records %s..%s)%s"):format(
-					tostring(fileID), file.count, tostring(file.firstRecord),
-					tostring(file.lastRecord), leak)
-			end
-		end
-		if bad then anomalies = anomalies + 1 end
-		lines[#lines + 1] = ("%s%s: %s"):format(bad and "ANOMALY " or "", Show(key),
-			#parts > 0 and table.concat(parts, " | ") or "placeholder only, not drawn yet")
-	end
-
-	for fileID, holders in pairs(leaked) do
-		lines[#lines + 1] = ""
-		lines[#lines + 1] = ("%s was drawn under keys of different sex:"):format(
-			tostring(fileID))
-		for _, key in ipairs(holders) do lines[#lines + 1] = "   " .. Show(key) end
-	end
-
-	local discounted = {}
-	for fileID, count in pairs(placeholder) do
-		discounted[#discounted + 1] = ("%s (%d keys)"):format(tostring(fileID), count)
-	end
-	table.sort(discounted)
-	if #discounted > 0 then
-		lines[#lines + 1] = ""
-		lines[#lines + 1] = "discounted as placeholders: " .. table.concat(discounted, ", ")
-	end
-	lines[#lines + 1] = ""
-	lines[#lines + 1] = ("%d key(s), %d drawn with a body of the wrong sex")
-		:format(#keys, anomalies)
-	return lines
-end
-
--- Bodies outlive the cards that show them.
---
--- A card is recycled as you scroll, and rebuilding its body somewhere empty
--- finds nobody to borrow a sex from, which is how a room full of women turned
--- back into men on the way to a dungeon. Measured in game, a hidden model
--- scene costs nothing: thirty of them moved the framerate by minus two frames
--- against a hundred and forty seven, while thirty drawn cost half of it. So
--- bodies are built once and kept, hidden, and the scene holding one is
--- reparented into whichever card needs it. Nothing is copied, because nothing
--- can be: a model cannot move between actors, only the scene around it can
--- move between parents.
---
--- Keyed by what a body is, not by whose record it was, so two women of the
--- same race share one and a library of hundreds needs only a handful.
-local characterPool
-
--- The one body currently lent to the detail pane, if any. Two bodies for one
--- record can never be guaranteed to agree, so there is only ever one and it
--- moves between the wall and the pane.
--- The twin scene currently parented into the detail pane.
--- Which body a card is asked to use, by record id. Runtime only: it is a way
--- of looking, not a fact about the wearer.
---
--- Neither body is right. The player model wears the whole outfit but carries
--- the viewer's sex and customizations, so a woman renders as a man with your
--- hair. The creature row is the subject's own race and sex with its own face,
--- but it is a creature model, so it takes attachments and drops every
--- composited piece. Which one is closer depends on the outfit: a look made
--- mostly of hidden pieces loses almost nothing on the creature row, while a
--- full plate set loses nearly all of it.
-
--- Whether the wall shows people sitting on the mounts they were seen on.
---
--- The switch in the header is the default; a card can be told otherwise and
--- then keeps its own answer. A record with no mount recorded ignores all of
--- this, since there is nothing to sit on.
-local showMounts = false
+-- The whole filter state: mode, owners, sources, races, classes, armour and
+-- the archive switch.
 local raceFilter
 local nameQuery
--- The archived card whose Delete has been clicked once. Keyed by record, not
--- by card, because cards are pooled.
-local armedDelete
-
-local function Mounted(record)
-	if not record.mount then return false end
-	return showMounts
-end
-
-local function Library()
-	if type(MogtrotDB) ~= "table" then return nil end
-	local library = MogtrotDB.library
-	if type(library) ~= "table" or type(library.records) ~= "table" then return nil end
-	return library
-end
 
 local function Records()
 	local Store = ns.Library
@@ -268,36 +57,16 @@ local function WallRecords()
 	return Records()
 end
 
--- The client owns the class palette and players expect it, so it is read
--- rather than invented. Returns nothing for a class the client will not name,
--- which leaves the caller at its ordinary colour.
-local function ClassInfoFor(classID)
-	if type(classID) ~= "number" then return nil end
-	local classes = C_CreatureInfo
-	local info = classes and classes.GetClassInfo and classes.GetClassInfo(classID)
-	if not info then return nil end
-	return info.className, RAID_CLASS_COLORS and RAID_CLASS_COLORS[info.classFile]
-end
-
--- Shared with the detail pane, which titles itself with the same colour the
--- card uses.
-LibraryUI.ClassInfoFor = ClassInfoFor
-
--- Blizzard's own class icon, by the name they build it from
--- (SharedConstants.lua: GetClassAtlas). Nil for a class the client will not
--- name, which leaves the row with no icon rather than a broken one.
-local function ClassAtlas(classID)
-	if type(classID) ~= "number" then return nil end
-	local classes = C_CreatureInfo
-	local info = classes and classes.GetClassInfo and classes.GetClassInfo(classID)
-	if not (info and info.classFile and GetClassAtlas) then return nil end
-	return GetClassAtlas(strlower(info.classFile))
-end
-
-local function ClassRGB(classID)
-	local _className, color = ClassInfoFor(classID)
-	if not color then return nil end
-	return { color.r, color.g, color.b }
+-- The records the wall shows under the current search and filters.
+local function WallList(allRecords)
+	local Filter = ns.LibraryFilter
+	local searched = {}
+	for _, record in ipairs(allRecords) do
+		if not Filter or Filter.NameMatches(record, nameQuery) then
+			searched[#searched + 1] = record
+		end
+	end
+	return Filter and Filter.Apply(searched, raceFilter) or searched
 end
 
 -- The character list is the longest filter here and the only one worth typing
@@ -315,8 +84,8 @@ local function OpenCharacterPicker()
 		items[#items + 1] = {
 			name = label,
 			guid = entry.guid,
-			iconAtlas = ClassAtlas(entry.classID),
-			nameColor = ClassRGB(entry.classID),
+			iconAtlas = Cards.ClassAtlas(entry.classID),
+			nameColor = Cards.ClassRGB(entry.classID),
 			preselected = Filter.IsOwnerSelected(raceFilter, entry.guid),
 		}
 	end
@@ -364,970 +133,36 @@ local function HeaderAction(action)
 	LibraryUI.Refresh()
 end
 
--- Turns one card to the shared angle.
---
--- An unmounted card turns its model, which spins in place and is the motion
--- people expect. A mounted card turns its camera instead: a mount is long, and
--- spinning a serpent about its middle sweeps most of it out of the frame,
--- while orbiting keeps whatever the scene was framed around in the middle.
-local function TurnCard(card, degrees)
-	if card.mountActor and card.body and card.body.scene then
-		local render = ns.ProbeRenderUI
-		if render then render.TurnCamera(card.body.scene, degrees) end
-		return
-	end
-	local actor = card.actor
-	if type(actor) ~= "table" or type(actor.SetYaw) ~= "function" then return end
-	pcall(actor.SetYaw, actor, math.rad(degrees))
-end
-
--- Zooms one card to the shared factor. Always the camera, mounted or not: an
--- actor has no distance of its own to move, and the scene is what draws it.
--- A mounted card folds its framing correction into the same call, so one zoom
--- answers for both kinds of card.
-local function ZoomCard(card, factor)
-	local scene = card.body and card.body.scene
-	local render = ns.ProbeRenderUI
-	if not (scene and render) then return end
-	render.ZoomTo(scene, card.mountActor and factor * MOUNT_FRAMING or factor)
-end
-
--- One card put the way the whole wall is: same angle, same distance.
-local function FrameCard(card)
-	TurnCard(card, yaw)
-	ZoomCard(card, Zoom())
-end
-
-local function ApplyFraming()
-	if not window or not window.Box then return end
-	window.Box:ForEachFrame(FrameCard)
-end
-
--- What the zoom controls say, in a number that grows as the models do.
-local function ShowZoom()
-	local Zooms = ns.LibraryZoom
-	if not (window and window.ZoomLevel and Zooms) then return end
-	local percent = Zooms.Magnification(Zoom())
-	window.ZoomLevel.Text:SetText(percent and ("%d%%"):format(percent) or "--")
-end
-
--- The one way in for every control: the drag, the buttons and the readout all
--- go through here, so the saved value, the wall and the readout cannot
--- disagree. A factor it cannot use leaves the zoom alone and still re-frames,
--- because the drag turns the wall on the same call.
-local function SetZoom(factor)
-	local Zooms = ns.LibraryZoom
-	local value = Zooms and Zooms.Clamp(factor)
-	if value and MogtrotDB then MogtrotDB.mountZoom = value end
-	ShowZoom()
-	ApplyFraming()
-end
-
--- How the client answers about a unit, for DonorBody. A unit the client
--- refuses is reported as absent rather than guessed at.
---
--- SetModelByUnit is marked as requiring declassified unit identity, and the
--- donor technique hands it a stranger's token, which is exactly the case that
--- gate exists for. A unit whose identity is restricted is therefore refused as
--- a donor up front, rather than found, chosen, and then failing inside the
--- model call where the failure reads as a body that would not build.
-local function ReadUnit(token)
-	if not (UnitExists and UnitExists(token)) then return false end
-	if not (UnitIsPlayer and UnitIsPlayer(token)) then return true, false end
-	if C_Secrets and C_Secrets.ShouldUnitIdentityBeSecret then
-		local known, secret = pcall(C_Secrets.ShouldUnitIdentityBeSecret, token)
-		if known and secret then return true, true, nil end
-	end
-	local ok, sex = pcall(UnitSex, token)
-	if not ok or issecretvalue and issecretvalue(sex) then return true, true, nil end
-	local gotRace, _, _, raceID = pcall(UnitRace, token)
-	if not gotRace or (issecretvalue and issecretvalue(raceID)) then raceID = nil end
-	return true, true, sex, raceID
-end
-
--- The wall is all one thing or all the other.
---
--- Half the cards on somebody else's body and half on yours reads as broken
--- rather than as a compromise, and invites you to wonder which half is lying.
--- So until every record that needs a borrowed body has one, no record gets
--- one: every card shows your own body, as you are standing right now, wearing
--- that outfit. The moment the last body is in the pool the whole wall turns
--- over to full fidelity at once.
-local fullFidelity = false
--- Whether any card is still without a body of its own, as opposed to whether
--- every shape of body has been built at least once.
-local bodiesWanted = false
-
--- What you asked to see, as opposed to what can be shown. Original race is the
--- default because it is the point of the library; it is granted only once
--- every body has been borrowed, and until then the wall stands every look on
--- you and turns over the moment the last body arrives. You can always ask for
--- your own body instead and keep it.
-local viewMode = "original"
-
 local SWITCH_H = 22
 
--- What a built body is, so a card can tell whether the one it is already
--- holding still fits the record in front of it.
---
--- A body is loaded geometry, not a live link to whoever donated it, so it
--- survives that person walking away and survives you leaving the zone. What
--- loses it is rebuilding, and rebuilding somewhere empty finds nobody to
--- borrow from. So a card that already holds the right body keeps it and only
--- changes clothes: open the library once where there are people, and those
--- bodies last the rest of the session.
-local function BodyKey(record, shown, native, donorSex)
-	return ns.LibraryBody.Key(record, shown, native, donorSex)
+-- The two control rows, stacked against the close button and sharing a
+-- left edge, so "Show:" and "Zoom:" line up and what follows each of them
+-- starts in the same place. The rows are laid out left to right from that
+-- edge and their right edges are ragged; the width is what the Show row
+-- needs at its longest, so neither row can reach the close button.
+local CONTROLS_W = 322
+local LABEL_W = 46
+local ZOOM_H = 16
+
+-- A boxed button in the header, the same shape as the mount picker's mode
+-- switch. The height and the font are arguments because the zoom row is
+-- deliberately smaller than the row above it.
+local function BuildSwitch(parent, label, width, height, font)
+	local button = CreateFrame("Button", nil, parent, "BackdropTemplate")
+	button:SetSize(width, height or SWITCH_H)
+	button:SetBackdrop({ edgeFile = "Interface\\Buttons\\WHITE8X8", edgeSize = 1 })
+	button.Text = button:CreateFontString(nil, "OVERLAY", font or "GameFontNormal")
+	button.Text:SetPoint("CENTER")
+	button.Text:SetText(label)
+	button:SetScript("OnLeave", GameTooltip_Hide)
+	return button
 end
 
--- Your own body exactly as it is now, including whichever form you are
--- standing in. No race override at all: this is the honest degraded view, and
--- pretending otherwise by keeping the race but not the sex is what made the
--- wall look broken.
-local function SetOwnBody(actor)
-	if type(actor.SetModelByUnit) ~= "function" then return nil end
-	local diagnostics = ns.Diagnostics
-	local native = true
-	if diagnostics and type(diagnostics.UseNativeForm) == "function" then
-		native = diagnostics.UseNativeForm("player")
-	end
-	local sheathe, autoDress, hideWeapons, holdBowString = false, false, false, false
-	local ok, applied = pcall(actor.SetModelByUnit, actor, "player", sheathe,
-		autoDress, hideWeapons, native, holdBowString)
-	if not ok or applied == false then return nil end
-	return "on you"
-end
-
--- Puts a body of the record's race under the actor, and says which way it
--- managed it.
---
--- The creature display row shows the right race but renders only attachments:
--- a helm and weapons appear, and every composited piece is silently dropped
--- even though each slot reports ItemTryOnReason 0. Armor needs a player-type
--- model, which is what SetModelByUnit builds, and its customRaceID argument
--- swaps the race without needing that race to be standing in front of you.
--- Blizzard drives its own shop previews the same way. The creature row stays
--- as the fallback: the right race with no armor beats no body at all.
-local function SetBody(actor, record, body, preferredDonor, preferRace)
-	local raceID = record.raceID
-	-- Cleared first: whatever this actor was holding is about to stop being
-	-- true, and a stale key would hand the wrong body to the next card.
-	actor.mogtrotBodyKey = nil
-
-	local wanted = viewMode == "original" and fullFidelity
-	if not (wanted or preferredDonor) then
-		return SetOwnBody(actor)
-	end
-	if type(actor.SetModelByUnit) == "function" and type(raceID) == "number" then
-		local sheathe, autoDress, hideWeapons, holdBowString = false, false, false, false
-		-- usePlayerNativeForm asks for the viewer's own second body, so it is
-		-- meaningful only for a race that has one. Passing a stored false for a
-		-- race that does not renders the viewer's alternate form wearing the
-		-- record, which looks like the race override was ignored.
-		local shown, native = ns.LibraryBody.Form(record, body.HasAlternateForm,
-			body.VisageRace)
-		-- The race override replaces the race and nothing else, so the sex comes
-		-- from whichever unit the model is built from. Yours when the sexes
-		-- agree, and otherwise anybody of the right sex who is standing about.
-		local donors = ns.DonorBody
-		local from, sameRace = preferredDonor, nil
-		if not from then
-			-- The skin comes from the donor, so a donor of the race being shown
-			-- is asked for first and anybody of the right sex is the fallback.
-			if donors and record.sex then
-				-- preferRace lets a second view of the same record ask for the
-				-- donor race the first one used, so the two agree. Without it
-				-- one can be built from a Void Elf and the other from an
-				-- Earthen, and the same person has two different skins.
-				from, sameRace = donors.Find(record.sex, ReadUnit, preferRace or shown)
-			end
-		end
-		from = from or "player"
-
-		-- Passing a race override that matches the source unit's own race is not
-		-- a no-op: it loads a base race stripped of customizations, which
-		-- renders a Dracthyr visage white and makes usePlayerNativeForm inert.
-		-- Hand it nil instead and the unit's real body comes through.
-		local override = shown
-		local _, fromRaceFile, fromRaceID = UnitRace(from)
-		if fromRaceID == shown then override = nil end
-		if fromRaceFile == nil then override = shown end
-
-		-- Blizzard gates every one of its own SetModelByUnit calls on this.
-		if IsUnitModelReadyForUI and not IsUnitModelReadyForUI(from) then
-			return nil, "their model is not loaded yet"
-		end
-
-		local ok, applied = pcall(actor.SetModelByUnit, actor, from, sheathe,
-			autoDress, hideWeapons, native, holdBowString, override)
-		if ok and applied ~= false then
-			local donorSex = UnitSex and UnitSex(from) or nil
-			actor.mogtrotBodyKey = BodyKey(record, shown, native, donorSex)
-			-- Remembered so another view of this record can be built from the
-			-- same person. The race alone is not enough: two Draenei have
-			-- different skin and hair, and borrowing from a different one
-			-- produces the same outfit on a visibly different woman.
-			actor.mogtrotDonorRace = select(3, UnitRace(from))
-			actor.mogtrotDonorGUID = from ~= "player" and UnitGUID and UnitGUID(from) or nil
-			if actor.mogtrotDonorGUID and issecretvalue
-				and issecretvalue(actor.mogtrotDonorGUID) then
-				actor.mogtrotDonorGUID = nil
-			end
-			local note = ("race %d%s%s"):format(shown, override and "" or " (no override)",
-				native and "" or ", altered")
-			local mine = UnitSex and UnitSex("player") or nil
-			if from ~= "player" then
-				-- Whose body this is matters: the race override does not carry
-				-- their skin, so a donor of another race lends a palette that
-				-- lands wrong here, and the card says so rather than looking
-				-- like a bad render.
-				local lender = select(2, UnitRace(from)) or from
-				if sameRace == false then
-					return ("%s, body borrowed from a %s, so the skin is theirs")
-						:format(note, tostring(lender))
-				end
-				return ("%s, body borrowed from a %s"):format(note, tostring(lender))
-			end
-			if record.sex and mine and record.sex ~= mine then
-				return note .. ", sex is yours, nobody to borrow from"
-			end
-			return note .. ", your body"
-		end
-	end
-
-	local displayID, missing = body.Lookup(raceID, record.sex)
-	if not displayID or type(actor.SetModelByCreatureDisplayID) ~= "function" then
-		return nil, missing
-	end
-	if not pcall(actor.SetModelByCreatureDisplayID, actor, displayID, false) then
-		return nil, ("body %d refused"):format(displayID)
-	end
-	return ("their own body, creature %d, attachments only"):format(displayID)
-end
-
--- The body this record deserves: its own race, its own form, its own sex. A
--- card already holding this has nothing to gain from being rebuilt and
--- everything to lose, since the donor who made it possible may be a zone away.
--- Anything else is worth rebuilding, because a donor may have arrived since.
--- The race this record is rendered as, which is not always the race it was
--- captured as: a visage is its own race.
-local function IdealShownRace(record, body)
-	local raceID = record.raceID
-	if type(raceID) ~= "number" then return nil end
-	if record.nativeForm == false and body.HasAlternateForm(raceID) then
-		return body.VisageRace(raceID) or raceID
-	end
-	return raceID
-end
-
-local function IdealBodyKey(record, body)
-	return ns.LibraryBody.IdealKey(record, body.HasAlternateForm, body.VisageRace)
-end
-
--- Distinct bodies are bounded by race, sex and form. The cap only guards
--- against a pathological account growing this without end.
-local POOL_LIMIT = 60
-
-local function Pool()
-	if characterPool then return characterPool end
-	local holder = CreateFrame("Frame", nil, UIParent)
-	holder:SetSize(1, 1)
-	holder:SetPoint("TOPLEFT", UIParent, "TOPLEFT", -10, 10)
-	holder:Hide()
-	characterPool = ns.CharacterModelPool.New(POOL_LIMIT, holder)
-	return characterPool
-end
-
-local function AttachScene(entry)
-	if not entry or entry.scene then return entry end
-	local holder = Pool():Holder()
-	local scene = CreateFrame("ModelScene", nil, holder, "ModelSceneMixinTemplate")
-	scene:SetSize(CARD_W - 14, CARD_H - 51)
-	scene:SetPoint("TOPLEFT")
-	-- Its own handlers would turn wall scrolling into zoom and panning.
-	scene:EnableMouse(false)
-	scene:EnableMouseWheel(false)
-	scene:Hide()
-	entry.scene = scene
-	return entry
-end
-
--- Hands a scene back, hidden and out of the way, so another card can take it.
-local function Release(card)
-	local entry = card.body
-	if not entry then return end
-	-- Only the card's own entry may be released. If something else has already
-	-- taken it, reparenting it here would tear the scene out of that card.
-	local released = Pool():Release(card)
-	if released ~= entry then
-		card.body, card.actor, card.mountActor = nil, nil, nil
-		return
-	end
-	card.body, card.actor, card.mountActor = nil, nil, nil
-	entry.scene:SetParent(Pool():Holder())
-	entry.scene:ClearAllPoints()
-	entry.scene:SetPoint("TOPLEFT")
-	entry.scene:Hide()
-end
-
--- The scene a card should use for this body.
---
--- The order matters more than it looks. A free scene already holding the
--- wanted body is taken as it is. Otherwise only an empty scene is taken, never
--- one holding a body somebody else may want: handing out any free scene means
--- scrolling destroys the bodies it just built, which is the pool eating
--- itself. A new scene is made instead, because a hidden one is free. Only at
--- the cap does it fall back to taking a built body, oldest first.
-local function Acquire(card, wantedKey)
-	Release(card)
-	local entry = AttachScene(Pool():Acquire(card, wantedKey))
-	if not entry then return nil end
-	card.body = entry
-	entry.scene:SetFixedFrameStrata(false)
-	entry.scene:SetFixedFrameLevel(false)
-	entry.scene:SetParent(card)
-	entry.scene:SetFixedFrameStrata(true)
-	entry.scene:SetFixedFrameLevel(true)
-	entry.scene:ClearAllPoints()
-	entry.scene:SetPoint("TOPLEFT", 7, -7)
-	entry.scene:SetPoint("BOTTOMRIGHT", -7, 44)
-	entry.scene:Show()
-	return entry
-end
-
--- Everything the planner needs that has to be asked of the client.
-local function BodyPlan(record, body)
-	local altered = false
-	local diagnostics = ns.Diagnostics
-	if diagnostics and type(diagnostics.UseNativeForm) == "function" then
-		altered = not diagnostics.UseNativeForm("player")
-	end
-	return ns.LibraryBody.Plan({
-		record = record,
-		viewMode = viewMode,
-		fullFidelity = fullFidelity,
-		mounted = Mounted(record),
-		viewer = {
-			raceFile = select(2, UnitRace("player")),
-			sex = UnitSex and UnitSex("player") or nil,
-			altered = altered,
-		},
-		hasAlternateForm = body.HasAlternateForm,
-		visageRace = body.VisageRace,
-	})
-end
-
--- Draws one card and returns the line that describes what it drew. It writes
--- no status of its own: Paint owns that, so there is exactly one place the
--- card's status can come from and no path can leave the previous record's
--- there. Later text from a dress callback is a separate, honest overwrite.
-local function RenderCard(card, record)
-	local status
-	local render = ns.ProbeRenderUI
-	local codec = ns.LookCodec
-	local body = ns.RaceBody
-	if record.look == "" then
-		Release(card)
-		card.Placeholder:Show()
-		return "wear once to capture its appearance"
-	end
-	if not (render and codec and body) then
-		card.actor = nil
-		return "modules not loaded"
-	end
-
-	-- Whose body this card is meant to show, which form it is in, which actor
-	-- will hold it and what a reusable body must be keyed with: one answer,
-	-- computed before anything is touched.
-	--
-	-- Asking for a keyed body only when a keyed body is what this card will
-	-- produce matters more than it looks. A creature row and a mounted card
-	-- both key nothing, so handing them a borrowed body destroys it: the key
-	-- is wiped, the record counts as missing again, and the whole wall drops
-	-- back to showing everything on you because one card's menu was used.
-	local plan = BodyPlan(record, body)
-	local entry = Acquire(card, plan.keyed and plan.idealKey or nil)
-	if not entry then
-		card.actor = nil
-		return "character model pool full"
-	end
-
-	-- A body that is already exactly right is never rebuilt: rebuilding it
-	-- anywhere the right donor is absent would hand back a worse one. A card
-	-- asked to show your body reuses nothing, because a borrowed body is not
-	-- what was asked for.
-	if ns.LibraryBody.CanReuse(plan, entry.key, entry.actor ~= nil) then
-		local look = codec.Decode(record.look)
-		if type(look) == "table" then
-			card.actor = entry.actor
-			-- A body taken back out of the pool is still facing wherever it was
-			-- left, so it is put the way the wall is now.
-			FrameCard(card)
-			status = entry.note or ""
-			local reusedID = record.id
-			render.DressWhenLoaded(entry.actor, render.TransmogList(look),
-				function(text, reasons)
-					if plan.wantRecordBody then
-						NoteBody(reusedID, plan.idealKey, entry.actor)
-					end
-					card.Status:SetText(("%s | %s"):format(entry.note or "", text or ""))
-					lastApply[record.id] = reasons
-				end)
-			return status
-		end
-	end
-
-	-- Riding is its own scene, its own camera and its own seating animation, so
-	-- it does not share the pooled body: the mount scene replaces whatever the
-	-- scene held, and a body built inside it is not reusable elsewhere.
-	--
-	-- A mount that will not render falls through to the unmounted path rather
-	-- than leaving the card half built. A half-built card keeps whatever its
-	-- scene held for the record before it, which reads as somebody else's mount
-	-- and outfit wandering onto it.
-	if Mounted(record) then
-		entry.key = nil
-		local mount, why, rider, animID, kitID, isSelfMount =
-			render.PreparedMount(entry.scene, record.mount)
-
-		if mount and (isSelfMount or not rider) then
-			-- Still the thing to turn, even with nobody riding it.
-			card.actor, card.mountActor = mount, mount
-			FrameCard(card)
-			return "they became the mount, so there is nobody to dress"
-		end
-
-		if mount and rider then
-			card.actor, entry.actor = rider, rider
-			local how = SetBody(rider, record, body)
-			local mounted = codec.Decode(record.look)
-			if how and type(mounted) == "table" then
-				-- Weapons go away in the saddle. Blizzard sheathes the rider in
-				-- its own mount previews, and a drawn two-hander on horseback
-				-- reads as a bug.
-				local function Sheathe()
-					if type(rider.SetSheathed) == "function" then
-						pcall(rider.SetSheathed, rider, true, false)
-					end
-				end
-				Sheathe()
-
-				render.Seat(mount, rider, animID, kitID)
-				card.mountActor = mount
-				FrameCard(card)
-
-				local note = ("mounted | %s"):format(how)
-				entry.note = note
-				status = note
-				render.DressWhenLoaded(rider, render.TransmogList(mounted),
-					function(text, reasons)
-						-- Dressing puts the weapons back in hand, so they go
-						-- away again after every pass, not only the first.
-						Sheathe()
-						card.Status:SetText(("%s | %s"):format(note, text or ""))
-						lastApply[record.id] = reasons
-					end)
-				return status
-			end
-		end
-
-		card.mountNote = mount and "could not be seated" or tostring(why)
-		card.actor, card.mountActor = nil, nil
-	end
-
-	-- The actor has to match the body about to be put in it, not the record.
-	-- Each actor carries the scale and framing its race needs, so asking for a
-	-- Dwarf's actor and then standing your own Dracthyr in it is what makes a
-	-- card look zoomed into somebody's chest.
-	-- A record of a race with two bodies, captured in the second one, needs the
-	-- scene's alternate-form actor: that actor is built for the humanoid body
-	-- and the everyday one is built for the dragon. The planner already
-	-- decided this, so the actor asked for here and the body built above can
-	-- no longer disagree.
-	local actor, why, route = render.PreparedActor(entry.scene, plan.tagRace,
-		plan.tagSex, plan.altered)
-	if not actor then
-		return tostring(why)
-	end
-	card.actor = actor
-	entry.actor = actor
-
-	local how = SetBody(actor, record, body)
-	if not how then
-		return "no body for this record"
-	end
-	FrameCard(card)
-
-	local look = codec.Decode(record.look)
-	if type(look) ~= "table" then
-		return "stored look does not parse"
-	end
-	local where = ("%s | %s"):format(tostring(route), how)
-	if card.mountNote then
-		where = ("%s, shown unmounted: %s"):format(where, card.mountNote)
-		card.mountNote = nil
-	end
-	entry.key = actor.mogtrotBodyKey
-	entry.donorRace = actor.mogtrotDonorRace
-	entry.donorGUID = actor.mogtrotDonorGUID
-	entry.note = where
-	status = where
-	local id = record.id
-	render.DressWhenLoaded(actor, render.TransmogList(look), function(text, reasons)
-		card.Status:SetText(("%s | %s"):format(where, text or ""))
-		lastApply[id] = reasons
-		lastVisible[id] = render.SlotVisibility(actor, render.TransmogList(look))
-		if plan.wantRecordBody then NoteBody(id, plan.idealKey, actor) end
-	end)
-	return status
-end
-
--- Cards are pooled, so one arrives still holding whoever it last drew. Every
--- field that varies per record is cleared here, in one place, and RenderCard
--- cannot skip it by leaving early. That is the whole point: correctness used
--- to mean checking that all nine exits set all of it.
-local function ResetCard(card)
-	card.actor = nil
-	card.mountActor = nil
-	card.mountNote = nil
-	card.Placeholder:Hide()
-end
-
-local function Paint(card, record)
-	ResetCard(card)
-	local status = RenderCard(card, record) or ""
-	lastNote[record.id] = status
-	card.Status:SetText(status)
-end
-
--- Slot by slot, what the client said the last time this record was drawn. The
--- answer separates a bug in how the outfit is applied from an appearance this
--- body is refused.
-local function ApplyLines(record)
-	local reasons = lastApply[record.id]
-	if type(reasons) ~= "table" then return {} end
-
-	local Probe = ns.ClientProbe
-	local names = Probe and Probe.TRY_ON_REASON or {}
-	local slots = {}
-	for slot in pairs(reasons) do slots[#slots + 1] = slot end
-	if #slots == 0 then return {} end
-	table.sort(slots)
-
-	local drawn = lastVisible[record.id]
-	local lines = { "", "last render on this body" }
-	for _, slot in ipairs(slots) do
-		local reason = reasons[slot]
-		-- Accepted and not drawn is the interesting case, and the one a
-		-- reason code alone will never show you.
-		local seen = ""
-		if type(drawn) == "table" and drawn[slot] ~= nil then
-			seen = drawn[slot] and ", drawn" or ", NOT DRAWN"
-		end
-		lines[#lines + 1] = ("  slot %-3d %s%s"):format(slot,
-			names[reason] or ("reason " .. tostring(reason)), seen)
-	end
-	return lines
-end
-
--- Names each stored appearance. The look holds itemModifiedAppearanceIDs, and
--- the client will name one even when the wearer is long gone, which is what
--- separates "this slot did not render" from "this slot is a hidden piece".
-local function PieceLines(record)
-	local codec = ns.LookCodec
-	local collection = C_TransmogCollection
-	if not (codec and collection) then return {} end
-	local look = codec.Decode(record.look)
-	if type(look) ~= "table" then return {} end
-
-	local slots = {}
-	for slot in pairs(look) do slots[#slots + 1] = slot end
-	if #slots == 0 then return {} end
-	table.sort(slots)
-
-	local function Name(sourceID)
-		if type(sourceID) ~= "number" or sourceID <= 0 then return nil end
-		if collection.GetAppearanceSourceInfo then
-			local ok, info = pcall(collection.GetAppearanceSourceInfo, sourceID)
-			if ok and type(info) == "table" and info.itemLink then return info.itemLink end
-		end
-		if collection.GetSourceInfo then
-			local ok, info = pcall(collection.GetSourceInfo, sourceID)
-			if ok and type(info) == "table" then
-				return info.name or (info.itemID and ("item " .. info.itemID))
-			end
-		end
-		return nil
-	end
-
-	local lines = { "", "what each slot is" }
-	for _, slot in ipairs(slots) do
-		local entry = look[slot]
-		lines[#lines + 1] = ("  slot %-3d %s"):format(slot,
-			Name(entry[1]) or "the client would not name it")
-	end
-	return lines
-end
-
--- Names the things a record stores as bare numbers. The mount especially: a
--- line reading "mount 866" tells you nothing, and whether that mount has one
--- appearance or several is the difference between a card that renders and one
--- that does not.
-local function NamedLines(record)
-	local lines = {}
-	local journal = C_MountJournal
-	if record.mount and journal and journal.GetMountInfoByID then
-		local ok, mountName = pcall(function()
-			return (journal.GetMountInfoByID(record.mount))
-		end)
-		local name = ok and mountName or nil
-
-		local displays = 0
-		if journal.GetAllCreatureDisplayIDsForMountID then
-			local gotAll, all = pcall(journal.GetAllCreatureDisplayIDsForMountID,
-				record.mount)
-			if gotAll and type(all) == "table" then displays = #all end
-		end
-		lines[#lines + 1] = ""
-		lines[#lines + 1] = ("mount %d is %s, with %d appearance(s)"):format(
-			record.mount, tostring(name), displays)
-		if displays > 1 then
-			lines[#lines + 1] = "  which one they were riding is not something the"
-			lines[#lines + 1] = "  client will say, so the first is used"
-		end
-	end
-
-	local forms = ns.FormDefinitions
-	if record.form and forms then
-		local entry = forms.Lookup(record.form)
-		if entry then
-			lines[#lines + 1] = ""
-			lines[#lines + 1] = ("form %d is %s, which %s the transmog"):format(
-				record.form, entry.name,
-				entry.kind == "replaced" and "hides" or "keeps")
-		end
-	end
-	return lines
-end
-
-local function NoteLines(record)
-	local note = lastNote[record.id]
-	if type(note) ~= "string" or note == "" then return {} end
-	return { "", "last render note", note }
-end
-
-local function ShowDetails(record)
-	local Text = ns.LibraryText
-	if not (Text and ns.CopyBox) then return end
-	local lines = Text.Details(record)
-	for _, line in ipairs(NamedLines(record)) do lines[#lines + 1] = line end
-	for _, line in ipairs(PieceLines(record)) do lines[#lines + 1] = line end
-	for _, line in ipairs(NoteLines(record)) do lines[#lines + 1] = line end
-	for _, line in ipairs(ApplyLines(record)) do lines[#lines + 1] = line end
-	ns.CopyBox.Show("Mogtrot library: " .. Text.Title(record), lines)
-end
-
-local function Delete(record)
-	local Store = ns.Library
-	local library = Library()
-	if not (Store and library) then return end
-	Store.Delete(library, record.id)
-	if ns.LibraryDetailUI and ns.LibraryDetailUI.Shown() == record then
-		ns.LibraryDetailUI.Hide()
-	end
-	lastApply[record.id] = nil
-	LibraryUI.Refresh()
-end
-
--- Drag to turn and zoom: side to side turns the wall, up and down brings it
--- closer. The card owns the drag rather than the scene, so the wheel stays
--- with the list and a left-press never reaches the scene's own zoom.
-local function EndDrag(card)
-	card.dragging = false
-	card:SetScript("OnUpdate", nil)
-end
-
-local function BeginDrag(card)
-	local startX, startY = GetCursorPosition()
-	local startYaw, startZoom = yaw, Zoom()
-	card.dragging = true
-	card:SetScript("OnUpdate", function(self)
-		if not self.dragging then return end
-		local x, y = GetCursorPosition()
-		-- Deliberately not wrapped into 0-360. An angle that jumps from 359 to
-		-- 1 is the same direction to a mathematician and a lurch to anybody
-		-- watching, because the model takes the long way round to get there.
-		-- Radians do not care how large the number is.
-		yaw = startYaw + (x - startX) * TURN_PER_PIXEL
-		-- Both axes read from where the drag began rather than from the last
-		-- frame. Zoom multiplies, so a step per frame compounds sixty times a
-		-- second and ends inside the model.
-		local Zooms = ns.LibraryZoom
-		SetZoom(Zooms and Zooms.Drag(startZoom, startY, y))
-	end)
-end
-
-local function BuildCard(card)
-	if card.built then return end
-	card.built = true
-
-	-- The scroll box builds a plain Button, so there is no backdrop to set;
-	-- the card paints its own background and border, as mount cards do.
-	card.Bg = card:CreateTexture(nil, "BACKGROUND")
-	card.Bg:SetAllPoints()
-	card.Bg:SetColorTexture(0, 0, 0, 0.55)
-
-	-- Top left, mirroring the archive button opposite it. Blizzard's own
-	-- class icon rather than ours, so it matches every other class icon the
-	-- player sees.
-	card.ClassIcon = card:CreateTexture(nil, "OVERLAY")
-	card.ClassIcon:SetSize(18, 18)
-	card.ClassIcon:SetPoint("TOPLEFT", 4, -4)
-	card.ClassIcon:Hide()
-
-	-- Snapshots only. An outfit or a custom set is re-read from the client
-	-- whenever you ask, so there is nothing to protect and nothing to undo;
-	-- a stranger you captured once is the only thing here you cannot get
-	-- back, which is exactly why it is archived rather than deleted.
-	card.Archive = CreateFrame("Button", nil, card)
-	card.Archive:SetSize(18, 18)
-	card.Archive:SetPoint("TOPRIGHT", -4, -4)
-	-- The same small x the search boxes use. Atlas names are not checked at
-	-- runtime: an unknown one leaves the button textureless but still
-	-- clickable, which is worse than absent.
-	card.Archive:SetNormalAtlas("common-search-clearbutton")
-	card.Archive:SetHighlightAtlas("common-search-clearbutton", "ADD")
-	-- Red because this is the only control on a card that takes something
-	-- away. The grey x is tinted rather than swapped for another atlas so it
-	-- keeps the shape and the hit area it already had.
-	local archiveNormal = card.Archive:GetNormalTexture()
-	if archiveNormal then archiveNormal:SetVertexColor(0.9, 0.2, 0.2) end
-	local archiveHighlight = card.Archive:GetHighlightTexture()
-	if archiveHighlight then archiveHighlight:SetVertexColor(1, 0.4, 0.4) end
-	-- Tooltips below the button: the card that slides under the pointer after
-	-- an archive shows one at once, and to the left it would cover the flash.
-	card.Archive:SetScript("OnEnter", function(self)
-		GameTooltip:SetOwner(self, "ANCHOR_BOTTOM")
-		GameTooltip:SetText("Archive this snapshot")
-		GameTooltip:AddLine("Takes it off the wall without deleting it.",
-			0.6, 0.6, 0.6, true)
-		GameTooltip:Show()
-	end)
-	card.Archive:SetScript("OnLeave", GameTooltip_Hide)
-	card.Archive:SetScript("OnClick", function(self)
-		local record = self:GetParent().record
-		local Store, library = ns.Library, Library()
-		if not (record and Store and library) then return end
-		if Store.Archive(library, record.id, time()) then
-			if ns.LibraryDetailUI and ns.LibraryDetailUI.Shown() == record then
-				ns.LibraryDetailUI.Hide()
-			end
-			lastApply[record.id] = nil
-			lastNote[record.id] = nil
-			GameTooltip:Hide()
-			LibraryUI.Refresh()
-			LibraryUI.Flash("Archived. To restore or delete it, turn on"
-				.. " Show: Archived, top right.")
-		end
-	end)
-
-	-- On an archived card the X gives way to these two. Text rather than
-	-- atlases, so neither can be an invisible hotspot.
-	local function CardButton(label, width)
-		local button = CreateFrame("Button", nil, card, "BackdropTemplate")
-		button:SetSize(width, 18)
-		button:SetBackdrop({ bgFile = "Interface\\Buttons\\WHITE8X8",
-			edgeFile = "Interface\\Buttons\\WHITE8X8", edgeSize = 1 })
-		button:SetBackdropColor(0, 0, 0, 0.75)
-		button.Text = button:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-		button.Text:SetPoint("CENTER")
-		button.Text:SetText(label)
-		button:SetScript("OnLeave", GameTooltip_Hide)
-		button:Hide()
-		return button
-	end
-
-	card.Delete = CardButton("Delete", 54)
-	card.Delete:SetPoint("TOPRIGHT", -4, -4)
-	card.Delete:SetScript("OnEnter", function(self)
-		local record = self:GetParent().record
-		GameTooltip:SetOwner(self, "ANCHOR_BOTTOM")
-		GameTooltip:SetText("Delete this snapshot for good")
-		if record and armedDelete == record.id then
-			GameTooltip:AddLine("Click again to delete it. This cannot be undone.",
-				1, 0.3, 0.3, true)
-		else
-			GameTooltip:AddLine("Click twice. It cannot be undone.",
-				0.6, 0.6, 0.6, true)
-		end
-		GameTooltip:Show()
-	end)
-	card.Delete:SetScript("OnClick", function(self)
-		local record = self:GetParent().record
-		if not record then return end
-		if armedDelete ~= record.id then
-			armedDelete = record.id
-			LibraryUI.PaintControls()
-			if GameTooltip:IsOwned(self) then self:GetScript("OnEnter")(self) end
-			return
-		end
-		armedDelete = nil
-		GameTooltip:Hide()
-		lastNote[record.id] = nil
-		Delete(record)
-	end)
-
-	card.Restore = CardButton("Restore", 58)
-	card.Restore:SetPoint("RIGHT", card.Delete, "LEFT", -4, 0)
-	card.Restore:SetBackdropBorderColor(1, 0.82, 0, 1)
-	card.Restore:SetScript("OnEnter", function(self)
-		GameTooltip:SetOwner(self, "ANCHOR_BOTTOM")
-		GameTooltip:SetText("Restore this snapshot")
-		GameTooltip:AddLine("Puts it back on the wall and out of the archive.",
-			0.6, 0.6, 0.6, true)
-		GameTooltip:Show()
-	end)
-	card.Restore:SetScript("OnClick", function(self)
-		local record = self:GetParent().record
-		local Store, library = ns.Library, Library()
-		if not (record and Store and library) then return end
-		armedDelete = nil
-		GameTooltip:Hide()
-		if Store.Restore(library, record.id) then
-			lastApply[record.id] = nil
-			lastNote[record.id] = nil
-			LibraryUI.Refresh()
-		end
-	end)
-
-	card.Edges = {}
-	for _, edge in ipairs({ "TOP", "BOTTOM", "LEFT", "RIGHT" }) do
-		local line = card:CreateTexture(nil, "BORDER")
-		line:SetColorTexture(0.3, 0.3, 0.3, 1)
-		if edge == "TOP" or edge == "BOTTOM" then
-			line:SetHeight(1)
-			line:SetPoint(edge .. "LEFT")
-			line:SetPoint(edge .. "RIGHT")
-		else
-			line:SetWidth(1)
-			line:SetPoint("TOP" .. edge)
-			line:SetPoint("BOTTOM" .. edge)
-		end
-		card.Edges[#card.Edges + 1] = line
-	end
-
-	card.Title = card:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-	card.Title:SetPoint("BOTTOMLEFT", 9, 28)
-	card.Title:SetPoint("BOTTOMRIGHT", -9, 28)
-	card.Title:SetJustifyH("LEFT")
-	card.Title:SetWordWrap(false)
-
-	card.Sub = card:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-	card.Sub:SetPoint("BOTTOMLEFT", 9, 16)
-	card.Sub:SetPoint("BOTTOMRIGHT", -9, 16)
-	card.Sub:SetJustifyH("LEFT")
-	card.Sub:SetWordWrap(false)
-
-	card.Status = card:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
-	card.Status:SetPoint("BOTTOMLEFT", 9, 5)
-	card.Status:SetPoint("BOTTOMRIGHT", -9, 5)
-	card.Status:SetJustifyH("LEFT")
-	card.Status:SetWordWrap(false)
-
-	card.Placeholder = card:CreateFontString(nil, "OVERLAY", "GameFontDisable")
-	card.Placeholder:SetPoint("CENTER", 0, 10)
-	card.Placeholder:SetWidth(CARD_W - 32)
-	card.Placeholder:SetJustifyH("CENTER")
-	card.Placeholder:SetText("Appearance not captured\nWear this outfit once")
-	card.Placeholder:Hide()
-
-	card:RegisterForClicks("LeftButtonUp", "RightButtonUp")
-	card:RegisterForDrag("LeftButton")
-	card:SetScript("OnDragStart", BeginDrag)
-	card:SetScript("OnDragStop", EndDrag)
-	card:SetScript("OnHide", EndDrag)
-
-	-- The wheel belongs to the list, not to the model under the pointer.
-	card:EnableMouseWheel(true)
-	card:SetScript("OnMouseWheel", function(_self, delta)
-		if window and window.Box then window.Box:OnMouseWheel(delta) end
-	end)
-
-	card:SetScript("OnClick", function(self, button)
-		local record = self.record
-		if not record then return end
-		if button == "LeftButton" then
-			-- One inspector follows whichever card was selected most recently.
-			local detail = ns.LibraryDetailUI
-			if not detail then return end
-			detail.Show(window, record)
-			return
-		end
-		if not MenuUtil then return end
-		local Text = ns.LibraryText
-		MenuUtil.CreateContextMenu(self, function(_owner, root)
-			root:CreateTitle(Text and Text.Title(record) or "Look")
-			root:CreateButton("More info", function() ShowDetails(record) end)
-			root:CreateDivider()
-			root:CreateButton("Delete", function() Delete(record) end)
-		end)
-	end)
-end
-
--- Every control on every paint: a pooled card keeps whatever the last record
--- left on it otherwise.
-local function PaintControls(card)
-	local record = card.record
-	local Store = ns.Library
-	local controls = record and Store and Store.CardControls(record)
-		or { archive = record ~= nil and record.source ~= "mine" }
-	card.Archive:SetShown(controls.archive == true)
-	card.Restore:SetShown(controls.restore == true)
-	card.Delete:SetShown(controls.delete == true)
-	local armed = controls.delete and armedDelete == record.id
-	card.Delete.Text:SetText(armed and "Delete?" or "Delete")
-	if armed then
-		card.Delete:SetBackdropColor(0.6, 0, 0, 0.9)
-		card.Delete:SetBackdropBorderColor(1, 0.3, 0.3, 1)
-		card.Delete.Text:SetTextColor(1, 1, 1)
-	else
-		card.Delete:SetBackdropColor(0, 0, 0, 0.75)
-		card.Delete:SetBackdropBorderColor(0.9, 0.2, 0.2, 1)
-		card.Delete.Text:SetTextColor(1, 0.4, 0.4)
-	end
-end
-
-function LibraryUI.PaintControls()
-	if not (window and window.Box) then return end
-	window.Box:ForEachFrame(function(card)
-		if card.built then PaintControls(card) end
-	end)
-end
-
-local function InitCard(card, record)
-	BuildCard(card)
-	card.record = record
-	PaintControls(card)
-	local classAtlas = ClassAtlas(record.classID)
-	if classAtlas then card.ClassIcon:SetAtlas(classAtlas, false) end
-	card.ClassIcon:SetShown(classAtlas ~= nil)
-
-	local Text = ns.LibraryText
-	local title = Text and Text.Title(record) or ""
-	local className, color = ClassInfoFor(record.classID)
-	if Text and className and color then
-		title = Text.CardTitle(record, className, color.colorStr)
-	end
-	card.Title:SetText(title)
-	card.Sub:SetText(Text and Text.Subtitle(record) or "")
-	card.Status:SetText("")
-	Paint(card, record)
-end
-
-local function Ensure()
-	if window then return window end
-
+-- The frame itself, its close button, the snap handle, the header sentence,
+-- the status line and the flash that briefly replaces it.
+local function BuildFrame()
 	window = CreateFrame("Frame", "MogtrotLibrary", UIParent, "BackdropTemplate")
+	Cards.Attach(window)
 	window:SetSize(MARGIN * 2 + CARD_W * COLS + GAP * (COLS - 1) + BAR_GUTTER,
 		HEADER + CARD_H * ROWS_SHOWN + GAP * (ROWS_SHOWN - 1) + MARGIN + FOOTER)
 	window:SetPoint("CENTER")
@@ -1389,10 +224,13 @@ local function Ensure()
 	window.FlashFade:SetScript("OnFinished", EndFlash)
 	window.FlashFade:SetScript("OnStop", EndFlash)
 	window:HookScript("OnHide", function()
-		armedDelete = nil
+		Cards.Disarm()
 		window.FlashFade:Stop()
 	end)
+end
 
+-- The search box, the filter dropdown and its menu.
+local function BuildFilters(Filter)
 	window.Search = CreateFrame("EditBox", nil, window, "SearchBoxTemplate")
 	window.Search:SetSize(250, 20)
 	window.Search:SetAutoFocus(false)
@@ -1406,7 +244,6 @@ local function Ensure()
 		LibraryUI.Refresh()
 	end)
 
-	local Filter = ns.LibraryFilter
 	raceFilter = Filter and Filter.New() or nil
 	window.FilterDropdown = CreateFrame("DropdownButton", nil, window,
 		"WowStyle1FilterDropdownTemplate")
@@ -1541,21 +378,9 @@ local function Ensure()
 		window.SnapDrag:ClearAllPoints()
 		window.SnapDrag:SetPoint("LEFT", window.CharacterButton, "RIGHT", 12, 0)
 	end
+end
 
-	-- A boxed button in the header, the same shape as the mount picker's mode
-	-- switch. The height and the font are arguments because the zoom row is
-	-- deliberately smaller than the row above it.
-	local function BuildSwitch(parent, label, width, height, font)
-		local button = CreateFrame("Button", nil, parent, "BackdropTemplate")
-		button:SetSize(width, height or SWITCH_H)
-		button:SetBackdrop({ edgeFile = "Interface\\Buttons\\WHITE8X8", edgeSize = 1 })
-		button.Text = button:CreateFontString(nil, "OVERLAY", font or "GameFontNormal")
-		button.Text:SetPoint("CENTER")
-		button.Text:SetText(label)
-		button:SetScript("OnLeave", GameTooltip_Hide)
-		return button
-	end
-
+local function BuildCharacterButton()
 	window.CharacterButton = BuildSwitch(window, "Characters: All", 150)
 	window.CharacterButton:SetPoint("LEFT", window.FilterDropdown, "RIGHT", 8, 0)
 	window.CharacterButton:SetBackdropBorderColor(1, 0.82, 0, 1)
@@ -1568,16 +393,11 @@ local function Ensure()
 			0.6, 0.6, 0.6, true)
 		GameTooltip:Show()
 	end)
+end
 
-	-- The two control rows, stacked against the close button and sharing a
-	-- left edge, so "Show:" and "Zoom:" line up and what follows each of them
-	-- starts in the same place. The rows are laid out left to right from that
-	-- edge and their right edges are ragged; the width is what the Show row
-	-- needs at its longest, so neither row can reach the close button.
-	local CONTROLS_W = 322
-	local LABEL_W = 46
-	local ZOOM_H = 16
-
+-- The frames of the Show and Zoom rows, then the Show row's controls: the
+-- body word and the Archived switch.
+local function BuildShowRow(Filter)
 	window.ShowRow = CreateFrame("Frame", nil, window)
 	window.ShowRow:SetSize(CONTROLS_W, SWITCH_H)
 	window.ShowRow:SetPoint("TOPRIGHT", window.Close, "TOPLEFT", -6, -8)
@@ -1597,61 +417,21 @@ local function Ensure()
 	-- borrowed, and until then the line under the wall says so.
 	window.Body = ns.PairingHeaderUI.Word(window.ShowRow, SWITCH_H, "body",
 		function(value)
-			viewMode = ns.PairingHeader.Body(value)
+			Bodies.SetViewMode(ns.PairingHeader.Body(value))
 			LibraryUI.Refresh()
 		end)
 	window.Body:SetPoint("LEFT", window.ShowLabel, "LEFT", LABEL_W, 0)
-	window.Body:HookScript("OnEnter", function()
-		if fullFidelity then return end
-		GameTooltip:AddLine("Original race is not available yet.", 1, 0.3, 0.3)
-		GameTooltip:AddLine("A body of the other sex can only be built from a"
-			.. " living player, and none is in reach. Hover or target anyone of"
-			.. " the other sex and every look switches over at once.",
-			0.9, 0.9, 0.9, true)
-		GameTooltip:AddLine("Friendly player nameplates are off by default, so"
-			.. " a crowd does not count. Turning on nameplateShowFriendlyPlayers"
-			.. " makes this happen on its own. So does being in a group.",
-			0.6, 0.6, 0.6, true)
-		GameTooltip:Show()
-	end)
 
-	-- The third thing the Show row says. A toggle rather than a word in the
-	-- dropdown, because it answers a different question from the body one and
-	-- because it has a state neither body has: nothing here was captured
-	-- riding, so there is nothing to mount.
-	window.Mounted = BuildSwitch(window.ShowRow, "Mounted", 76)
-	window.Mounted:SetPoint("LEFT", window.Body, "RIGHT", 6, 0)
-	window.Mounted:SetScript("OnClick", function()
-		if not window.anyMounts then return end
-		showMounts = not showMounts
-		LibraryUI.Refresh()
-	end)
-	window.Mounted:SetScript("OnEnter", function(self)
-		GameTooltip:SetOwner(self, "ANCHOR_BOTTOM")
-		GameTooltip:SetText("On their mount")
-		if window.anyMounts then
-			GameTooltip:AddLine("Everyone captured while riding, back on the mount"
-				.. " they were riding.", 0.6, 0.6, 0.6, true)
-			GameTooltip:AddLine("A card can be told otherwise on its own; using this"
-				.. " switch takes them all back.", 0.6, 0.6, 0.6, true)
-		else
-			GameTooltip:AddLine("Nothing to mount.", 1, 0.3, 0.3)
-			GameTooltip:AddLine("No look here was captured on a mount. Snap somebody"
-				.. " while they are riding and this turns on.", 0.9, 0.9, 0.9, true)
-		end
-		GameTooltip:Show()
-	end)
-
-	-- The fourth, and only on the snapshot wall: the archive holds nothing
-	-- else. On, the wall is the archive instead of the records.
+	-- Only on the snapshot wall: the archive holds nothing else. On, the wall
+	-- is the archive instead of the records.
 	window.Archived = BuildSwitch(window.ShowRow, "Archived", 76)
-	window.Archived:SetPoint("LEFT", window.Mounted, "RIGHT", 6, 0)
+	window.Archived:SetPoint("LEFT", window.Body, "RIGHT", 6, 0)
 	window.Archived:SetScript("OnClick", function(self)
 		if not (Filter and raceFilter) then return end
 		local on = Filter.ShowsArchived(raceFilter)
 		if not on and not window.anyArchived then return end
 		Filter.SetArchived(raceFilter, not on)
-		armedDelete = nil
+		Cards.Disarm()
 		window.FlashFade:Stop()
 		LibraryUI.Refresh()
 		window.Box:ScrollToBegin()
@@ -1680,26 +460,28 @@ local function Ensure()
 		end
 		GameTooltip:Show()
 	end)
+end
 
-	-- Zoom, on its own row under the Show row and smaller than it: this is a
-	-- nudge, not a mode, and at the same weight it read as a third thing you
-	-- choose between. Dragging a card up and down does the same, but a drag is
-	-- invisible until somebody tries it, and it cannot offer the way back: the
-	-- readout is that, and says how far from its normal framing the wall has
-	-- been taken.
-	local function BuildZoomButton(label, width, steps)
-		local button = BuildSwitch(window.ZoomRow, label, width, ZOOM_H,
-			"GameFontNormalSmall")
-		button:SetBackdropBorderColor(1, 0.82, 0, 1)
-		button.Text:SetTextColor(1, 0.82, 0)
-		button:SetScript("OnClick", function()
-			local Zooms = ns.LibraryZoom
-			if not Zooms then return end
-			SetZoom(Zooms.Step(Zoom(), steps))
-		end)
-		return button
-	end
+-- Zoom, on its own row under the Show row and smaller than it: this is a
+-- nudge, not a mode, and at the same weight it read as a third thing you
+-- choose between. Dragging a card up and down does the same, but a drag is
+-- invisible until somebody tries it, and it cannot offer the way back: the
+-- readout is that, and says how far from its normal framing the wall has
+-- been taken.
+local function BuildZoomButton(label, width, steps)
+	local button = BuildSwitch(window.ZoomRow, label, width, ZOOM_H,
+		"GameFontNormalSmall")
+	button:SetBackdropBorderColor(1, 0.82, 0, 1)
+	button.Text:SetTextColor(1, 0.82, 0)
+	button:SetScript("OnClick", function()
+		local Zooms = ns.LibraryZoom
+		if not Zooms then return end
+		Cards.SetZoom(Zooms.Step(Cards.Zoom(), steps))
+	end)
+	return button
+end
 
+local function BuildZoomRow()
 	window.ZoomLabel = window.ZoomRow:CreateFontString(nil, "OVERLAY",
 		"GameFontNormal")
 	window.ZoomLabel:SetPoint("LEFT")
@@ -1721,7 +503,7 @@ local function Ensure()
 	window.ZoomLevel:SetBackdropBorderColor(0.5, 0.5, 0.5, 1)
 	window.ZoomLevel.Text:SetTextColor(0.7, 0.7, 0.7)
 	window.ZoomLevel:SetScript("OnClick", function()
-		SetZoom(DEFAULT_ZOOM)
+		Cards.SetZoom(Cards.DEFAULT_ZOOM)
 	end)
 	window.ZoomLevel:SetScript("OnEnter", function(self)
 		GameTooltip:SetOwner(self, "ANCHOR_BOTTOM")
@@ -1741,7 +523,10 @@ local function Ensure()
 			.. " does the same.", 0.6, 0.6, 0.6, true)
 		GameTooltip:Show()
 	end)
+end
 
+-- The grid of cards and its scrollbar.
+local function BuildBox()
 	window.Box = CreateFrame("Frame", nil, window, "WowScrollBoxList")
 	window.Box:SetPoint("TOPLEFT", MARGIN, -HEADER)
 	window.Box:SetPoint("BOTTOMRIGHT", -(MARGIN + BAR_GUTTER), FOOTER)
@@ -1754,11 +539,11 @@ local function Ensure()
 	window.View:SetElementSize(CARD_W, CARD_H)
 	-- A wheel notch moves a whole row.
 	window.View:SetPanExtent(CARD_H + GAP)
-	window.View:SetElementInitializer("Button", InitCard)
+	window.View:SetElementInitializer("Button", Cards.Init)
 	-- A recycled card hands its body back rather than taking it out of
 	-- circulation, so the next card that wants that body finds it waiting.
 	window.View:SetElementResetter(function(card)
-		Release(card)
+		Bodies.Release(card)
 	end)
 
 	ScrollUtil.InitScrollBoxListWithScrollBar(window.Box, window.Bar, window.View)
@@ -1769,214 +554,59 @@ local function Ensure()
 	window:SetScript("OnMouseWheel", function(_self, delta)
 		window.Box:OnMouseWheel(delta)
 	end)
+end
+
+local function Ensure()
+	if window then return window end
+
+	local Filter = ns.LibraryFilter
+	BuildFrame()
+	BuildFilters(Filter)
+	BuildCharacterButton()
+	BuildShowRow(Filter)
+	BuildZoomRow()
+	BuildBox()
 
 	-- The sentence shares its row with the Show controls, so it ends where
 	-- they begin. Against the rows rather than the first word in them, so the
 	-- sentence keeps its room whatever the Show row happens to read.
 	window.HeaderRow:SetPoint("RIGHT", window.ShowRow, "LEFT", -10, 0)
 
-	-- A body can only be borrowed from somebody the client will name, and in a
-	-- crowd that is almost never a nameplate: friendly player nameplates are
-	-- off by default, so the only reliable donors are whoever you point at.
-	-- Pointing at one is therefore treated as an offer, and the cards that
-	-- still want a body of that sex are rebuilt on the spot. Cards that already
-	-- have the right body keep it, so this only ever improves the wall.
-	window.Watcher = CreateFrame("Frame", nil, window)
-	window.Watcher:RegisterEvent("PLAYER_TARGET_CHANGED")
-	window.Watcher:RegisterEvent("UPDATE_MOUSEOVER_UNIT")
-	-- Changing form changes the body every card is standing on while the wall
-	-- is showing you, so the wall follows you into and out of it.
-	window.Watcher:RegisterUnitEvent("UNIT_MODEL_CHANGED", "player")
-	window.Watcher:RegisterEvent("UPDATE_SHAPESHIFT_FORM")
-	-- Party and raid members are the only units whose identity is never
-	-- restricted, so a group forming is the most reliable donor moment there is.
-	window.Watcher:RegisterEvent("GROUP_ROSTER_UPDATE")
-	window.Watcher:RegisterEvent("NAME_PLATE_UNIT_ADDED")
-	window.Watcher:SetScript("OnEvent", function(_self, event, ...)
-		if not window:IsShown() then return end
-		if event == "UNIT_MODEL_CHANGED" or event == "UPDATE_SHAPESHIFT_FORM" then
-			-- Borrowed bodies are somebody else's and are kept; only the ones
-			-- built from you are rebuilt.
-			LibraryUI.Soon()
-			return
-		end
-		if event == "GROUP_ROSTER_UPDATE" then
-			local mine = UnitSex and UnitSex("player") or nil
-			local wanted = mine == 2 and 3 or 2
-			local donors = ns.DonorBody
-			local from = donors and donors.Find(wanted, ReadUnit)
-			if from and LibraryUI.WarmAll(from) > 0 then LibraryUI.Soon() end
-			return
-		end
-
-		local unit = event == "PLAYER_TARGET_CHANGED" and "target" or "mouseover"
-		if event == "NAME_PLATE_UNIT_ADDED" then unit = select(1, ...) end
-		if type(unit) ~= "string" then return end
-		if not (UnitExists and UnitExists(unit)) then return end
-		if not (UnitIsPlayer and UnitIsPlayer(unit)) then return end
-		local ok, sex = pcall(UnitSex, unit)
-		if not ok or issecretvalue and issecretvalue(sex) then return end
-		local mine = UnitSex and UnitSex("player") or nil
-		if sex == mine then return end
-		-- One person of the other sex is enough for every body the library
-		-- wants, so take all of them while they are standing there.
-		if LibraryUI.WarmAll(unit) > 0 then
-			LibraryUI.Soon()
-		end
-	end)
-
 	tinsert(UISpecialFrames, "MogtrotLibrary")
 	window:Hide()
 	return window
 end
 
--- Builds the body a record wants, from a named unit, and keeps it.
---
--- The moment a look is captured is the best moment there will ever be to
--- borrow a body for it: the wearer is standing right there and is, by
--- definition, the right race and sex. Waiting until the library is opened
--- means hoping somebody of that sex happens to be nearby, which in a city with
--- friendly nameplates off means hoping you have targeted one.
---
--- Returns true only when a body was actually built. A body already in the pool
--- is not news: in a city, hovering people and turning the camera fire these
--- events many times a second, and answering "yes, done" to each one would
--- repaint the whole wall every time, which the viewer sees as every model
--- flinching in unison.
---
--- Does nothing at all for a record whose sex matches yours, since your own
--- unit can build that anywhere.
-function LibraryUI.WarmBody(record, donorUnit)
+-- The WarmBody calls one donor's ingest makes, in order, as { record, want }:
+-- one body per card on the wall, since a card will not stand in a body
+-- another card holds and the donor may be gone by the time it is drawn, then
+-- one of every other shape, for the walls not showing. Records of your own
+-- sex are left out; WarmBody would skip them.
+function LibraryUI.WarmPlan()
 	local body = ns.RaceBody
-	local render = ns.ProbeRenderUI
-	if not (body and render and type(record) == "table") then return false end
-	if record.look == "" then return false end
-	if InCombatLockdown and InCombatLockdown() then return false end
-
+	if not (ns.Library and body) then return {} end
 	local mine = UnitSex and UnitSex("player") or nil
-	if record.sex == nil or record.sex == mine then return false end
-
-	local ideal = IdealBodyKey(record, body)
-	if not ideal then return false end
-
-	local entry = AttachScene(Pool():Warm(ideal))
-	if not entry then return false end
-
-	-- Only build when somebody of the right sex is actually there. Without this
-	-- the fallback quietly builds the body on your own unit, produces the wrong
-	-- sex, calls it done, and burns a pool slot doing it, over and over, every
-	-- time the camera moves past somebody.
-	local donors = ns.DonorBody
-	local from = donorUnit
-	if not from then
-		from = donors and donors.Find(record.sex, ReadUnit, IdealShownRace(record, body))
+	local plan, nth = {}, {}
+	local function Other(record)
+		return type(record) == "table" and record.look ~= "" and record.sex ~= nil
+			and record.sex ~= mine
 	end
-	if not from then return false end
-	local ok, donorSex = pcall(UnitSex, from)
-	if not ok or donorSex ~= record.sex then return false end
-
-	local altered = record.nativeForm == false and body.HasAlternateForm(record.raceID)
-	local actor = render.PreparedActor(entry.scene, record.raceFile, record.sex, altered)
-	if not actor then return false end
-
-	local how = SetBody(actor, record, body, from)
-	if not how then return false end
-	entry.key = actor.mogtrotBodyKey
-	if entry.key == nil then
-		-- The creature-row path builds a body but keys nothing, and an entry
-		-- holding an actor with no key breaks the rule the pool relies on:
-		-- keyless means reusable.
-		entry.actor, entry.note = nil, nil
-		return false
-	end
-	entry.actor = actor
-	entry.note = how
-	if entry.key ~= ideal then return false end
-
-	-- The twin, from the same person while they are still there. Without it the
-	-- detail pane would have to rebuild later from whoever is left, which is a
-	-- different face in the same clothes.
-	local twin = AttachScene(Pool():WarmPane(ideal))
-	if twin and twin.key ~= ideal then
-		twin.pane = true
-		local twinActor = render.PreparedActor(twin.scene, record.raceFile, record.sex,
-			altered)
-		if twinActor and SetBody(twinActor, record, body, from) then
-			twin.actor = twinActor
-			twin.key = twinActor.mogtrotBodyKey
+	for _, record in ipairs(WallList(WallRecords())) do
+		local ideal = Bodies.IdealBodyKey(record, body)
+		if ideal then
+			nth[ideal] = (nth[ideal] or 0) + 1
+			if Other(record) then plan[#plan + 1] = { record = record, want = nth[ideal] } end
 		end
 	end
-	return true
-end
-
--- Every distinct body the library still wants, built from one donor in one go.
---
--- A donor lends only sex, and the race comes from the override, so a single
--- woman standing in front of you can supply every female body in the library
--- at once. That is what turns this from "target the right person for each
--- look" into "point at one person, once".
-function LibraryUI.WarmAll(donorUnit)
-	local Store = ns.Library
-	local body = ns.RaceBody
-	if not (Store and body) then return 0 end
-	-- Nothing is waiting, so there is nothing to look for. This runs on every
-	-- mouseover and every nameplate, so it has to be cheap when it is pointless.
-	-- Gated on whether a card still wants a body, not on whether the wall looks
-	-- complete: those stopped being the same question.
-	if not bodiesWanted then return 0 end
-
-	local built = 0
 	for _, record in ipairs(WallRecords()) do
-		if LibraryUI.WarmBody(record, donorUnit) then built = built + 1 end
+		if Other(record) then plan[#plan + 1] = { record = record, want = 1 } end
 	end
-	return built
-end
-
--- How many records still want a body nobody has lent. Zero means the wall can
--- go to full fidelity.
-local function Missing(list)
-	local body = ns.RaceBody
-	local mine = UnitSex and UnitSex("player") or nil
-	if not body then return 0 end
-
-	-- Without knowing your own sex there is no way to tell which records need a
-	-- borrowed body, and answering "none" would declare full fidelity with
-	-- nothing built. Count them all as waiting instead.
-	if not mine then return #list end
-
-	-- Two counts, because two different questions were being answered by one.
-	--
-	--   keys    is any shape of body still unbuilt? The wall shows every card
-	--           on its own race or none of them, so this one decides that, and
-	--           it is deliberately forgiving: one body of a shape is enough to
-	--           prove the shape can be built.
-	--   bodies  is any card still without a body of its own? A body belongs to
-	--           one card at a time, so two cards wanting one shape need two.
-	--           This one decides whether to keep looking for donors.
-	--
-	-- Answering both with the forgiving count is what stranded a card: the
-	-- wall called itself complete, WarmAll gave up, and a card built during a
-	-- donor-less moment kept the wrong body until the next reload.
-	local supply = Pool():CountByKey()
-	local keys, bodies = 0, 0
-	for _, record in ipairs(list) do
-		if record.look ~= "" and record.sex and record.sex ~= mine then
-			local ideal = IdealBodyKey(record, body)
-			local stock = ideal and supply[ideal] or 0
-			if not (ideal and Pool():Find(ideal)) then keys = keys + 1 end
-			if stock > 0 then
-				supply[ideal] = stock - 1
-			else
-				bodies = bodies + 1
-			end
-		end
-	end
-	return keys, bodies
+	return plan
 end
 
 -- A burst of unit events would otherwise repaint the wall several times in a
 -- frame, and every repaint undresses and redresses every model, which reads as
--- the cards flickering and their status lines arguing with themselves.
+-- the cards flickering.
 local refreshPending = false
 
 function LibraryUI.Soon()
@@ -1988,168 +618,25 @@ function LibraryUI.Soon()
 	end)
 end
 
--- The detail pane gets a body of its own, built from the same donor at the
--- same moment as the wall's.
---
--- Two bodies for one record only agree if they were borrowed from the same
--- person, and the only moment that is certain is while that person is still
--- standing there. So whenever a body is built for the wall, a twin is built
--- beside it and set aside for the pane. Cards never touch a twin and the pane
--- never touches a card's, so neither can be rebuilt out from under the other.
---
--- Hidden scenes cost nothing measurable, which is what makes keeping two
--- affordable.
-function LibraryUI.PaneBody(record, parent, inset)
-	local body = ns.RaceBody
-	if not (body and type(record) == "table" and parent) then return nil end
+-- Bodies are borrowed only from donors DonorWatchUI takes in passing.
+local watcher = CreateFrame("Frame", "MogtrotBodyWatcher")
 
-	local ideal = IdealBodyKey(record, body)
-	if not ideal then return nil end
-
-	local twin, previous = Pool():BorrowPane(ideal)
-	if not twin then return nil end
-
-	if previous and previous ~= twin then
-		previous.scene:SetParent(Pool():Holder())
-		previous.scene:ClearAllPoints()
-		previous.scene:SetPoint("TOPLEFT")
-		previous.scene:Hide()
-	end
-	twin.scene:SetFixedFrameStrata(false)
-	twin.scene:SetFixedFrameLevel(false)
-	twin.scene:SetParent(parent)
-	twin.scene:SetFixedFrameStrata(true)
-	twin.scene:SetFixedFrameLevel(true)
-	twin.scene:ClearAllPoints()
-	twin.scene:SetPoint("TOPLEFT", inset.left, -inset.top)
-	twin.scene:SetPoint("BOTTOMRIGHT", -inset.right, inset.bottom)
-	twin.scene:Show()
-
-	-- A twin is built as a body and nothing more: it is put aside the moment
-	-- its donor is in reach, long before anybody asks to look at it. The
-	-- clothes go on here, when it is actually being shown.
-	local render = ns.ProbeRenderUI
-	local codec = ns.LookCodec
-	local look = codec and codec.Decode(record.look)
-	if render and type(look) == "table" then
-		render.DressWhenLoaded(twin.actor, render.TransmogList(look), function() end)
-	end
-	TurnCard({ actor = twin.actor }, yaw)
-	return twin.actor
-end
-
--- Whether a second view of this record is guaranteed to come out the same as
--- the first. It is when the body is built from your own unit: nothing is
--- borrowed, so nothing can have walked away. Only a body borrowed from
--- somebody else needs a twin set aside at build time.
-function LibraryUI.BodyIsDeterministic(record)
-	if type(record) ~= "table" then return false end
-	if not (viewMode == "original" and fullFidelity) then return true end
-	local mine = UnitSex and UnitSex("player") or nil
-	return record.sex == nil or record.sex == mine
-end
-
-function LibraryUI.ReturnPaneBody()
-	local entry = characterPool and characterPool:ReturnPane()
-	if not entry then return end
-	entry.scene:SetParent(Pool():Holder())
-	entry.scene:ClearAllPoints()
-	entry.scene:SetPoint("TOPLEFT")
-	entry.scene:Hide()
-end
-
-function LibraryUI.LayerProbe()
-	local entry
-	for _, candidate in ipairs(characterPool and characterPool.entries or {}) do
-		if candidate.card and candidate.scene and candidate.scene:IsShown() then
-			entry = candidate
-			break
-		end
-	end
-	local function Read(frame)
-		if not frame then return nil end
-		return {
-			strata = frame:GetFrameStrata(), level = frame:GetFrameLevel(),
-			fixedStrata = frame:HasFixedFrameStrata(),
-			fixedLevel = frame:HasFixedFrameLevel(),
-		}
-	end
-	return {
-		window = Read(window),
-		card = Read(entry and entry.card),
-		scene = Read(entry and entry.scene),
-	}
-end
-
--- Builds a record's body into a scene somebody else owns, and dresses it.
--- Same rules as a card: the same view mode, the same donor, the same actor
--- choice. Exposed so the detail pane can show the same person the wall is
--- showing without a second copy of any of that.
-function LibraryUI.RenderInto(scene, record)
-	local render = ns.ProbeRenderUI
-	local codec = ns.LookCodec
-	local body = ns.RaceBody
-	if not (render and codec and body and type(record) == "table") then return nil end
-
-	local wantRecordBody = viewMode == "original" and fullFidelity
-	local tagRace, tagSex, altered
-	if wantRecordBody then
-		tagRace, tagSex = record.raceFile, record.sex
-		altered = record.nativeForm == false and body.HasAlternateForm(record.raceID)
-	else
-		tagRace = select(2, UnitRace("player"))
-		tagSex = UnitSex and UnitSex("player") or nil
-		local diagnostics = ns.Diagnostics
-		if diagnostics and type(diagnostics.UseNativeForm) == "function" then
-			altered = not diagnostics.UseNativeForm("player")
-		end
-	end
-
-	-- If the wall already built a body for this record, try to build from the
-	-- very same person, so the two views are the same woman rather than two
-	-- women of the same race. Falls back to the race, then to anybody.
-	local ideal = IdealBodyKey(record, body)
-	local preferRace, wantGUID
-	local stored = ideal and Pool():Find(ideal)
-	if stored then preferRace, wantGUID = stored.donorRace, stored.donorGUID end
-
-	local sameDonor
-	if wantGUID then
-		local donors = ns.DonorBody
-		for _, token in ipairs(donors and donors.Tokens() or {}) do
-			if UnitExists and UnitExists(token) and UnitGUID then
-				local ok, guid = pcall(UnitGUID, token)
-				if ok and guid == wantGUID then
-					sameDonor = token
-					break
-				end
-			end
-		end
-	end
-
-	local actor = render.PreparedActor(scene, tagRace, tagSex, altered)
-	if not actor then return nil end
-	local how = SetBody(actor, record, body, sameDonor, preferRace)
-	if not how then return nil end
-
-	local look = codec.Decode(record.look)
-	if type(look) ~= "table" then return actor, how end
-	render.DressWhenLoaded(actor, render.TransmogList(look), function() end)
-	return actor, how
-end
+-- Changing form changes the body every card is standing on while the wall
+-- is showing you, so the wall follows you into and out of it.
+watcher:RegisterUnitEvent("UNIT_MODEL_CHANGED", "player")
+watcher:RegisterEvent("UPDATE_SHAPESHIFT_FORM")
+watcher:SetScript("OnEvent", function()
+	-- Borrowed bodies are somebody else's and are kept; only the ones built
+	-- from you are rebuilt.
+	if window ~= nil and window:IsShown() then LibraryUI.Soon() end
+end)
 
 function LibraryUI.Refresh()
 	if not window or not window:IsShown() then return end
 
 	local allRecords = WallRecords()
 	local Filter = ns.LibraryFilter
-	local searched = {}
-	for _, record in ipairs(allRecords) do
-		if not Filter or Filter.NameMatches(record, nameQuery) then
-			searched[#searched + 1] = record
-		end
-	end
-	local list = Filter and Filter.Apply(searched, raceFilter) or searched
+	local list = WallList(allRecords)
 	-- On your own characters the wall opens where you are, in the order your
 	-- own outfit list already uses. Snapshot mode is other people, so there
 	-- is no "current character" to lead with and the recency order stands.
@@ -2168,28 +655,16 @@ function LibraryUI.Refresh()
 	if Filter and window.FilterDropdown then
 		local races = Filter.Races(allRecords)
 		local classes = Filter.Classes(allRecords)
-		local selectedRaces = Filter.SelectionCount(raceFilter, races)
-		local selectedClasses = Filter.ClassSelectionCount(raceFilter, classes)
-		local selectedArmor = Filter.ArmorSelectionCount(raceFilter)
 		local owners = Filter.Owners(allRecords)
-		local selectedOwners = Filter.OwnerSelectionCount(raceFilter, owners)
-		local selectedSources = Filter.SourceSelectionCount(raceFilter)
-		local raceLabel = selectedRaces == #races and "All"
-			or selectedRaces == 0 and "None" or (selectedRaces .. "/" .. #races)
-		local classLabel = selectedClasses == #classes and "All"
-			or selectedClasses == 0 and "None"
-			or (selectedClasses .. "/" .. #classes)
-		local armorTotal = #Filter.ARMOR_TYPES
-		local armorLabel = selectedArmor == armorTotal and "All"
-			or selectedArmor == 0 and "None"
-			or (selectedArmor .. "/" .. armorTotal)
-		local ownerLabel = selectedOwners == #owners and "All"
-			or selectedOwners == 0 and "None"
-			or (selectedOwners .. "/" .. #owners)
-		local sourceTotal = #Filter.SOURCES()
-		local sourceLabel = selectedSources == sourceTotal and "All"
-			or selectedSources == 0 and "None"
-			or (selectedSources .. "/" .. sourceTotal)
+		local raceLabel = Filter.Label(Filter.SelectionCount(raceFilter, races), #races)
+		local classLabel = Filter.Label(Filter.ClassSelectionCount(raceFilter, classes),
+			#classes)
+		local armorLabel = Filter.Label(Filter.ArmorSelectionCount(raceFilter),
+			#Filter.ARMOR_TYPES)
+		local ownerLabel = Filter.Label(Filter.OwnerSelectionCount(raceFilter, owners),
+			#owners)
+		local sourceLabel = Filter.Label(Filter.SourceSelectionCount(raceFilter),
+			#Filter.SOURCES())
 		local addon = ns.Addon
 		local sync = addon and addon.OutfitLibrarySyncState
 			and addon.OutfitLibrarySyncState()
@@ -2204,44 +679,30 @@ function LibraryUI.Refresh()
 				("Race: %s | Class: %s | Armor: %s"):format(raceLabel, classLabel,
 					armorLabel)
 		else
+			local notCaptured = missing + customMissing
 			window.FilterDropdown.mogtrotStatus =
-				("Show: %s | Character: %s | Missing outfits: %d | Missing custom sets: %d")
-				:format(sourceLabel, ownerLabel, missing, customMissing)
+				("Show: %s | Character: %s"):format(sourceLabel, ownerLabel)
+				.. (notCaptured > 0 and (" | %d not captured yet"):format(notCaptured) or "")
 		end
 		if window.CharacterButton then
 			window.CharacterButton.Text:SetText(("Characters: %s"):format(ownerLabel))
 		end
 	end
-	-- The wall stays apples to apples on the forgiving count, and the search
-	-- for donors keeps running on the honest one.
-	local waiting, unbuilt = Missing(list)
-	fullFidelity = waiting == 0
-	bodiesWanted = unbuilt > 0
+	-- The wall stays apples to apples on the forgiving count; the honest one
+	-- says how many cards still show text.
+	local waiting, unbuilt = Bodies.Missing(list)
+	local watch = ns.DonorWatchUI
+	local offered = watch ~= nil and watch.Offered()
+	local fullFidelity = waiting == 0 and offered
+	Bodies.SetFullFidelity(fullFidelity)
+	local viewMode = Bodies.ViewMode()
 
-	-- The mounted switch is only meaningful if something here was captured
-	-- riding, so it reports that rather than sitting there doing nothing.
-	window.anyMounts = false
-	for _, record in ipairs(list) do
-		if record.mount then window.anyMounts = true break end
-	end
-	window.Mounted:SetEnabled(window.anyMounts)
-	if not window.anyMounts then
-		window.Mounted:SetBackdropBorderColor(0.4, 0.3, 0.3, 1)
-		window.Mounted.Text:SetTextColor(0.5, 0.45, 0.45)
-	elseif showMounts then
-		window.Mounted:SetBackdropBorderColor(1, 0.82, 0, 1)
-		window.Mounted.Text:SetTextColor(1, 0.82, 0)
-	else
-		window.Mounted:SetBackdropBorderColor(0.5, 0.5, 0.5, 1)
-		window.Mounted.Text:SetTextColor(0.7, 0.7, 0.7)
-	end
-
-	ShowZoom()
+	Cards.ShowZoom()
 
 	local snapshotMode = not Filter or Filter.IsSnapshotMode(raceFilter)
 	local showsArchived = Filter and Filter.ShowsArchived(raceFilter) or false
 
-	-- The same three looks as Mounted: on, off, and nothing to show.
+	-- Three looks: on, off, and nothing to show.
 	local library = Library()
 	window.anyArchived = library ~= nil and type(library.archive) == "table"
 		and #library.archive > 0
@@ -2263,6 +724,7 @@ function LibraryUI.Refresh()
 		mode = snapshotMode and "snapshots" or "mine",
 		shown = #list,
 		total = Filter and Filter.ModeCount(allRecords, raceFilter) or #allRecords,
+		archived = showsArchived,
 	})
 
 	-- Only one mode has characters to choose between, and the box searches a
@@ -2285,44 +747,53 @@ function LibraryUI.Refresh()
 	-- What is on the wall, as opposed to what was asked for.
 	local showing = fullFidelity and viewMode == "original"
 
-	-- The word says what you asked for. Asking for original race where no body
-	-- has been borrowed is pending rather than refused: the wall turns over on
-	-- its own the moment the last one arrives. So the word goes red-grey
-	-- instead of being taken away, its tooltip says what is missing, and the
-	-- line under the wall says what is actually on it.
+	-- The word says what you asked for, and is shown only once original race
+	-- is known to draw every look; until then the line under the wall says
+	-- what is missing, and the wall turns over by itself when it arrives.
 	window.Body:Say(viewMode)
-	if viewMode == "original" and not fullFidelity then
-		window.Body:SetBackdropBorderColor(0.4, 0.3, 0.3, 1)
-		window.Body.Text:SetTextColor(0.5, 0.45, 0.45)
-	end
+	window.Body:SetShown(fullFidelity)
+	window.Archived:ClearAllPoints()
+	window.Archived:SetPoint("LEFT", window.Body, fullFidelity and "RIGHT" or "LEFT",
+		fullFidelity and 6 or 0, 0)
+	window.ShowRow:SetShown(fullFidelity or window.Archived:IsShown())
 
 	window.Box:SetDataProvider(CreateDataProvider(list),
 		ScrollBoxConstants.RetainScrollPosition)
 
-	-- The count is in the sentence above, so this line is only the filters and
-	-- the bodies. Saying either of those twice would make the header look like
-	-- it disagreed with itself.
+	window.statusParts = { list = #list, all = #allRecords, showsArchived = showsArchived,
+		showing = showing, unbuilt = unbuilt }
+	LibraryUI.PaintStatus()
+end
+
+-- The line under the header. The count is in the sentence above, so this
+-- line is only the filters and which body the looks are on. Repainted alone
+-- when only the background checks moved on, since a Refresh redresses every
+-- card.
+function LibraryUI.PaintStatus()
+	if not (window and window:IsShown() and window.statusParts) then return end
+	local parts = window.statusParts
 	local filterStatus = window.FilterDropdown
 		and window.FilterDropdown.mogtrotStatus
 		or "Race: All | Class: All | Armor: All"
-	if #list == 0 then
-		if #allRecords == 0 and showsArchived then
-			window.Status:SetText("nothing archived")
-		elseif #allRecords == 0 then
-			window.Status:SetText("nothing captured yet: target someone and /mogtrot snap")
+	local hint = "Right-click a card for options; drag to turn them all."
+	if parts.list == 0 then
+		if parts.all == 0 and parts.showsArchived then
+			window.Status:SetText("Nothing archived")
+		elseif parts.all == 0 then
+			window.Status:SetText("Nothing captured yet: target someone and type /mogtrot snap")
 		else
 			window.Status:SetText(filterStatus)
 		end
-	elseif showing then
-		window.Status:SetText(("%s | each on their own race and sex."
-			.. " Right-click a card, drag to turn them all."):format(filterStatus))
-	elseif fullFidelity then
-		window.Status:SetText(("%s | all shown on you by choice."
-			.. " Right-click a card, drag to turn them all."):format(filterStatus))
+	elseif parts.showing and parts.unbuilt > 0 then
+		window.Status:SetText(("%s | %d %s for someone of the other sex to pass by.")
+			:format(filterStatus, parts.unbuilt, parts.unbuilt == 1 and "look waits" or "looks wait"))
+	elseif parts.showing then
+		window.Status:SetText(("%s | %s"):format(filterStatus, hint))
+	elseif Bodies.FullFidelity() then
+		window.Status:SetText(("%s | Shown on your race. %s"):format(filterStatus, hint))
 	else
-		window.Status:SetText(("%s | all shown on you. Hover or target"
-			.. " anyone of the other sex to see them on their own bodies"
-			.. " (%d still need one)."):format(filterStatus, waiting))
+		window.Status:SetText(("%s | Some looks are shown on your own body until you've"
+			.. " seen someone who can wear them."):format(filterStatus))
 	end
 end
 
@@ -2374,94 +845,6 @@ function LibraryUI.Toggle()
 		LibraryUI.Show()
 	end
 	return frame
-end
-
--- The snap confirmation: who was captured, their look, and a bar that empties
--- until it goes. One frame; a second capture replaces the first and restarts
--- the bar. Its single scene is built into the way the detail pane builds its
--- own, through RenderInto, so it borrows nothing from the wall's pool. A look
--- that would need a borrowed body shows text only.
-local CONFIRM_W, CONFIRM_H = 220, 300
-local confirm
-local confirmGeneration = 0
-
-local function EnsureConfirm()
-	if confirm then return confirm end
-	local frame = CreateFrame("Frame", nil, UIParent, "BackdropTemplate")
-	frame:SetSize(CONFIRM_W, CONFIRM_H)
-	frame:SetPoint("TOP", UIParent, "TOP", 0, -140)
-	frame:SetFrameStrata("FULLSCREEN_DIALOG")
-	frame:SetBackdrop(BACKDROP)
-	frame:SetBackdropColor(0, 0, 0, 0.9)
-	-- Passes clicks through: it is gone before anybody could use it.
-	frame:EnableMouse(false)
-
-	frame.Title = frame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-	frame.Title:SetPoint("TOPLEFT", 10, -10)
-	frame.Title:SetPoint("TOPRIGHT", -10, -10)
-	frame.Title:SetJustifyH("CENTER")
-	frame.Title:SetWordWrap(true)
-
-	frame.Scene = CreateFrame("ModelScene", nil, frame, "ModelSceneMixinTemplate")
-	frame.Scene:SetPoint("TOPLEFT", 8, -40)
-	frame.Scene:SetPoint("BOTTOMRIGHT", -8, 24)
-	frame.Scene:EnableMouse(false)
-	frame.Scene:EnableMouseWheel(false)
-
-	frame.NoModel = frame:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
-	frame.NoModel:SetPoint("CENTER", 0, -8)
-	frame.NoModel:SetWidth(CONFIRM_W - 32)
-	frame.NoModel:SetJustifyH("CENTER")
-
-	frame.Bar = CreateFrame("StatusBar", nil, frame)
-	frame.Bar:SetPoint("BOTTOMLEFT", 10, 10)
-	frame.Bar:SetPoint("BOTTOMRIGHT", -10, 10)
-	frame.Bar:SetHeight(6)
-	frame.Bar:SetStatusBarTexture("Interface\\Buttons\\WHITE8X8")
-	frame.Bar:SetStatusBarColor(1, 0.82, 0)
-	frame.Bar:SetMinMaxValues(0, 1)
-	local track = frame.Bar:CreateTexture(nil, "BACKGROUND")
-	track:SetAllPoints()
-	track:SetColorTexture(1, 1, 1, 0.12)
-
-	frame:SetScript("OnUpdate", function(self)
-		local capture = ns.SnapCapture
-		if not capture then return end
-		self.Bar:SetValue(capture.ConfirmFraction(GetTime() - self.startedAt, self.duration))
-	end)
-	frame:Hide()
-	confirm = frame
-	return frame
-end
-
-function LibraryUI.ConfirmSnap(record, isNew)
-	local text, capture = ns.LibraryText, ns.SnapCapture
-	if type(record) ~= "table" or not (text and capture) then return end
-	local frame = EnsureConfirm()
-
-	-- A dismiss timer from an earlier capture must not close this one.
-	confirmGeneration = confirmGeneration + 1
-	local generation = confirmGeneration
-
-	frame.Title:SetText(text.Confirmation(record, isNew))
-	local drawn = false
-	if record.look ~= "" and LibraryUI.BodyIsDeterministic(record) then
-		local actor, how = LibraryUI.RenderInto(frame.Scene, record)
-		drawn = how ~= nil
-		if drawn then TurnCard({ actor = actor }, yaw) end
-	end
-	frame.Scene:SetShown(drawn)
-	frame.NoModel:SetText(drawn and "" or "Open the library to see this look.")
-
-	frame.startedAt = GetTime()
-	frame.duration = capture.CONFIRM_SECONDS
-	frame.Bar:SetValue(1)
-	frame:Show()
-	frame:Raise()
-	C_Timer.After(frame.duration, function()
-		if generation ~= confirmGeneration then return end
-		frame:Hide()
-	end)
 end
 
 ns.LibraryUI = LibraryUI

@@ -41,6 +41,15 @@ function OutfitLinks.Replace(store, outfitID, set)
 	store[outfitID] = next(links) and links or nil
 end
 
+-- Returns how many links the outfit had.
+function OutfitLinks.Clear(store, outfitID)
+	local had = OutfitLinks.Count(store, outfitID)
+	store[outfitID] = nil
+	return had
+end
+
+-- The source keeps its links. merge adds to the target's; without it the
+-- target ends up with exactly the source's.
 -- Returns added, had, total so the caller keeps its copy messages.
 function OutfitLinks.Copy(store, fromOutfitID, toOutfitID, merge)
 	local source = store[fromOutfitID]

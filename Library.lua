@@ -112,6 +112,21 @@ function Library.Migrate(account)
 	return library
 end
 
+-- Whether this build may change the library. Only a library Migrate has
+-- brought to this build's version is; one saved by a newer Mogtrot ("newer")
+-- or of no known version ("unknown") is read-only.
+function Library.Writable(library)
+	if type(library) ~= "table" then return false, "unknown" end
+	local version = library.version
+	if type(version) == "number" and version > Library.VERSION then
+		return false, "newer"
+	end
+	if version ~= Library.VERSION then return false, "unknown" end
+	return true
+end
+
+local REFUSED = "library is read-only"
+
 -- Rejects a record rather than storing something the reader cannot trust.
 function Library.Validate(record)
 	if type(record) ~= "table" then return false, "not a table" end
@@ -225,6 +240,7 @@ function Library.BuildIndex(library)
 end
 
 function Library.Upsert(library, record, now, index)
+	if not Library.Writable(library) then return nil, false, REFUSED end
 	local ok, why = Library.Validate(record)
 	if not ok then return nil, false, why end
 	local key = Library.KeyOf(record)
@@ -246,9 +262,21 @@ function Library.Upsert(library, record, now, index)
 	return Library.Add(library, record, now, index)
 end
 
+-- The id Add would count a sighting against, or nil when Add would store a new
+-- record. Writes nothing.
+function Library.Find(library, record, index)
+	local key = Library.KeyOf(record)
+	if not key then return nil end
+	index = index or Library.BuildIndex(library)
+	local id = index[key]
+	if id and library.records[id] then return id end
+	return nil
+end
+
 -- Returns id, isNew. A look already seen on the same race and sex carries no
 -- new information, so the sighting is counted and nothing else is touched.
 function Library.Add(library, record, now, index)
+	if not Library.Writable(library) then return nil, false, REFUSED end
 	local ok, why = Library.Validate(record)
 	if not ok then return nil, false, why end
 
@@ -287,7 +315,7 @@ end
 
 -- Gone for good, from the wall or from the archive.
 function Library.Delete(library, id)
-	if type(library) ~= "table" then return false end
+	if not Library.Writable(library) then return false end
 	if type(library.records) == "table" and library.records[id] ~= nil then
 		library.records[id] = nil
 		return true
@@ -331,7 +359,7 @@ end
 -- than a flag on the record, so every reader of `records` is right by
 -- default instead of having to remember to exclude archived ones.
 function Library.Archive(library, id, now)
-	if type(library) ~= "table" or type(library.records) ~= "table" then
+	if not Library.Writable(library) or type(library.records) ~= "table" then
 		return false
 	end
 	local record = library.records[id]
@@ -360,6 +388,7 @@ end
 -- look was captured again while this one was archived, the wall already holds
 -- it: the archived copy folds into that one rather than standing beside it.
 function Library.Restore(library, id)
+	if not Library.Writable(library) then return nil, false end
 	local index = ArchiveIndex(library, id)
 	if not index then return nil, false end
 	library.records = type(library.records) == "table" and library.records or {}
@@ -392,7 +421,7 @@ end
 -- Drops whatever has been archived longer than the window, oldest first.
 -- A window of zero keeps everything, which is how a user says "never expire".
 function Library.EvictArchived(library, days, now)
-	if type(library) ~= "table" or type(library.archive) ~= "table" then
+	if not Library.Writable(library) or type(library.archive) ~= "table" then
 		return 0
 	end
 	days = tonumber(days) or 0

@@ -54,19 +54,13 @@ end
 --   record            the record being drawn
 --   viewMode          "original" or "mine"
 --   fullFidelity      every record on the wall can be built as captured
---   mounted           this card is drawing the record on its mount
 --   viewer            { raceFile, sex, altered } for the logged-in character
 --   hasAlternateForm  raceID -> boolean
 --   visageRace        raceID -> raceID or nil
 function LibraryBody.Plan(input)
 	input = type(input) == "table" and input or {}
 	local record = type(input.record) == "table" and input.record or {}
-	local mounted = input.mounted == true
-
-	-- Riding is its own scene with its own camera, so a mounted card never
-	-- shows the record's own pooled body however the wall is set.
-	local wantRecordBody = not mounted
-		and input.viewMode == "original" and input.fullFidelity == true
+	local wantRecordBody = input.viewMode == "original" and input.fullFidelity == true
 
 	local shown, native = LibraryBody.Form(record, input.hasAlternateForm,
 		input.visageRace)
@@ -89,7 +83,6 @@ function LibraryBody.Plan(input)
 	end
 
 	return {
-		mounted = mounted,
 		wantRecordBody = wantRecordBody,
 		keyed = keyed,
 		shownRace = shown,
@@ -110,6 +103,73 @@ function LibraryBody.CanReuse(plan, heldKey, hasActor)
 	if not plan.wantRecordBody then return false end
 	if not hasActor or plan.idealKey == nil then return false end
 	return heldKey == plan.idealKey
+end
+
+-- The unit a record's body is built from: the donor found, else your own unit
+-- when your sex is the record's or the record's is unknown. nil otherwise:
+-- SetModelByUnit takes no sex override, so your unit would draw the look on
+-- the wrong sex, and a card shows text instead.
+function LibraryBody.Donor(found, recordSex, viewerSex)
+	if found ~= nil then return found end
+	if recordSex == nil or recordSex == viewerSex then return "player" end
+	return nil
+end
+
+-- How well a pooled body suits a record when several donors lent its shape:
+-- a donor known to draw the record whole (covering, GUID -> true) counts 4,
+-- the record's own race 2, its faction 1. A body of the other faction drops
+-- pieces limited to the record's faction.
+function LibraryBody.DonorRank(entry, record, covering)
+	if type(entry) ~= "table" or type(record) ~= "table" then return 0 end
+	local rank = 0
+	if type(covering) == "table" and entry.donorGUID ~= nil and covering[entry.donorGUID] then
+		rank = rank + 4
+	end
+	if record.raceID ~= nil and entry.donorRace == record.raceID then rank = rank + 2 end
+	if record.faction ~= nil and entry.donorFaction == record.faction then rank = rank + 1 end
+	return rank
+end
+
+-- How far the pool falls short of the wall. ideals holds one key per card that
+-- needs a borrowed body; supply is key -> bodies, from CountByKey.
+--   shapes  cards whose key no body carries: forgiving, since one body proves
+--           the shape can be built; it decides whether the wall turns over
+--   cards   cards left without a body once each body serves one card: what
+--           "still need one" reports and what keeps the search for donors on
+function LibraryBody.Shortfall(ideals, supply)
+	supply = type(supply) == "table" and supply or {}
+	local left, shapes, cards = {}, 0, 0
+	for _, key in ipairs(type(ideals) == "table" and ideals or {}) do
+		local stock = supply[key] or 0
+		if stock == 0 then shapes = shapes + 1 end
+		local used = left[key] or 0
+		if used < stock then
+			left[key] = used + 1
+		else
+			cards = cards + 1
+		end
+	end
+	return shapes, cards
+end
+
+-- What a card shows in place of a body it has none of the right sex for.
+function LibraryBody.NoBodyText(sex)
+	local who = sex == 3 and "a woman" or sex == 2 and "a man" or "someone who can wear it"
+	return ("Shows once you've seen %s\nHover over, target or group with one"):format(who)
+end
+
+-- Which body the snap pop-up draws:
+--   "live"  the snapped player's own body
+--   "own"   the record's race built on your body, when the sexes agree
+--   "pool"  a borrowed body already built for the record's race and sex
+--   nil     text only, since any other body is the wrong race or sex
+-- input: hasLook, live, pooled, recordSex, viewerSex.
+function LibraryBody.PopupBody(input)
+	if type(input) ~= "table" or not input.hasLook then return nil end
+	if input.live then return "live" end
+	if input.recordSex ~= nil and input.recordSex == input.viewerSex then return "own" end
+	if input.pooled then return "pool" end
+	return nil
 end
 
 ns.LibraryBody = LibraryBody

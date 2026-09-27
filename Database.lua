@@ -8,8 +8,9 @@ local Library = ns.Library or require("Library")
 -- Initializes and upgrades the account settings and per-character outfit data
 -- saved by Mogtrot.
 --
--- Targets: account version 3 (generic pin domains, outfit library), character version 6
--- (link maps, pin opt-outs, rotations, worn looks apart from definitions). Migration order matters: version
+-- Targets: account version 3 (generic pin domains, outfit library), character version 8
+-- (link maps, pin opt-outs, rotations, worn looks apart from definitions, definitions
+-- re-read once more). Migration order matters: version
 -- checks gate everything; legacy records are normalized before keys move;
 -- old keys are deleted only after a successful move; the version field is
 -- written last. Unsupported future versions return their stores untouched -
@@ -17,7 +18,7 @@ local Library = ns.Library or require("Library")
 local Database = {}
 
 local ACCOUNT_VERSION = 3
-local CHAR_VERSION = 6
+local CHAR_VERSION = 8
 local DEFAULT_CATEGORIES = { "Tier", "Non-tier sets", "Simple" }
 
 -- Only absent values fall back to defaults: false and 0 are caller choices.
@@ -51,12 +52,23 @@ end
 local function InitAccount(account)
 	if account.previewEnabled == nil then account.previewEnabled = true end
 	if account.hideEmptyCategories == nil then account.hideEmptyCategories = false end
+	-- The setter writes only true or false, so nil means never changed.
+	if account.matchTargetMount == nil then account.matchTargetMount = true end
 	account.minimap = account.minimap or {}
 	if account.minimap.hide == nil then account.minimap.hide = false end
 	account.titleFallbackMode = account.titleFallbackMode or "random"
+	-- What the hearth key does with nothing linked; see HearthPick.Mode.
+	account.hearthFallbackMode = account.hearthFallbackMode or "pinned"
 	-- How long an archived snapshot is kept. Zero never expires, which is how
 	-- somebody who keeps everything says so.
 	if account.archiveDays == nil then account.archiveDays = 30 end
+	-- Where the snap pop-up sits; dragging it rewrites this.
+	local snap = account.snapConfirmPosition
+	if type(snap) ~= "table" or type(snap.point) ~= "string"
+		or type(snap.relPoint) ~= "string" or type(snap.x) ~= "number"
+		or type(snap.y) ~= "number" then
+		account.snapConfirmPosition = { point = "TOP", relPoint = "TOP", x = 0, y = -140 }
+	end
 	EnsurePinDomains(account)
 	-- Additive and self-gating: a library from a newer build is left alone.
 	Library.Migrate(account)
@@ -126,6 +138,7 @@ local function InitCharacter(char)
 	char.looks = char.looks or {}
 	char.worn = char.worn or {}
 	char.slots = char.slots or {}
+	char.lookPending = char.lookPending or {}
 	char.mounts = char.mounts or {}
 	char.wear = char.wear or {}
 	char.titles = char.titles or {}
@@ -194,7 +207,7 @@ end
 local function MigrateCharacter(char)
 	local hadSavedTree = HasSavedTree(char)
 	local knownCharacter = char.version == 2 or char.version == 3 or char.version == 4
-		or char.version == 5
+		or char.version == 5 or char.version == 6 or char.version == 7
 	local legacyCharacter = char.version == nil and hadSavedTree
 
 	-- Collision check before any mutation: a distinct destination table for
@@ -208,8 +221,10 @@ local function MigrateCharacter(char)
 	if knownCharacter or legacyCharacter then
 		NormalizeCharacter(char)
 		-- Before v6 the wear capture wrote looks, and a slot the outfit leaves
-		-- empty rendered equipped gear. Nothing says which slots, so the next
-		-- sweep reads every definition again and clears this.
+		-- empty rendered equipped gear; v6's sweep could store a definition read
+		-- before it had landed; before v8 a split shoulder's hidden side was
+		-- stored as empty. Nothing says which, so the next sweep reads every
+		-- definition again and clears this.
 		char.rereadLooks = true
 	else
 		-- A fresh character can still carry old single-mount links.

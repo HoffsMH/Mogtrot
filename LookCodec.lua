@@ -21,6 +21,10 @@ local LookCodec = {}
 
 local SEP, FIELD = ";", ","
 
+-- The source of Blizzard's Hidden Shoulder item (134112), which draws nothing.
+LookCodec.HIDDEN_SHOULDER_SOURCE = 77343
+local SHOULDER_SLOT = 3
+
 local function Number(value)
 	local n = tonumber(value)
 	return n or 0
@@ -69,21 +73,45 @@ end
 -- { slotID, primary, secondary, illusion }, each part a slot info or nil. A
 -- part counts only when its displayType is assigned: an empty slot renders
 -- equipped gear, which the outfit does not choose, so it is stored as 0.
-function LookCodec.FromSlotInfos(entries, assigned)
+--
+-- The one exception is a split shoulder with one side assigned and the other
+-- hidden. Stored as 0 the hidden side would read as unsplit and draw the other
+-- side's item on both, so it keeps the hidden item's ID.
+function LookCodec.FromSlotInfos(entries, assigned, hidden)
 	local function Part(info)
 		if type(info) ~= "table" or info.displayType ~= assigned then return 0 end
+		return tonumber(info.transmogID) or 0
+	end
+	local function Hidden(info)
+		if hidden == nil or type(info) ~= "table" or info.displayType ~= hidden then
+			return 0
+		end
 		return tonumber(info.transmogID) or 0
 	end
 
 	local look = {}
 	for _, entry in ipairs(entries or {}) do
 		if type(entry) == "table" and type(entry.slotID) == "number" then
-			look[entry.slotID] = {
-				Part(entry.primary), Part(entry.secondary), Part(entry.illusion),
-			}
+			local a, b = Part(entry.primary), Part(entry.secondary)
+			if entry.slotID == SHOULDER_SLOT then
+				if a > 0 and b <= 0 then b = Hidden(entry.secondary) end
+				if b > 0 and a <= 0 then a = Hidden(entry.primary) end
+			end
+			look[entry.slotID] = { a, b, Part(entry.illusion) }
 		end
 	end
 	return look
+end
+
+-- The parts a model is handed for one stored slot. A split shoulder with only
+-- its second side assigned stores a primary of 0, and an actor handed a primary
+-- of 0 draws neither side. The unassigned side is drawn hidden rather than
+-- borrowed from the other, since a stored look shows only what it assigns.
+function LookCodec.DrawParts(slot, a, b, c)
+	if slot == SHOULDER_SLOT and (a or 0) <= 0 and (b or 0) > 0 then
+		return LookCodec.HIDDEN_SHOULDER_SOURCE, b, c
+	end
+	return a, b, c
 end
 
 -- What the library dedupes on: what they look like, not who they are. Two

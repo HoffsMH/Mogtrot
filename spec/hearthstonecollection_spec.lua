@@ -384,7 +384,7 @@ describe("HearthstoneCollection", function()
 		end)
 
 		it("says so when nothing matches", function()
-			assert.equal("No reviewed hearthstones match.",
+			assert.equal("No hearthstones match.",
 				HearthstoneCollection.PickerList(Rows(), { query = "nothing" }).note)
 		end)
 

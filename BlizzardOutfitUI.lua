@@ -6,14 +6,11 @@ local BlizzardOutfitUI = {}
 local Tree, Lint, OutfitLint = ns.Tree, ns.Lint, ns.OutfitLint
 local blizzardScrollBox
 local initialized
-local NO_TRANSMOG = (Constants and Constants.Transmog and Constants.Transmog.NoTransmogID) or 0
 local ASSIGNED = (Enum and Enum.TransmogOutfitDisplayType
 	and Enum.TransmogOutfitDisplayType.Assigned) or 1
+local HIDDEN = (Enum and Enum.TransmogOutfitDisplayType
+	and Enum.TransmogOutfitDisplayType.Hidden) or 3
 local LookCodec = ns.LookCodec or require("LookCodec")
-
-local function StoredID(info)
-	return info and info.displayType == ASSIGNED and info.transmogID or NO_TRANSMOG
-end
 
 function BlizzardOutfitUI.CaptureViewedLook(addon)
 	local preview = TransmogFrame and TransmogFrame.CharacterPreview
@@ -22,7 +19,6 @@ function BlizzardOutfitUI.CaptureViewedLook(addon)
 	if not pool or not outfitID or outfitID == 0 then return false end
 
 	local entries = {}
-	local diagnostic = {}
 	for slotFrame in pool:EnumerateActive() do
 		local location = slotFrame:GetTransmogLocation()
 		local slotID = location and location:GetSlotID()
@@ -41,18 +37,10 @@ function BlizzardOutfitUI.CaptureViewedLook(addon)
 			local illusionFrame = slotFrame:GetIllusionSlotFrame()
 			if illusionFrame then entry.illusion = illusionFrame:GetSlotInfo() end
 			entries[#entries + 1] = entry
-			diagnostic[#diagnostic + 1] = {
-				slotID = slotID,
-				displayType = slotInfo and slotInfo.displayType,
-				apiID = slotInfo and slotInfo.transmogID,
-				storedID = StoredID(slotInfo),
-			}
 		end
 	end
-	local look = LookCodec.FromSlotInfos(entries, ASSIGNED)
+	local look = LookCodec.FromSlotInfos(entries, ASSIGNED, HIDDEN)
 	MogtrotCharDB.looks[outfitID] = look
-	addon.ingestDiagnostics = addon.ingestDiagnostics or {}
-	addon.ingestDiagnostics[outfitID] = diagnostic
 	if not addon.sweep and addon.SyncOutfitLibrary then addon.SyncOutfitLibrary() end
 	return true, outfitID
 end
@@ -173,24 +161,6 @@ function BlizzardOutfitUI.Initialize(addon)
 
 		local collection = TransmogFrame.OutfitCollection
 		if not collection then return end
-		local ingest = CreateFrame("Button", nil, collection)
-		ingest:SetSize(28, 28)
-		ingest:SetPoint("TOPRIGHT", collection, "TOPRIGHT", -34, -4)
-		ingest:SetNormalTexture("Interface\\Icons\\ability_hisek_aim")
-		ingest:SetHighlightTexture("Interface\\Buttons\\ButtonHilight-Square", "ADD")
-		ingest:SetScript("OnEnter", function(self)
-			GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-			GameTooltip:SetText("Ingest all outfits", 1, 0.82, 0)
-			GameTooltip:AddLine("Tell Mogtrot to ingest all your outfits. This may take a few seconds.",
-				1, 1, 1, true)
-			GameTooltip:Show()
-		end)
-		ingest:SetScript("OnLeave", GameTooltip_Hide)
-		ingest:SetScript("OnClick", function()
-			if addon.sweep then OutfitLint.Abandon(addon, "ingest requested") end
-			OutfitLint.Begin(addon, true, true, true)
-		end)
-		collection.MogtrotIngestButton = ingest
 		local scrollBox = collection and collection.OutfitList and collection.OutfitList.ScrollBox
 		if not scrollBox or blizzardScrollBox then return end
 		blizzardScrollBox = scrollBox

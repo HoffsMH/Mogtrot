@@ -13,13 +13,7 @@ end
 function SummonController.Attach(Addon, deps)
 	local MountTravelSnapshot = deps.mountTravelSnapshot
 
-local SUMMON_BINDING = "CLICK MogtrotSummon:LeftButton"
-
 local SUMMON_COMPLAINT_GAP = 10
-
-local function SummonBindingKey()
-	return GetBindingKey(SUMMON_BINDING)
-end
 
 function Addon:SummonMaySpeak()
 	local now = GetTime()
@@ -48,15 +42,7 @@ end
 local FALLBACK_MODES = { random = true, pinned = true, litemount = true, off = true }
 
 local function MountPinDomain()
-	local db = MogtrotDB
-	local pins = db and db.pins
-	if type(pins) ~= "table" then return nil end
-	local domain = pins.mounts
-	if type(domain) ~= "table" or type(domain.records) ~= "table"
-		or domain.autoNew == nil or domain.days == nil then
-		return nil
-	end
-	return domain
+	return Pins.Domain(MogtrotDB, "mounts")
 end
 
 local function ActivePinnedMounts(now)
@@ -66,10 +52,8 @@ local function ActivePinnedMounts(now)
 end
 
 local function MountPinOptedOut(outfitID)
-	local char = MogtrotCharDB
-	local optOut = char and char.pinOptOut
-	if type(optOut) ~= "table" or type(optOut.mounts) ~= "table" then return false end
-	return optOut.mounts[outfitID] and true or false
+	local optOut = Pins.OptOut(MogtrotCharDB, "mounts")
+	return optOut and optOut[outfitID] and true or false
 end
 
 local function LiteMountFallbackAvailable()
@@ -192,7 +176,7 @@ local function SummonRefusalText(plan, outfitName)
 	if plan.reason == "nomounts" then
 		return ("no mounts linked to '%s' - open Mogtrot and pick some."):format(outfitName)
 	elseif plan.reason == "litemountunavailable" then
-		return "LiteMount fallback is selected, but its compatibility button is not ready."
+		return "LiteMount is selected as the fallback, but LiteMount isn't ready."
 	elseif plan.reason == "nocollection" then
 		return "no mounts on this character to fall back on yet."
 	elseif plan.reason == "collectionunusable" then
@@ -208,10 +192,6 @@ end
 -- Where to change it is a thing you learn once. What just happened is worth
 -- saying every time, so the hint is said once a session and the reason is not.
 local toldWhereToChangeFallback = false
-
-function SummonController.ResetFallbackHint()
-	toldWhereToChangeFallback = false
-end
 
 local function FallbackHint()
 	if toldWhereToChangeFallback then return "" end
@@ -230,14 +210,6 @@ local function SummonCauseText(plan, outfitName)
 	end
 	return ("no outfit is active, so this is %s.%s")
 		:format(FallbackDid(plan), FallbackHint())
-end
-
-local function MountIDsText(ids)
-	local text = {}
-	for _, mountID in ipairs(ids or {}) do
-		table.insert(text, tostring(mountID))
-	end
-	return #text > 0 and table.concat(text, ",") or "none"
 end
 
 local summonShuffleState = {}
@@ -271,7 +243,7 @@ function Addon:SummonForActiveOutfit(canDelegateLiteMount)
 	local set = hasOutfit and self:GetOutfitMounts(outfitID) or nil
 	local preference = MountTravelSnapshot()
 	local pinnedMountIDs = ActivePinnedMounts(time())
-	local target, targetReason, targetDetail = ns.TargetMount.Resolve(
+	local target = ns.TargetMount.Resolve(
 		ReadTargetMount(), InspectTargetMount)
 	local result = ns.SummonDecision.Decide({
 		collection = SummonCollectionSnapshot(),
@@ -311,24 +283,6 @@ function Addon:SummonForActiveOutfit(canDelegateLiteMount)
 		self:RefuseSummon(false, "can't summon in combat.")
 		return
 	end
-	self:Debug("target match: %s source=%s mount=%s detail=%s",
-		tostring(target and target.reason or targetReason),
-		tostring(target and target.source), tostring(target and target.mountID),
-		tostring(targetDetail))
-	self:Debug("summon plan: action=%s reason=%s cause=%s mode=%s LiteMount=%s ready=%s",
-		tostring(plan.action), tostring(plan.reason), tostring(plan.cause),
-		tostring(self:FallbackMode()), tostring(LiteMountFallbackAvailable()),
-		tostring(LiteMountFallbackReady()))
-	if preference then
-		local situation = preference.situation
-		self:Debug("summon preference: swimming=%s submerged=%s flyable=%s advanced=%s "
-			.. "drivable=%s tier=%s candidates=%s choice=%s",
-			tostring(situation.swimming), tostring(situation.submerged),
-			tostring(situation.flyable), tostring(situation.advancedFlyable),
-			tostring(situation.drivable), tostring(plan.preferenceTier),
-			MountIDsText(plan.candidates), tostring(plan.mountID))
-	end
-
 	local lines = {}
 	if plan.action == "litemount" then
 		if canDelegateLiteMount then return true end
@@ -363,15 +317,6 @@ function Addon:SummonForActiveOutfit(canDelegateLiteMount)
 	C_MountJournal.SummonByID(plan.mountID)
 end
 
-function Addon:SummonBindingText()
-	local key = SummonBindingKey()
-	if key then
-		return ("summon keybinding: %s."):format(key)
-	end
-	return "summon keybinding: not bound - it is 'Summon a mount for this outfit' "
-		.. "under Key Bindings, Mogtrot."
-end
-
 function Addon:SummonFallbackText()
 	local mode = self:FallbackMode()
 	if mode == "off" then
@@ -387,58 +332,10 @@ function Addon:SummonFallbackText()
 		if LiteMountFallbackAvailable() then
 			return "summon fallback: LiteMount when the active outfit has no linked mounts."
 		end
-		return "summon fallback: LiteMount selected, but its compatibility button is unavailable."
+		return "summon fallback: LiteMount, but LiteMount isn't ready."
 	end
 	return "summon fallback: a random mount - a favourite if you have any, "
 		.. "otherwise anything you own."
-end
-
-function Addon:NoticeSummonBindingOnce()
-	if MogtrotDB.summonNoticed then return end
-	if self:LiteMountInstalled() or SummonBindingKey() then return end
-
-	MogtrotDB.summonNoticed = true
-	self:Warn("linked mounts need a key of their own without LiteMount. Bind 'Summon a "
-		.. "mount for this outfit' under Key Bindings, Mogtrot - or /mogtrot summon.")
-	self:Warn("with no outfit on, or no mounts linked to it, that key summons a random "
-		.. "mount - a favourite if you have any. Mogtrot's settings panel, or "
-		.. "/mogtrot fallback, changes that.")
-end
-
-function Addon:OpenFallbackPicker()
-	local mode = self:FallbackMode()
-
-	local items = {
-		{ name = "Random mount", note = "a favourite if you have one",
-			noteDim = true, mode = "random",
-			preselected = (mode == "random") or nil },
-		{ name = "Pinned mount", mode = "pinned",
-			note = "default - choose among active pins", noteDim = true,
-			preselected = (mode == "pinned") or nil },
-	}
-	if LiteMountFallbackAvailable() then
-		table.insert(items, { name = "LiteMount", mode = "litemount",
-			note = "when the active outfit has no linked mounts", noteDim = true,
-			preselected = (mode == "litemount") or nil })
-	end
-	table.insert(items, { name = "Nothing, just say why", mode = "off", divider = true,
-		preselected = (mode == "off") or nil })
-
-	ns.OpenSearchPicker({
-		title = "Mount when the outfit has none",
-		searchHint = "Search your mounts",
-		emptyText = "No mounts match.",
-		items = items,
-		buttons = {
-			{
-				text = "Use this", width = 90,
-				tipTitle = "Summon fallback",
-				tipBody = "What the summon key does when no outfit is on, or the outfit "
-					.. "you are wearing has no mounts linked to it.",
-				onClick = function(chosen) Addon:SetSummonFallback(chosen[1]) end,
-			},
-		},
-	})
 end
 
 function Addon:SetSummonFallback(choice)
@@ -468,16 +365,6 @@ function Addon:SetMountPinDays(mountID, days)
 	local domain = MountPinDomain()
 	if not domain then return false end
 	return Pins.SetDaysRemaining(domain, mountID, days, time())
-end
-
-function Addon:KeepMountPinned(mountID)
-	local domain = MountPinDomain()
-	if not domain then return end
-	-- Keep re-pins a suppressed mount, so this puts one back in the pool the
-	-- summon key draws from and the macro icon has to be asked again.
-	Pins.Keep(domain, mountID, time())
-	self:RepaintMountCards()
-	self:CompanionChoiceChanged()
 end
 
 	local controller = {}

@@ -20,10 +20,9 @@ local function Listed(path)
 	return order, seen
 end
 
--- Files the release build must not contain. A probe answers a question about
--- the client rather than doing anything for a player, so it belongs to whoever
--- is working on the addon and not to whoever installed it.
-local DEV_ONLY = { ["DevCommands.lua"] = true }
+-- Files the release build must not contain. None today: the development tools
+-- live outside the repository, under the private specs tree.
+local DEV_ONLY = {}
 
 local function SourceFiles()
 	local names = {}
@@ -66,13 +65,6 @@ describe("TOC", function()
 		assert.same(release, shared)
 	end)
 
-	it("loads the development commands after the module they read", function()
-		local position = {}
-		for index, name in ipairs(dev) do position[name] = index end
-		assert.is_true(position["Diagnostics.lua"] < position["DevCommands.lua"],
-			"DevCommands.lua reads ns.Diagnostics and must load after it")
-	end)
-
 	it("lists nothing that is not on disk", function()
 		for _, name in ipairs(release) do
 			local file = io.open(name, "r")
@@ -92,17 +84,33 @@ describe("TOC", function()
 			-- These reach each other through ns at call time rather than at
 			-- load, so getting the order wrong fails in game and not here
 			-- unless it is written down.
-			["LibraryUI.lua"] = {
-				"Library.lua", "LibraryText.lua", "LookCodec.lua", "RaceBody.lua",
-				"DonorBody.lua", "ProbeRenderUI.lua", "CopyBox.lua", "ClientProbe.lua",
-				"LibraryZoom.lua",
+			["LookRender.lua"] = { "LookCodec.lua" },
+			["LibraryBodies.lua"] = {
+				"LibraryBody.lua", "LibraryText.lua", "LookCodec.lua", "RaceBody.lua",
+				"DonorBody.lua", "DonorWatch.lua", "CharacterModelPool.lua",
+				"LookRender.lua",
 			},
-			["LibraryDetailUI.lua"] = { "LibraryText.lua", "LibraryUI.lua" },
+			["LibraryCards.lua"] = {
+				"Library.lua", "LibraryText.lua", "LookCodec.lua", "RaceBody.lua",
+				"LibraryBody.lua", "LookRender.lua", "LibraryZoom.lua",
+				"LibraryBodies.lua",
+			},
+			["LibraryUI.lua"] = {
+				"Library.lua", "LibraryFilter.lua", "LibraryZoom.lua",
+				"PairingHeader.lua", "PairingHeaderUI.lua",
+				"LibraryBodies.lua", "LibraryCards.lua",
+			},
+			["SnapConfirmUI.lua"] = {
+				"LibraryText.lua", "LookCodec.lua", "RaceBody.lua", "LibraryBody.lua",
+				"LookRender.lua", "LibraryBodies.lua", "LibraryUI.lua",
+			},
+			["LibraryDetailUI.lua"] = {
+				"LibraryText.lua", "LibraryBodies.lua", "LibraryCards.lua", "LibraryUI.lua",
+			},
 			["SnapCapture.lua"] = {
 				"Library.lua", "InspectLook.lua", "FormDefinitions.lua",
-				"RaceBody.lua", "LibraryUI.lua",
+				"RaceBody.lua", "LibraryUI.lua", "SnapConfirmUI.lua",
 			},
-			["ProbeRenderUI.lua"] = { "ClientProbe.lua" },
 			["HearthPick.lua"] = { "Rotation.lua" },
 			["HearthstoneController.lua"] = {
 				"OutfitCandidates.lua", "HearthPick.lua", "Rotation.lua",

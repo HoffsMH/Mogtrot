@@ -184,6 +184,13 @@ local function ViewedOutfitID()
 	return outfitID
 end
 
+-- The outfit's name as the player knows it.
+local function OutfitName(outfitID)
+	local known = ns.Addon and ns.Addon.outfitsByID
+	local info = known and outfitID and known[outfitID]
+	return info and info.name or "the selected outfit"
+end
+
 local function UpdateTransferButton()
 	if not (pane and pane.Transfer) then return end
 	pane.Transfer:SetShown(TransmogWindowOpen() and pane:IsShown())
@@ -257,7 +264,7 @@ local function SlotTooltip(button)
 
 	local detail = entry.detail
 	if detail then
-		GameTooltip:AddLine(detail.link or detail.name or "the client would not name it",
+		GameTooltip:AddLine(detail.link or detail.name or "Unknown item",
 			1, 1, 1, true)
 		if detail.itemID then
 			GameTooltip:AddLine(("item %d"):format(detail.itemID), 0.6, 0.6, 0.6)
@@ -283,7 +290,7 @@ local function SlotTooltip(button)
 	end
 	if entry.secondary and entry.secondary > 0 and entry.secondary ~= entry.source then
 		GameTooltip:AddLine(" ")
-		GameTooltip:AddLine("Shoulders are set apart; the other one differs.",
+		GameTooltip:AddLine("Left and right shoulders differ.",
 			0.6, 0.6, 0.6, true)
 	end
 	GameTooltip:Show()
@@ -372,8 +379,7 @@ local function Ensure(library)
 	pane.Library:SetScript("OnEnter", function(self)
 		GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
 		GameTooltip:SetText("Outfit library")
-		GameTooltip:AddLine("Action: Open outfit library", 0.6, 0.6, 0.6)
-		GameTooltip:AddLine("Texture: " .. libraryIcon, 0.6, 0.6, 0.6)
+		GameTooltip:AddLine("Every look you have captured.", 0.6, 0.6, 0.6)
 		GameTooltip:Show()
 	end)
 	pane.Library:SetScript("OnLeave", GameTooltip_Hide)
@@ -461,10 +467,11 @@ local function Ensure(library)
 	pane.Transfer:SetScript("OnEnter", function(self)
 		GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
 		GameTooltip:SetText("Transfer to currently selected outfit")
-		GameTooltip:AddLine(("Selected outfit: %s"):format(
-			tostring(self.outfitID or "none")), 0.6, 0.6, 0.6)
-		GameTooltip:AddLine(self.mogtrotStatus or "No transfer attempted yet.",
-			0.6, 0.6, 0.6, true)
+		GameTooltip:AddLine(("Selected outfit: %s"):format(OutfitName(self.outfitID)),
+			0.6, 0.6, 0.6)
+		if self.mogtrotStatus then
+			GameTooltip:AddLine(self.mogtrotStatus, 0.6, 0.6, 0.6, true)
+		end
 		GameTooltip:Show()
 	end)
 	pane.Transfer:SetScript("OnLeave", GameTooltip_Hide)
@@ -512,10 +519,12 @@ local function Ensure(library)
 			setPending = api.SetPendingTransmog,
 			getViewed = api.GetViewedOutfitSlotInfo,
 		})
-		self.mogtrotStatus = ("Verified %d of %d transferable changes; %d unavailable.")
-			:format(verified, attempted, unavailable)
-		self:SetText(("Transfer (%d/%d, %d unavailable)"):format(
-			verified, attempted, unavailable))
+		local status = ("Set %d of %d pieces on %s; save the outfit to keep them.")
+			:format(verified, attempted, OutfitName(self.outfitID))
+		if unavailable > 0 then
+			status = ("%s %d can't be used by this character."):format(status, unavailable)
+		end
+		self.mogtrotStatus = status
 	end)
 
 	pane:SetSize(PANE_W, extrasTop + ICON + GAP + 22 + FOOTER)
@@ -554,10 +563,10 @@ function LibraryDetailUI.Show(library, record)
 	frame.Title:SetText(Text.Title(record))
 	-- Players read class off the colour before they read the name, and the
 	-- cards already do this. Unknown class keeps the font's own colour.
-	local libraryUI = ns.LibraryUI
+	local cards = ns.LibraryCards
 	local className, classColor
-	if libraryUI and libraryUI.ClassInfoFor then
-		className, classColor = libraryUI.ClassInfoFor(record.classID)
+	if cards and cards.ClassInfoFor then
+		className, classColor = cards.ClassInfoFor(record.classID)
 	end
 	if classColor then
 		frame.Title:SetTextColor(classColor.r, classColor.g, classColor.b)
@@ -621,8 +630,8 @@ function LibraryDetailUI.Show(library, record)
 	end
 
 	if not LibraryDetailUI.HasLook(record) then
-		local ui = ns.LibraryUI
-		if ui and ui.ReturnPaneBody then ui.ReturnPaneBody() end
+		local lent = ns.LibraryBodies
+		if lent and lent.ReturnPaneBody then lent.ReturnPaneBody() end
 		frame.OwnScene:Hide()
 		frame.NoModel:SetText("Appearance not captured. Wear this outfit once.")
 		if not wasShown then LibraryDetailUI.Reanchor(library) end
@@ -635,20 +644,20 @@ function LibraryDetailUI.Show(library, record)
 	-- Borrow the body the wall built. Rebuilding one here would borrow from
 	-- whoever happens to be standing about now, and once the original donor has
 	-- gone that is a different face wearing the same clothes.
-	local ui = ns.LibraryUI
+	local lent = ns.LibraryBodies
 	local inset = { left = 0, right = 0, top = 0, bottom = 0 }
 
 	-- A twin first: that is the only way to match a body borrowed from a
 	-- stranger. Failing that, build one here, but only when doing so cannot
 	-- disagree with the card.
-	local shownBody = ui and ui.PaneBody and ui.PaneBody(record, frame.ModelSlot, inset)
+	local shownBody = lent and lent.PaneBody and lent.PaneBody(record, frame.ModelSlot, inset)
 	if shownBody then
 		frame.OwnScene:Hide()
 	else
-		if ui and ui.ReturnPaneBody then ui.ReturnPaneBody() end
-		if ui and ui.BodyIsDeterministic and ui.BodyIsDeterministic(record)
-			and ui.RenderInto then
-			local how = select(2, ui.RenderInto(frame.OwnScene, record))
+		if lent and lent.ReturnPaneBody then lent.ReturnPaneBody() end
+		if lent and lent.BodyIsDeterministic and lent.BodyIsDeterministic(record)
+			and lent.RenderInto then
+			local how = select(2, lent.RenderInto(frame.OwnScene, record))
 			shownBody = how ~= nil
 			frame.OwnScene:SetShown(shownBody and true or false)
 		else
@@ -657,8 +666,8 @@ function LibraryDetailUI.Show(library, record)
 	end
 
 	frame.NoModel:SetText(shownBody and ""
-		or "No body has been built for this look yet. Point at somebody of the"
-			.. " other sex and it will appear here.")
+		or "This look shows once you've been near a player of the other sex:"
+			.. " hover over, target or group with one.")
 
 	if not wasShown then LibraryDetailUI.Reanchor(library) end
 	frame:Show()
@@ -669,8 +678,8 @@ function LibraryDetailUI.Show(library, record)
 end
 
 function LibraryDetailUI.Hide()
-	if ns.LibraryUI and ns.LibraryUI.ReturnPaneBody then
-		ns.LibraryUI.ReturnPaneBody()
+	if ns.LibraryBodies and ns.LibraryBodies.ReturnPaneBody then
+		ns.LibraryBodies.ReturnPaneBody()
 	end
 	if pane then pane:Hide() end
 	shown = nil

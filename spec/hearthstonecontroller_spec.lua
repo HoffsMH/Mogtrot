@@ -373,6 +373,48 @@ describe("HearthstoneController", function()
 		end)
 	end)
 
+	describe("the fallback setting", function()
+		-- Outfit 7 has nothing linked; the bag hearthstone is pinned and the
+		-- toy is owned. Both are ready.
+		local function PinnedHearthOwnedToy(mode)
+			return MakeDeps({
+				links = {},
+				pins = { [HEARTH] = true },
+				fallbackMode = function() return mode end,
+			})
+		end
+
+		it("serves the pin with the setting absent", function()
+			local deps = PinnedHearthOwnedToy(nil)
+			deps.fallbackMode = nil
+			HearthstoneController.New(deps):PreClick()
+			assert.equals("item:" .. HEARTH, Attrs(deps).item)
+		end)
+
+		it("serves the pin in pinned mode", function()
+			local deps = PinnedHearthOwnedToy("pinned")
+			HearthstoneController.New(deps):PreClick()
+			assert.equals("item:" .. HEARTH, Attrs(deps).item)
+		end)
+
+		it("passes over the pin in random mode", function()
+			local deps = PinnedHearthOwnedToy("random")
+			HearthstoneController.New(deps):PreClick()
+			assert.equals(TOY, Attrs(deps).toy)
+			assert.equals("hearthstone: no usable linked hearthstone right now, "
+				.. "so this is a random hearthstone toy.", deps.lastSay)
+		end)
+
+		it("refuses in off mode and says why", function()
+			local deps = PinnedHearthOwnedToy("off")
+			HearthstoneController.New(deps):PreClick()
+			assert.is_nil(Attrs(deps)["type"])
+			assert.equals("hearthstone: nothing is linked to this outfit, and the "
+				.. "fallback is set to do nothing.", deps.lastWarn)
+			assert.is_nil(deps.rotationStates[7])
+		end)
+	end)
+
 	describe("PostClick rotation commit", function()
 		it("commits the rotation once and clears transient attributes", function()
 			local deps = MakeDeps({

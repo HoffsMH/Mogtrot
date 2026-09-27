@@ -102,9 +102,15 @@ describe("Macro.DEFS", function()
 		assert.equals("MogtrotHearthstone", Macro.DEFS.hearth.target)
 	end)
 
+	-- The S.E.L.F.I.E. Camera's icon, not the spyglass.
 	it("gives library capture a camera icon", function()
 		assert.equals("Mogtrot Snap", Macro.DEFS.snap.name)
-		assert.is_number(Macro.DEFS.snap.fixedIcon)
+		assert.equals(1109100, Macro.DEFS.snap.fixedIcon)
+	end)
+
+	it("has no donor macro", function()
+		assert.is_nil(Macro.DONOR)
+		assert.is_nil(Macro.DEFS.donor)
 	end)
 
 	it("hides a placed library capture handle", function()
@@ -299,7 +305,7 @@ describe("Macro.ActionBarCommands", function()
 		return function(slot)
 			local entry = entries[slot]
 			if not entry then return nil end
-			return entry.kind, entry.id
+			return entry.kind, entry.id, entry.subType
 		end
 	end
 
@@ -331,6 +337,15 @@ describe("Macro.ActionBarCommands", function()
 		local actions = { [2] = { kind = "macro", id = 4 } }
 		local found = Macro.ActionBarCommands(24, Actions(actions), Reader(bodies))
 		assert.is_true(found.open)
+		assert.is_nil(found.summon)
+	end)
+
+	-- A macro that casts a spell reports the spell's id, not its own index
+	-- (ActionButton.lua reads id as a spell when subType is "spell").
+	it("does not read a macro's spell id as a macro index", function()
+		local bodies = { [9] = "#mogtrot:summon\n/click MogtrotSummon" }
+		local actions = { [2] = { kind = "macro", id = 9, subType = "spell" } }
+		local found = Macro.ActionBarCommands(24, Actions(actions), Reader(bodies))
 		assert.is_nil(found.summon)
 	end)
 
@@ -398,5 +413,90 @@ describe("Macro.IconToApply with a wanted icon", function()
 	it("lets a fixed icon win over a handed one", function()
 		assert.equals(2869702, Macro.IconToApply("open", 136243, 999))
 		assert.is_nil(Macro.IconToApply("open", 2869702, 999))
+	end)
+end)
+
+describe("Macro.Sidebar", function()
+	local function Commands(entries)
+		local out = {}
+		for _, entry in ipairs(entries) do out[#out + 1] = entry.command end
+		return out
+	end
+
+	it("lists snap, mount, hearth, random outfit and window, top to bottom", function()
+		assert.same({ "snap", "summon", "hearth", "least", "open" },
+			Commands(Macro.Sidebar(true, {})))
+	end)
+
+	it("glows the three setup icons only", function()
+		local glow = {}
+		for _, entry in ipairs(Macro.Sidebar(true, {})) do
+			glow[entry.command] = entry.glow
+		end
+		assert.same({ snap = false, summon = true, hearth = true, least = false,
+			open = true }, glow)
+	end)
+
+	it("hides a setup icon while its macro is on a bar", function()
+		assert.same({ "snap", "hearth", "least" },
+			Commands(Macro.Sidebar(true, { summon = true, open = true })))
+	end)
+
+	it("never hides snap or random outfit, placed or not", function()
+		assert.same({ "snap", "least" },
+			Commands(Macro.Sidebar(true, { snap = true, least = true, summon = true,
+				hearth = true, open = true })))
+	end)
+
+	it("drops every setup icon when the setting is off", function()
+		assert.same({ "snap", "least" }, Commands(Macro.Sidebar(false, {})))
+	end)
+end)
+
+describe("Macro.SidebarTip", function()
+	it("names a slash command wherever typing one works", function()
+		local _, snap = Macro.SidebarTip(Macro.SNAP)
+		assert.equals("Press this to snapshot another player's appearance. You can also "
+			.. "drag this to your bars or type /mogt snap while targeting another player.",
+			snap)
+		local _, mount = Macro.SidebarTip(Macro.SUMMON)
+		assert.equals("Drag this to replace your mount button on your bars or type "
+			.. "/mogt summon.", mount)
+		local _, window = Macro.SidebarTip(Macro.OPEN)
+		assert.equals("Drag this to your bars or type /mogt to open this window.", window)
+	end)
+
+	-- A toy, an item or an outfit change needs a secure click, which a typed
+	-- /mogt line cannot give; the macro's own /click line can.
+	it("quotes the /click line where only a secure click works", function()
+		local _, hearth = Macro.SidebarTip(Macro.HEARTH)
+		assert.equals("Drag this to replace your hearthstone on your bars or type "
+			.. "/click MogtrotHearthstone.", hearth)
+		local _, least = Macro.SidebarTip(Macro.LEAST)
+		assert.equals("A random outfit, starting with those you haven't used much. You "
+			.. "can also drag this to your bars or type /click MogtrotLeastWorn.", least)
+	end)
+
+	it("quotes the summon /click line under the LiteMount fallback", function()
+		local _, mount = Macro.SidebarTip(Macro.SUMMON, true)
+		assert.equals("Drag this to replace your mount button on your bars or type "
+			.. "/click MogtrotSummon.", mount)
+	end)
+
+	it("titles each icon", function()
+		local titles = {}
+		for _, command in ipairs(Macro.SIDEBAR) do
+			titles[#titles + 1] = (Macro.SidebarTip(command))
+		end
+		assert.same({ "Snap", "Mount", "Hearth", "Random outfit", "Mogtrot window" }, titles)
+	end)
+
+	it("quotes only lines each macro body really runs", function()
+		for _, command in ipairs({ Macro.HEARTH, Macro.LEAST }) do
+			local line = Macro.TypedLine(command)
+			assert.is_truthy(Macro.Body(command):find(line, 1, true))
+		end
+		assert.equals("/click MogtrotSummon", Macro.TypedLine(Macro.SUMMON, true))
+		assert.is_truthy(Macro.Body(Macro.SUMMON):find("/click MogtrotSummon", 1, true))
 	end)
 end)

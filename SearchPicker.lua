@@ -8,7 +8,10 @@ local _, ns = ...
 --
 --   items   = { { name, icon, iconAtlas, tag, tagColor, path, note, noteDim,
 --                divider, preselected, ...caller's keys... } }
---   buttons = { { text, width, danger, tipTitle, tipBody, onClick(chosen) } }
+--   buttons = { { text, width, danger, tipTitle, tipBody, onClick(chosen),
+--                 countText(count) } }
+--   countText, where given, labels a multi-select button once something is
+--   ticked; the button and the window widen to fit its longest form
 --   onChoose(item) selects one item immediately instead of showing a confirm button
 --
 -- buttons are listed left to right; Cancel is added on the right by the window.
@@ -233,16 +236,17 @@ local function InitRow(row, item)
 	PaintRow(row, item)
 end
 
--- A count is appended only where more than one item can be chosen, so the label
--- names the exact number the click is about to change. Parenthesised rather than
--- "Replace in 3", which reads as a countdown at low numbers.
+-- A count is shown only where more than one item can be chosen, so the label
+-- names the exact number the click is about to change. Parenthesised unless the
+-- caller words it, since a bare "Replace in 3" reads as a countdown.
 local function SetConfirmLabels(count)
 	for _, button in ipairs(confirmButtons) do
 		local spec = button.spec
 		if spec then
 			local text = spec.text
 			if pickerWindow.multiSelect and count > 0 then
-				text = ("%s (%d)"):format(text, count)
+				text = spec.countText and spec.countText(count)
+					or ("%s (%d)"):format(text, count)
 			end
 			if spec.danger then
 				text = RED_FONT_COLOR:WrapTextInColorCode(text)
@@ -310,8 +314,9 @@ end
 -- Laid out right to left from Cancel, so the list reads in the order it is drawn.
 -- Every button is rewired on every open, and any left over from a previous caller
 -- loses its handler rather than sitting there still armed.
-local function LayoutButtons(specs)
+local function LayoutButtons(specs, itemCount)
 	local anchor = pickerWindow.Cancel
+	local needed = 2 * PAD + pickerWindow.Cancel:GetWidth()
 
 	for i = #specs, 1, -1 do
 		local spec = specs[i]
@@ -319,7 +324,14 @@ local function LayoutButtons(specs)
 		button.spec = spec
 		button.tipTitle = spec.tipTitle
 		button.tipBody = spec.tipBody
-		button:SetWidth(spec.width or 90)
+		local width = spec.width or 90
+		-- Sized for the longest label it can show: every item ticked.
+		if spec.countText and pickerWindow.multiSelect then
+			button:SetText(spec.countText(math.max(itemCount, 1)))
+			width = math.max(width, math.ceil(button:GetTextWidth()) + 24)
+		end
+		button:SetWidth(width)
+		needed = needed + width + 6
 		button:ClearAllPoints()
 		button:SetPoint("RIGHT", anchor, "LEFT", -6, 0)
 		button:SetScript("OnClick", function()
@@ -336,6 +348,29 @@ local function LayoutButtons(specs)
 		confirmButtons[i].spec = nil
 		confirmButtons[i]:SetScript("OnClick", nil)
 		confirmButtons[i]:Hide()
+	end
+
+	pickerWindow:SetWidth(math.max(WIDTH, needed))
+end
+
+-- Where the window was last dragged, else right of centre.
+local function PlaceSaved(window)
+	window:ClearAllPoints()
+	local pos = MogtrotDB.searchPosition
+	if pos then
+		window:SetPoint(pos.point, UIParent, pos.relPoint, pos.x, pos.y)
+	else
+		window:SetPoint("CENTER", UIParent, "CENTER", 200, 0)
+	end
+end
+
+-- Beside anchor.frame, on anchor.side ("left" or "right"), tops aligned.
+local function PlaceBeside(window, anchor)
+	window:ClearAllPoints()
+	if anchor.side == "left" then
+		window:SetPoint("TOPRIGHT", anchor.frame, "TOPLEFT", -6, 0)
+	else
+		window:SetPoint("TOPLEFT", anchor.frame, "TOPRIGHT", 6, 0)
 	end
 end
 
@@ -451,12 +486,7 @@ local function EnsureWindow()
 	-- No secure children here, so ESC can stay registered in combat too.
 	table.insert(UISpecialFrames, "MogtrotSearchPicker")
 
-	local pos = MogtrotDB.searchPosition
-	if pos then
-		window:SetPoint(pos.point, UIParent, pos.relPoint, pos.x, pos.y)
-	else
-		window:SetPoint("CENTER", UIParent, "CENTER", 200, 0)
-	end
+	PlaceSaved(window)
 
 	window:Hide()
 	return window
@@ -475,6 +505,14 @@ function ns.OpenSearchPicker(config)
 	-- Above whatever opened it, or the click looks like it did nothing. A
 	-- caller in a higher strata has to say so; Raise settles the rest.
 	win:SetFrameStrata(config.strata or "HIGH")
+
+	-- config.anchor = { frame, side } opens it beside the caller's frame;
+	-- without one it opens where it was last dragged.
+	if config.anchor and config.anchor.frame then
+		PlaceBeside(win, config.anchor)
+	else
+		PlaceSaved(win)
+	end
 
 	win.items = config.items or {}
 	win.multiSelect = config.multi == true
@@ -512,7 +550,7 @@ function ns.OpenSearchPicker(config)
 	end
 	win.SearchBox:SetText("")
 
-	LayoutButtons(config.buttons or {})
+	LayoutButtons(config.buttons or {}, #win.items)
 
 	win:Show()
 	win:Raise()

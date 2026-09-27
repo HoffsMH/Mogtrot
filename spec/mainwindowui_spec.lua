@@ -28,3 +28,38 @@ describe("MainWindowUI library control", function()
 		assert.equal("Mogtrot settings", MainWindowUI.SettingsTooltip)
 	end)
 end)
+
+-- A keybinding clicks the summon button on the key going down and again on it
+-- coming up. The secure action fires on the up edge, so the choice is made
+-- there and the down edge does nothing.
+describe("MainWindowUI summon button", function()
+	local MainWindowUI, summons, button, addon
+
+	before_each(function()
+		MainWindowUI = assert(loadfile("MainWindowUI.lua"))("Mogtrot", {})
+		summons = {}
+		button = { SetAttribute = function() end }
+		addon = {
+			SummonForActiveOutfit = function(_, allowDelegate)
+				summons[#summons + 1] = allowDelegate
+				return false
+			end,
+		}
+		_G.InCombatLockdown = function() return false end
+	end)
+
+	after_each(function() _G.InCombatLockdown = nil end)
+
+	it("summons once per key press", function()
+		MainWindowUI.SummonPreClick(button, addon, true)
+		MainWindowUI.SummonPreClick(button, addon, false)
+		assert.same({ true }, summons)
+	end)
+
+	it("summons once per key press in combat too", function()
+		_G.InCombatLockdown = function() return true end
+		MainWindowUI.SummonPreClick(button, addon, true)
+		MainWindowUI.SummonPreClick(button, addon, false)
+		assert.same({ false }, summons)
+	end)
+end)

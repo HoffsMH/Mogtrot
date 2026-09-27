@@ -1,20 +1,10 @@
 local ADDON_NAME, ns = ...
 if type(ns) ~= "table" then ns = {} end
 
--- Tracks how long each outfit has been worn and prepares totals for the outfit
--- list, tooltip, and wear report.
+-- Tracks how long each outfit has been worn, for the row tooltip and the
+-- least-worn pick.
 
 local Wear = {}
-
-function Wear.ShowInList(settings)
-	return settings ~= nil and settings.showWearInList == true
-end
-
-function Wear.SetShowInList(settings, enabled)
-	if settings then settings.showWearInList = enabled and true or false end
-end
-
-Wear.MIN_HEAT = 0.06
 
 local DAY, HOUR, MINUTE = 86400, 3600, 60
 
@@ -102,15 +92,6 @@ function Wear.Snapshot(session, now, liveOutfitIDs)
 		sum = totalSeconds,
 		count = outfitCount,
 	}
-end
-
-function Wear.Heat(maxSeconds, seconds)
-	if type(maxSeconds) ~= "number" or maxSeconds <= 0 then return 0 end
-	if type(seconds) ~= "number" or seconds <= 0 then return 0 end
-
-	local heat = math.sqrt(math.min(seconds / maxSeconds, 1))
-
-	return math.max(heat, Wear.MIN_HEAT)
 end
 
 function Wear.Share(totalSeconds, seconds)

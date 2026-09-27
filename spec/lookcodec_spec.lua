@@ -173,6 +173,31 @@ describe("LookCodec.FromSlotInfos", function()
 		assert.same({ 5, 0, 0 }, look[3])
 	end)
 
+	-- A split shoulder with one side hidden: the hidden side is the player's
+	-- choice, and dropping it would read as unsplit and draw both sides.
+	it("keeps the hidden side of a split shoulder when the other is assigned", function()
+		local look = LookCodec.FromSlotInfos({
+			{ slotID = 3, primary = Info(ASSIGNED, 184306), secondary = Info(HIDDEN, 77343) },
+			{ slotID = 1, primary = Info(HIDDEN, 77344) },
+		}, ASSIGNED, HIDDEN)
+		assert.same({ 184306, 77343, 0 }, look[3])
+		assert.same({ 0, 0, 0 }, look[1])
+
+		look = LookCodec.FromSlotInfos({
+			{ slotID = 3, primary = Info(HIDDEN, 77343), secondary = Info(ASSIGNED, 195671) },
+		}, ASSIGNED, HIDDEN)
+		assert.same({ 77343, 195671, 0 }, look[3])
+	end)
+
+	it("stores a shoulder hidden on both sides, or hidden beside nothing, as empty", function()
+		local look = LookCodec.FromSlotInfos({
+			{ slotID = 3, primary = Info(HIDDEN, 77343), secondary = Info(HIDDEN, 77343) },
+			{ slotID = 5, primary = Info(HIDDEN, 104602), secondary = Info(UNASSIGNED, 0) },
+		}, ASSIGNED, HIDDEN)
+		assert.same({ 0, 0, 0 }, look[3])
+		assert.same({ 0, 0, 0 }, look[5])
+	end)
+
 	it("reads a missing slot info as empty and skips entries with no slot", function()
 		local look = LookCodec.FromSlotInfos({
 			{ slotID = 5 },
@@ -180,5 +205,28 @@ describe("LookCodec.FromSlotInfos", function()
 		}, ASSIGNED)
 
 		assert.same({ [5] = { 0, 0, 0 } }, look)
+	end)
+end)
+
+-- What a stored slot hands the model. A shoulder split with only its second
+-- side assigned stores a primary of 0, which an actor draws as nothing at all.
+describe("LookCodec.DrawParts", function()
+	local HIDDEN = LookCodec.HIDDEN_SHOULDER_SOURCE
+
+	it("fills an empty shoulder primary with the hidden shoulder", function()
+		assert.equal(77343, HIDDEN)
+		assert.same({ HIDDEN, 195671, 0 }, { LookCodec.DrawParts(3, 0, 195671, 0) })
+	end)
+
+	it("leaves every other shoulder shape as stored", function()
+		assert.same({ 5, 0, 0 }, { LookCodec.DrawParts(3, 5, 0, 0) })
+		assert.same({ 5, 5, 0 }, { LookCodec.DrawParts(3, 5, 5, 0) })
+		assert.same({ 5, 6, 0 }, { LookCodec.DrawParts(3, 5, 6, 0) })
+		assert.same({ 5, -1, 0 }, { LookCodec.DrawParts(3, 5, -1, 0) })
+	end)
+
+	it("never fills another slot's empty primary", function()
+		assert.same({ 0, -1, 8553 }, { LookCodec.DrawParts(16, 0, -1, 8553) })
+		assert.same({ 0, 7, 0 }, { LookCodec.DrawParts(5, 0, 7, 0) })
 	end)
 end)

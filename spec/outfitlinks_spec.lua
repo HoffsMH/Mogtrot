@@ -91,6 +91,7 @@ describe("OutfitLinks", function()
 			assert.equal(2, had)
 			assert.equal(2, total)
 			assert.same({ [101] = true, [102] = true }, store[2])
+			assert.same({ [101] = true, [102] = true }, store[1])
 		end)
 
 		it("merges into the target without aliasing source or target", function()
@@ -121,6 +122,24 @@ describe("OutfitLinks", function()
 			local store = Store({ [1] = { [guid] = true } })
 			OutfitLinks.Copy(store, 1, 2, false)
 			assert.same({ [guid] = true }, store[2])
+		end)
+	end)
+
+	describe("Clear", function()
+		it("removes every link of one outfit and reports how many", function()
+			local store = Store({
+				[1] = { [101] = true, [102] = true },
+				[2] = { [101] = true },
+			})
+			assert.equal(2, OutfitLinks.Clear(store, 1))
+			assert.is_nil(store[1])
+			assert.same({ [101] = true }, store[2])
+		end)
+
+		it("reports zero for an outfit with no links", function()
+			local store = Store({})
+			assert.equal(0, OutfitLinks.Clear(store, 9))
+			assert.is_nil(store[9])
 		end)
 	end)
 

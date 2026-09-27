@@ -9,10 +9,6 @@ ns.OutfitLookCapture = OutfitLookCapture
 local NO_TRANSMOG = (Constants and Constants.Transmog and Constants.Transmog.NoTransmogID) or 0
 local captureModel
 
-function OutfitLookCapture.GetModel()
-	return captureModel
-end
-
 function OutfitLookCapture.Attach(Addon, callbacks)
 	local function EnsureModel()
 		if captureModel then return captureModel end
@@ -41,7 +37,7 @@ function OutfitLookCapture.Attach(Addon, callbacks)
 
 		local list = captureModel:GetItemTransmogInfoList()
 		if not list then
-			if verbose then self:Say("the model has not reported an appearance list yet.") end
+			if verbose then self:Say("your appearance has not loaded yet; try again in a moment.") end
 			return
 		end
 
@@ -58,7 +54,7 @@ function OutfitLookCapture.Attach(Addon, callbacks)
 		end
 
 		if not anyAppearance then
-			if verbose then self:Say("the model is still loading, nothing captured.") end
+			if verbose then self:Say("your appearance has not loaded yet; try again in a moment.") end
 			return
 		end
 

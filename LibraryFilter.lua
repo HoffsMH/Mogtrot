@@ -395,6 +395,14 @@ function LibraryFilter.SelectionCount(state, races)
 	return selected
 end
 
+-- How much of one filter is ticked, as the status line says it: "All",
+-- "None", or "2/5".
+function LibraryFilter.Label(selected, total)
+	if selected == total then return "All" end
+	if selected == 0 then return "None" end
+	return selected .. "/" .. total
+end
+
 -- Whatever the card is titled with: the set's name on one of mine, the
 -- player's name on a snapshot.
 function LibraryFilter.SearchText(record)

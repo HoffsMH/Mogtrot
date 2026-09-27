@@ -31,6 +31,7 @@ local Rotation = ns.Rotation or require("Rotation")
 --     now,               -- function() -> number, for cooldown math
 --     warn,              -- function(message) for visible refusals
 --     say,               -- function(message) for what just happened
+--     fallbackMode,      -- optional function() -> HearthPick mode
 -- }
 --
 -- Rotation key: outfitID when one is active, otherwise the sentinel false
@@ -88,7 +89,7 @@ function HearthstoneController.New(deps)
 
 	function controller.PreClick()
 		if deps.combat() then
-			deps.warn("hearthstone: cannot change the action during combat")
+			deps.warn("hearthstone: can't choose one in combat.")
 			return
 		end
 
@@ -113,6 +114,8 @@ function HearthstoneController.New(deps)
 
 		local plan = HearthPick.Plan({
 			candidates = candidates,
+			linked = outfitID and deps.links and deps.links[outfitID] or {},
+			mode = deps.fallbackMode and deps.fallbackMode() or nil,
 			registry = deps.registry,
 			isEligible = function(itemID) return Eligible(deps, itemID) end,
 			state = state,

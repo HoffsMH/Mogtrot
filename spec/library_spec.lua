@@ -168,6 +168,26 @@ describe("Library", function()
 		end)
 	end)
 
+	describe("Find", function()
+		it("names the held record for a repeat and writes nothing", function()
+			local library = Library.New()
+			Library.Add(library, Snap(), 100)
+			local before = library.records[1].seenCount
+			assert.equal(1, Library.Find(library, Snap()))
+			assert.equal(before, library.records[1].seenCount)
+			assert.equal(100, library.records[1].updatedAt)
+			assert.equal(2, library.nextID)
+		end)
+
+		it("finds nothing for a new look or a record with no key", function()
+			local library = Library.New()
+			Library.Add(library, Snap(), 100)
+			assert.is_nil(Library.Find(library, Snap("1:6,0,0")))
+			assert.is_nil(Library.Find(library, { source = "snap" }))
+			assert.equal(2, library.nextID)
+		end)
+	end)
+
 	describe("Add", function()
 		it("assigns an id and counts the first sighting", function()
 			local library = Library.New()
@@ -600,5 +620,68 @@ describe("Library archive, read back", function()
 			Library.CardControls(library.archive[1]))
 		assert.same({ archive = false, restore = false, delete = false },
 			Library.CardControls({ source = "mine", look = "" }))
+	end)
+end)
+
+-- A player who rolls back to an older build keeps a library this build cannot
+-- read correctly. Nothing here may change it until they update again.
+describe("a library saved by a newer Mogtrot", function()
+	local function Snap(look)
+		return { source = "snap", look = look or "1:5,0,0", raceID = 6, sex = 2 }
+	end
+
+	local function Newer()
+		local library = Library.New()
+		Library.Add(library, Snap("1:1,0,0"), 10)
+		Library.Add(library, Snap("1:2,0,0"), 20)
+		Library.Archive(library, 2, 100)
+		library.version = Library.VERSION + 1
+		library.future = { kept = true }
+		return library
+	end
+
+	local function Copy(value)
+		if type(value) ~= "table" then return value end
+		local out = {}
+		for k, v in pairs(value) do out[k] = Copy(v) end
+		return out
+	end
+
+	it("is read-only, and says why", function()
+		local writable, why = Library.Writable(Newer())
+		assert.is_false(writable)
+		assert.equal("newer", why)
+		assert.is_true(Library.Writable(Library.New()))
+	end)
+
+	it("is not migrated, added to, archived, restored, deleted or evicted", function()
+		local library = Newer()
+		local before = Copy(library)
+		assert.is_nil(Library.Migrate({ library = library }))
+		assert.is_nil((Library.Add(library, Snap("1:3,0,0"), 30)))
+		assert.is_nil((Library.Upsert(library, Snap("1:1,0,0"), 30)))
+		assert.is_false(Library.Archive(library, 1, 200))
+		assert.is_nil((Library.Restore(library, 2)))
+		assert.is_false(Library.Delete(library, 1))
+		assert.equal(0, Library.EvictArchived(library, 1, 999 * 86400))
+		assert.same(before, library)
+	end)
+
+	it("is not synced from outfits or custom sets", function()
+		local owner = { guid = "Player-1", name = "Alpha", realm = "Aegwynn",
+			raceID = 1, raceFile = "Human", sex = 3, classID = 1 }
+		local library = Newer()
+		library.records[9] = { id = 9, source = "mine", origin = "outfit", originID = 77,
+			guid = "Player-1", look = "1:9,0,0" }
+		library.records[10] = { id = 10, source = "mine", origin = "customSet",
+			originID = 78, guid = "Player-1", look = "1:9,0,0" }
+		local before = Copy(library)
+		local _, whyOutfits = require("OutfitLibrarySync").Reconcile(library, owner,
+			{ { outfitID = 7, name = "Red" } }, { [7] = { [1] = { 101, 0, 0 } } }, 50)
+		local _, whySets = require("CustomSetLibrarySync").Reconcile(library, owner,
+			{ { customSetID = 7, name = "Red", look = { [1] = { 101, 0, 0 } } } }, 50, true)
+		assert.truthy(whyOutfits)
+		assert.truthy(whySets)
+		assert.same(before, library)
 	end)
 end)

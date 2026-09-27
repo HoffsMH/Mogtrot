@@ -51,8 +51,8 @@ describe("no duplicate definitions", function()
 	it("reads something at all", function()
 		-- Named against a function that is part of the addon rather than a
 		-- probe, so deleting a probe cannot quietly disarm this guard.
-		local counts = Definitions(Read("Diagnostics.lua"))
-		assert.equal(1, counts["Diagnostics.Handle"])
-		assert.equal(1, counts["Diagnostics.ShowState"])
+		local counts = Definitions(Read("RaceBody.lua"))
+		assert.equal(1, counts["RaceBody.Lookup"])
+		assert.equal(1, counts["RaceBody.UseNativeForm"])
 	end)
 end)

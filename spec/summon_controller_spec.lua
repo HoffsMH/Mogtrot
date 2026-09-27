@@ -44,15 +44,5 @@ describe("SummonController", function()
 			assert.is_false(addon:IsMountPinned(42))
 			assert.equal(2, addon.refreshes)
 		end)
-
-		it("refreshes the macro icons when an unpinned mount is kept", function()
-			addon:ToggleMountPin(42)
-			addon:ToggleMountPin(42)
-			addon.refreshes = 0
-
-			addon:KeepMountPinned(42)
-			assert.is_true(addon:IsMountPinned(42))
-			assert.equal(1, addon.refreshes)
-		end)
 	end)
 end)

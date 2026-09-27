@@ -35,6 +35,22 @@ describe("OutfitPreviewRender", function()
 		assert.same({ { { 101, 0, 0 }, 5 } }, applied)
 	end)
 
+	it("dresses a shoulder assigned on its second side only", function()
+		local cleared, applied = {}, {}
+		local model = {
+			SetAutoDress = function() end,
+			Undress = function() end,
+			UndressSlot = function(_, slot) cleared[#cleared + 1] = slot end,
+			SetItemTransmogInfo = function(_, info, slot)
+				applied[#applied + 1] = { info, slot }
+			end,
+		}
+		OutfitPreviewRender.ApplyLook(model, { [3] = { 0, 195671, 0 } },
+			function(a, b, c) return { a, b, c } end, { 3 })
+		assert.same({}, cleared)
+		assert.same({ { { 77343, 195671, 0 }, 3 } }, applied)
+	end)
+
 	it("reloads and dresses repeated requests for the same outfit", function()
 		local preview = NewPreview()
 		local applied = {}

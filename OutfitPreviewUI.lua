@@ -1,4 +1,5 @@
 local _, ns = ...
+if type(ns) ~= "table" then ns = {} end
 local OutfitPreviewRender = ns.OutfitPreviewRender
 
 -- Controls the outfit preview beside the main window and the outfit preview
@@ -6,6 +7,21 @@ local OutfitPreviewRender = ns.OutfitPreviewRender
 -- docked frame; dockOwner is whichever picker last asked for it.
 local OutfitPreviewUI = {}
 ns.OutfitPreviewUI = OutfitPreviewUI
+
+-- Where the pairing window's preview docks for a cursor at x, y over a window
+-- spanning left..right and bottom..top: the nearer of its left and right edges
+-- (right on a tie), and how far up that edge, 0 at the bottom and 1 at the top.
+-- Never above or below, which would leave no side free for the chooser.
+function OutfitPreviewUI.PairingDock(x, y, left, right, bottom, top)
+	local side = math.abs(x - left) < math.abs(x - right) and "left" or "right"
+	local position = (y - bottom) / math.max(1, top - bottom)
+	return side, math.max(0, math.min(position, 1))
+end
+
+-- The pairing window's outfit chooser opens on the side the preview leaves free.
+function OutfitPreviewUI.ChooserSide(dockSide)
+	return dockSide == "left" and "right" or "left"
+end
 
 local function ApplyLook(model, look)
 	OutfitPreviewRender.ApplyLook(model, look, ItemUtil.CreateItemTransmogInfo)
@@ -39,11 +55,15 @@ local function BuildOutfitPreview(name, parent)
 	return preview
 end
 
+-- The last worn appearance first, equipped gear included; the outfit's
+-- definition until it has been worn.
+function OutfitPreviewUI.PreviewLook(char, outfitID)
+	local worn, looks = char.worn, char.looks
+	return (worn and worn[outfitID]) or (looks and looks[outfitID])
+end
+
 local function RenderOutfitPreview(preview, outfitID)
-	-- The last worn appearance first, equipped gear included; the outfit's
-	-- definition until it has been worn.
-	local worn, looks = MogtrotCharDB.worn, MogtrotCharDB.looks
-	local look = (worn and worn[outfitID]) or (looks and looks[outfitID])
+	local look = OutfitPreviewUI.PreviewLook(MogtrotCharDB, outfitID)
 	if not look then
 		preview.outfitID = outfitID
 		preview.renderToken = (preview.renderToken or 0) + 1
@@ -96,6 +116,13 @@ local function PaintDockGlow(glow, side)
 	end
 end
 
+-- The main window's left edge, counting its sidebar while that shows.
+function OutfitPreviewUI.LeftEdge(mainWindow)
+	local sidebar = mainWindow.Sidebar
+	if sidebar and sidebar:IsShown() then return sidebar end
+	return mainWindow
+end
+
 function OutfitPreviewUI.Attach(Addon, callbacks)
 	local previewFrame, mountEditPreview, searchPickerPreview, dockOwner
 	local mountEditDock = { side = "right", position = 0.5 }
@@ -104,41 +131,29 @@ function OutfitPreviewUI.Attach(Addon, callbacks)
 	local function EnsurePreview()
 		if previewFrame then return previewFrame end
 		previewFrame = BuildOutfitPreview("MogtrotPreview", mainWindow)
-		previewFrame:SetPoint("TOPRIGHT", mainWindow, "TOPLEFT", -6, 0)
+		previewFrame:SetPoint("TOPRIGHT", OutfitPreviewUI.LeftEdge(mainWindow), "TOPLEFT", -6, 0)
 		return previewFrame
 	end
 
 	local function UpdateMountEditDockGlow()
 		if not (dockOwner and mountEditPreview) then return end
-		local opposite = { left = "right", right = "left", top = "bottom", bottom = "top" }
+		local opposite = { left = "right", right = "left" }
 		PaintDockGlow(dockOwner.DockGlow, mountEditDock.side)
 		PaintDockGlow(mountEditPreview.DockGlow, opposite[mountEditDock.side])
 	end
 
 	local function ApplyMountEditDock()
 		if not (dockOwner and mountEditPreview) then return end
-		local side = mountEditDock.side
 		local position = math.max(0, math.min(mountEditDock.position or 0.5, 1))
-		local pickerWidth, pickerHeight = dockOwner:GetSize()
-		local previewWidth, previewHeight = mountEditPreview:GetSize()
+		local pickerHeight = dockOwner:GetHeight()
+		local previewHeight = mountEditPreview:GetHeight()
+		local offset = (position - 0.5) * math.max(0, pickerHeight - previewHeight)
 
 		mountEditPreview:ClearAllPoints()
-		if side == "left" or side == "right" then
-			local span = math.max(0, pickerHeight - previewHeight)
-			local offset = (position - 0.5) * span
-			if side == "left" then
-				mountEditPreview:SetPoint("RIGHT", dockOwner, "LEFT", 0, offset)
-			else
-				mountEditPreview:SetPoint("LEFT", dockOwner, "RIGHT", 0, offset)
-			end
+		if mountEditDock.side == "left" then
+			mountEditPreview:SetPoint("RIGHT", dockOwner, "LEFT", 0, offset)
 		else
-			local span = math.max(0, pickerWidth - previewWidth)
-			local offset = (position - 0.5) * span
-			if side == "top" then
-				mountEditPreview:SetPoint("BOTTOM", dockOwner, "TOP", offset, 0)
-			else
-				mountEditPreview:SetPoint("TOP", dockOwner, "BOTTOM", offset, 0)
-			end
+			mountEditPreview:SetPoint("LEFT", dockOwner, "RIGHT", 0, offset)
 		end
 		UpdateMountEditDockGlow()
 	end
@@ -152,26 +167,8 @@ function OutfitPreviewUI.Attach(Addon, callbacks)
 		local bottom, top = dockOwner:GetBottom(), dockOwner:GetTop()
 		if not (left and right and bottom and top) then return end
 
-		local distances = {
-			left = math.abs(x - left),
-			right = math.abs(x - right),
-			bottom = math.abs(y - bottom),
-			top = math.abs(y - top),
-		}
-		local side, nearest = "right", math.huge
-		for _, candidate in ipairs({ "left", "right", "bottom", "top" }) do
-			if distances[candidate] < nearest then
-				side, nearest = candidate, distances[candidate]
-			end
-		end
-
-		mountEditDock.side = side
-		if side == "left" or side == "right" then
-			mountEditDock.position = (y - bottom) / math.max(1, top - bottom)
-		else
-			mountEditDock.position = (x - left) / math.max(1, right - left)
-		end
-		mountEditDock.position = math.max(0, math.min(mountEditDock.position, 1))
+		mountEditDock.side, mountEditDock.position =
+			OutfitPreviewUI.PairingDock(x, y, left, right, bottom, top)
 		ApplyMountEditDock()
 	end
 
@@ -233,9 +230,10 @@ function OutfitPreviewUI.Attach(Addon, callbacks)
 
 		local preview = EnsurePreview()
 		preview:ClearAllPoints()
-		local previewOnLeft = (mainWindow:GetLeft() or 0) > preview:GetWidth() + 10
+		local leftEdge = OutfitPreviewUI.LeftEdge(mainWindow)
+		local previewOnLeft = (leftEdge:GetLeft() or 0) > preview:GetWidth() + 10
 		if previewOnLeft then
-			preview:SetPoint("TOPRIGHT", mainWindow, "TOPLEFT", -6, 0)
+			preview:SetPoint("TOPRIGHT", leftEdge, "TOPLEFT", -6, 0)
 		else
 			preview:SetPoint("TOPLEFT", mainWindow, "TOPRIGHT", 6, 0)
 		end
@@ -272,6 +270,7 @@ function OutfitPreviewUI.Attach(Addon, callbacks)
 		BuildDockGlow = BuildDockGlow,
 		ApplyMountEditDock = ApplyMountEditDock,
 		ShowEditPreview = ShowEditPreview,
+		MountEditDockSide = function() return mountEditDock.side end,
 		HideMountEditPreview = function()
 			if not mountEditPreview then return end
 			mountEditPreview:Hide()
@@ -304,3 +303,5 @@ function OutfitPreviewUI.Attach(Addon, callbacks)
 		end,
 	}
 end
+
+return OutfitPreviewUI

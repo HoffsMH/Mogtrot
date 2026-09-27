@@ -428,3 +428,18 @@ describe("LibraryFilter archived", function()
 		assert.is_false(LibraryFilter.ShowsArchived(nil))
 	end)
 end)
+
+describe("LibraryFilter.Label", function()
+	it("says All when everything is ticked, even when there is nothing", function()
+		assert.equal("All", LibraryFilter.Label(5, 5))
+		assert.equal("All", LibraryFilter.Label(0, 0))
+	end)
+
+	it("says None when nothing is ticked", function()
+		assert.equal("None", LibraryFilter.Label(0, 5))
+	end)
+
+	it("counts a partial selection against the whole", function()
+		assert.equal("2/5", LibraryFilter.Label(2, 5))
+	end)
+end)

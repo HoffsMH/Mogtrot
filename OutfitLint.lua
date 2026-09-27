@@ -15,35 +15,21 @@ OutfitLint.Colours = {
 local APPEARANCE_TYPE = (Enum and Enum.TransmogType and Enum.TransmogType.Appearance) or 0
 local ASSIGNED = (Enum and Enum.TransmogOutfitDisplayType
 	and Enum.TransmogOutfitDisplayType.Assigned) or 1
+local HIDDEN = (Enum and Enum.TransmogOutfitDisplayType
+	and Enum.TransmogOutfitDisplayType.Hidden) or 3
 local SWEEP_STEP_DELAY = 0.1
 local SWEEP_TIMEOUT = 3.0
 local SLOT_SETTLE_DELAY = 0.2
+-- An outfit not yet viewed this session answers with most slots unassigned
+-- until its data lands, which can be after the slot refresh. The sweep keeps
+-- a read only once two reads this far apart agree.
+local CONFIRM_DELAY = 0.5
+local CONFIRM_TRIES = 6
 local sweepToken = 0
 local slotReadyToken = 0
 
 function OutfitLint.Build()
 	return select(4, GetBuildInfo()) or 0
-end
-
-local DISPLAY_ENUM_NAMES = {
-	UNASSIGNED = "Unassigned",
-	ASSIGNED = "Assigned",
-	EQUIPPED = "Equipped",
-	HIDDEN = "Hidden",
-	DISABLED = "Disabled",
-}
-
-local function CheckDisplayEnum(addon)
-	local live = Enum and Enum.TransmogOutfitDisplayType
-	if not live then return end
-
-	for key, liveName in pairs(DISPLAY_ENUM_NAMES) do
-		if live[liveName] ~= Lint.DISPLAY[key] then
-			addon:WarnOnce("displayEnum", "this build numbers transmog slot states "
-				.. "differently, so outfit completeness is not trustworthy here.")
-			return
-		end
-	end
 end
 
 local function SlotDisplayName(slotInfo)
@@ -100,16 +86,19 @@ local function ReadViewedSlot(slot, option)
 	return info and info.displayType
 end
 
-function OutfitLint.MeasureViewed(addon)
+local function MeasureRecord()
+	return Lint.Measure(Lint.SlotDefs(CharacterSlotInfos()), ReadViewedSlot,
+		OutfitLint.Build())
+end
+
+function OutfitLint.MeasureViewed(_addon)
 	local char = MogtrotCharDB
 	if not char or not char.slots then return end
 
 	local outfitID = C_TransmogOutfitInfo.GetCurrentlyViewedOutfitID()
 	if not outfitID or outfitID == 0 then return end
 
-	CheckDisplayEnum(addon)
-	local record = Lint.Measure(Lint.SlotDefs(CharacterSlotInfos()), ReadViewedSlot,
-		OutfitLint.Build())
+	local record = MeasureRecord()
 	if not record then return end
 
 	char.slots[outfitID] = record
@@ -134,8 +123,8 @@ local function WeaponOption(slot)
 end
 
 -- The viewed outfit's slot infos per inventory slot, read through the API so
--- Blizzard's window need not be open. Same parts the ingest reads from the
--- window's slot frames.
+-- Blizzard's window need not be open. Same parts BlizzardOutfitUI.CaptureViewedLook
+-- reads from the window's slot frames.
 local function ViewedSlotEntries()
 	local api = C_TransmogOutfitInfo
 	local groups = api.GetSlotGroupInfo()
@@ -173,24 +162,95 @@ local function ViewedSlotEntries()
 	return entries
 end
 
--- Stores the viewed outfit's definition in looks. Returns the outfitID.
-function OutfitLint.StoreViewedLook()
-	local char = MogtrotCharDB
+-- The viewed outfit's definition and slot record, stored nowhere.
+local function ReadViewed()
 	local outfitID = C_TransmogOutfitInfo.GetCurrentlyViewedOutfitID()
-	if not char or not char.looks or not outfitID or outfitID == 0 then return end
+	if not outfitID or outfitID == 0 then return nil end
 	local entries = ViewedSlotEntries()
-	if not entries or #entries == 0 then return end
-	char.looks[outfitID] = LookCodec.FromSlotInfos(entries, ASSIGNED)
-	return outfitID
+	local look = entries and #entries > 0 and LookCodec.FromSlotInfos(entries, ASSIGNED, HIDDEN) or nil
+	return {
+		outfitID = outfitID,
+		look = look,
+		text = look and LookCodec.Encode(look),
+		record = MeasureRecord(),
+	}
 end
 
--- The ingest reads Blizzard's window; every other sweep reads the API.
-local function StoreDefinition(addon, sweep)
-	if sweep.ingest and ns.BlizzardOutfitUI
-		and ns.BlizzardOutfitUI.CaptureViewedLook(addon) then
+local function SameRead(a, b)
+	return a.outfitID == b.outfitID and a.text == b.text
+		and (a.record and a.record.covered) == (b.record and b.record.covered)
+end
+
+-- True when look leaves empty a part that stored fills.
+function OutfitLint.DropsParts(stored, look)
+	if type(stored) ~= "table" or type(look) ~= "table" then return false end
+	for slot, parts in pairs(stored) do
+		if type(parts) == "table" then
+			local now = type(look[slot]) == "table" and look[slot] or {}
+			for i = 1, 3 do
+				if (tonumber(parts[i]) or 0) > 0 and (tonumber(now[i]) or 0) <= 0 then
+					return true
+				end
+			end
+		end
+	end
+	return false
+end
+
+local function Pending(char)
+	char.lookPending = char.lookPending or {}
+	return char.lookPending
+end
+
+-- A settled read that drops parts of the stored definition is also what a
+-- read that never landed looks like, so it replaces the stored one only when
+-- a later sweep reads the same thing.
+local function Commit(sweep, read)
+	local char = MogtrotCharDB
+	if not char or not char.looks or not char.slots then return end
+	local id, pending = read.outfitID, Pending(char)
+	if not read.look then return end
+	if OutfitLint.DropsParts(char.looks[id], read.look) and pending[id] ~= read.text then
+		pending[id] = read.text
 		return
 	end
-	if OutfitLint.StoreViewedLook() then sweep.stored = true end
+	pending[id] = nil
+	if read.record then char.slots[id] = read.record end
+	char.looks[id] = read.look
+	sweep.stored = true
+end
+
+local function Next(addon)
+	local token = addon.sweep.token
+	C_Timer.After(SWEEP_STEP_DELAY, function()
+		if addon.sweep and addon.sweep.token == token then OutfitLint.Step(addon) end
+	end)
+end
+
+-- Reads until two reads CONFIRM_DELAY apart agree. One that never settles is
+-- left for the next sweep, keeping what is stored.
+local function Confirm(addon, previous, tries)
+	local sweep = addon.sweep
+	if not sweep then return end
+	local read = ReadViewed()
+	if not read or read.outfitID ~= sweep.expect then
+		return OutfitLint.Abandon(addon, "the view changed")
+	end
+	if previous and SameRead(previous, read) then
+		Commit(sweep, read)
+		return Next(addon)
+	end
+	if tries >= CONFIRM_TRIES then
+		if MogtrotCharDB then Pending(MogtrotCharDB)[read.outfitID] = true end
+		return Next(addon)
+	end
+	local token, step = sweep.token, sweep.index
+	C_Timer.After(CONFIRM_DELAY, function()
+		local current = addon.sweep
+		if current and current.token == token and current.index == step then
+			Confirm(addon, read, tries + 1)
+		end
+	end)
 end
 
 function OutfitLint.Record(outfitID)
@@ -223,8 +283,8 @@ function OutfitLint.AddTooltip(tooltip, outfitID)
 	local state = Lint.State(record, OutfitLint.Build(), coverage)
 	if state == "unknown" then
 		tooltip:AddLine("Slots not checked yet", 0.6, 0.6, 0.6)
-		tooltip:AddLine("Checked after login and when Blizzard's outfit list opens. "
-			.. "/mogtrot slots scan does it now.", 0.5, 0.5, 0.5, true)
+		tooltip:AddLine("Checked shortly after login, or when you view it in "
+			.. "Blizzard's outfit list.", 0.5, 0.5, 0.5, true)
 	else
 		local colour = OutfitLint.Colours[state]
 		tooltip:AddLine(("%d of %d slots set"):format(record.covered, record.total),
@@ -255,32 +315,25 @@ function OutfitLint.CanSweep()
 	return true
 end
 
-function OutfitLint.Begin(addon, all, verbose, ingest)
+function OutfitLint.Begin(addon, all)
 	if addon.sweep then return end
-	local allowed, why = OutfitLint.CanSweep()
-	if not allowed then
-		if verbose then addon:Say("slot check skipped - %s.", why) end
-		return
-	end
+	if not OutfitLint.CanSweep() then return end
 
 	local outfits = C_TransmogOutfitInfo.GetOutfitsInfo()
 	if not outfits or #outfits == 0 then return end
 
 	local char = MogtrotCharDB
 	local looks = char and char.looks or {}
+	local pending = char and char.lookPending or {}
 	all = all or (char and char.rereadLooks == true)
 	local build, queue = OutfitLint.Build(), {}
 	for _, info in ipairs(outfits) do
-		if all or looks[info.outfitID] == nil
+		if all or looks[info.outfitID] == nil or pending[info.outfitID] ~= nil
 			or Lint.State(OutfitLint.Record(info.outfitID), build) == "unknown" then
 			table.insert(queue, info.outfitID)
 		end
 	end
-	if #queue == 0 then
-		if verbose then addon:Say("every outfit has been checked already.") end
-		return
-	end
-	if ingest then addon.ingestDiagnostics = {} end
+	if #queue == 0 then return end
 
 	sweepToken = sweepToken + 1
 	addon.sweep = {
@@ -288,11 +341,7 @@ function OutfitLint.Begin(addon, all, verbose, ingest)
 		queue = queue,
 		index = 0,
 		restore = C_TransmogOutfitInfo.GetCurrentlyViewedOutfitID(),
-		ingest = ingest == true,
 	}
-	local visible = TransmogFrame and TransmogFrame:IsShown()
-	addon:Say("checking %d outfit%s for unset slots%s.", #queue,
-		#queue == 1 and "" or "s", visible and " - the list flicks through them once" or "")
 	OutfitLint.Step(addon)
 end
 
@@ -312,9 +361,7 @@ function OutfitLint.Step(addon)
 	sweep.expect = outfitID
 
 	if C_TransmogOutfitInfo.GetCurrentlyViewedOutfitID() == outfitID then
-		OutfitLint.MeasureViewed(addon)
-		StoreDefinition(addon, sweep)
-		return OutfitLint.Step(addon)
+		return Confirm(addon, nil, 0)
 	end
 
 	sweep.waiting = true
@@ -329,9 +376,9 @@ function OutfitLint.Step(addon)
 end
 
 local function ProcessViewedSlotsReady(addon)
-	local outfitID = OutfitLint.MeasureViewed(addon)
 	local sweep = addon.sweep
 	if not sweep then
+		local outfitID = OutfitLint.MeasureViewed(addon)
 		if outfitID and ns.BlizzardOutfitUI then
 			ns.BlizzardOutfitUI.CaptureViewedLook(addon)
 		end
@@ -339,16 +386,8 @@ local function ProcessViewedSlotsReady(addon)
 		return
 	end
 	if not sweep.waiting then return end
-	if outfitID and outfitID ~= sweep.expect then
-		return OutfitLint.Abandon(addon, "the view changed")
-	end
-	StoreDefinition(addon, sweep)
-
 	sweep.waiting = false
-	local token = sweep.token
-	C_Timer.After(SWEEP_STEP_DELAY, function()
-		if addon.sweep and addon.sweep.token == token then OutfitLint.Step(addon) end
-	end)
+	Confirm(addon, nil, 0)
 end
 
 function OutfitLint.DebounceViewedSlotsReady(addon, after, process)
@@ -372,15 +411,8 @@ function OutfitLint.Finish(addon)
 		and C_TransmogOutfitInfo.GetCurrentlyViewedOutfitID() == sweep.expect then
 		C_TransmogOutfitInfo.ChangeViewedOutfit(sweep.restore)
 	end
-	addon:Say("%s %d outfit%s.", sweep.ingest and "ingested" or "checked",
-		#sweep.queue, #sweep.queue == 1 and "" or "s")
-	if sweep.ingest then
-		local captured = 0
-		for _ in pairs(addon.ingestDiagnostics or {}) do captured = captured + 1 end
-		addon:Say("ingest diagnostics captured %d of %d outfits.", captured, #sweep.queue)
-	end
 	if MogtrotCharDB then MogtrotCharDB.rereadLooks = nil end
-	if (sweep.ingest or sweep.stored) and addon.SyncOutfitLibrary then
+	if sweep.stored and addon.SyncOutfitLibrary then
 		addon.SyncOutfitLibrary()
 	end
 	addon:Changed()
@@ -394,12 +426,11 @@ function OutfitLint.BeginAtLogin(addon)
 	return OutfitLint.Begin(addon, false)
 end
 
-function OutfitLint.Abandon(addon, why)
+-- why names the cause at the call site; nothing reports it.
+function OutfitLint.Abandon(addon, _why)
 	local sweep = addon.sweep
 	addon.sweep = nil
 	if not sweep then return end
-	addon:Say("slot check stopped after %d of %d - %s.",
-		math.max(sweep.index - 1, 0), #sweep.queue, why or "cancelled")
 	addon:Changed()
 end
 

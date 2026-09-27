@@ -117,3 +117,34 @@ describe("RaceBody.VisageRace", function()
 		end
 	end)
 end)
+
+describe("RaceBody.UseNativeForm", function()
+	local savedPlayer, savedAuras
+	before_each(function()
+		savedPlayer, savedAuras = _G.C_PlayerInfo, _G.C_UnitAuras
+	end)
+	after_each(function()
+		_G.C_PlayerInfo, _G.C_UnitAuras = savedPlayer, savedAuras
+	end)
+
+	it("reads the player's own form as the inverse of inAlternateForm", function()
+		_G.C_PlayerInfo = { GetAlternateFormInfo = function() return true, true end }
+		_G.C_UnitAuras = nil
+		assert.is_false((RaceBody.UseNativeForm("player")))
+		_G.C_PlayerInfo = { GetAlternateFormInfo = function() return true, false end }
+		assert.is_true((RaceBody.UseNativeForm("player")))
+	end)
+
+	it("passes the aura flag straight through for anyone else", function()
+		_G.C_PlayerInfo = { GetAlternateFormInfo = function() error("player only") end }
+		_G.C_UnitAuras = { WantsAlteredForm = function() return true end }
+		assert.is_true((RaceBody.UseNativeForm("target")))
+		_G.C_UnitAuras = { WantsAlteredForm = function() return false end }
+		assert.is_false((RaceBody.UseNativeForm("target")))
+	end)
+
+	it("assumes the native form when nothing answers", function()
+		_G.C_PlayerInfo, _G.C_UnitAuras = nil, nil
+		assert.is_true((RaceBody.UseNativeForm("target")))
+	end)
+end)

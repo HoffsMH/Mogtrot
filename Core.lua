@@ -13,12 +13,13 @@ local titleController
 local previewUI
 local frame
 local NO_TRANSMOG = (Constants and Constants.Transmog and Constants.Transmog.NoTransmogID) or 0
-local C_PetJournal, C_ToyBox, C_Item = _G.C_PetJournal, _G.C_ToyBox, _G.C_Item
+local C_ToyBox, C_Item = _G.C_ToyBox, _G.C_Item
 local OutfitLinks = ns.OutfitLinks
 local OutfitCandidates = ns.OutfitCandidates
 local Pins = ns.Pins
 local HearthstoneCollection = ns.HearthstoneCollection
 local HearthstoneController = ns.HearthstoneController
+local HearthPick = ns.HearthPick
 local hearthstoneControllerDeps
 local HearthstoneDefinitions = ns.HearthstoneDefinitions
 local hearthstoneBaseline
@@ -40,10 +41,6 @@ end
 
 local function HasActiveOutfit()
 	return CurrentOutfitID() ~= nil
-end
-
-local function ScheduleRead(callback)
-	C_Timer.After(0, callback)
 end
 
 local hearthstoneAdapter = {
@@ -93,16 +90,7 @@ local hearthstoneAdapter = {
 	end,
 }
 
-local function PinDomain(account, name)
-	local pins = account and account.pins
-	if type(pins) ~= "table" then return nil end
-	local domain = pins[name]
-	if type(domain) ~= "table" or type(domain.records) ~= "table"
-		or domain.autoNew == nil or domain.days == nil then
-		return nil
-	end
-	return domain
-end
+local PinDomain = Pins.Domain
 
 local function CompanionSchemaSupported(account, char)
 	return type(account) == "table"
@@ -155,22 +143,10 @@ local hearthstoneControllerProxy = {
 	end,
 }
 
-local function MountPinDomain(account)
-	local pins = account and account.pins
-	if type(pins) ~= "table" then return nil end
-	local domain = pins.mounts
-	if type(domain) ~= "table" or type(domain.records) ~= "table"
-		or domain.autoNew == nil or domain.days == nil then
-		return nil
-	end
-	return domain
-end
-
 local mountPinController = ns.PinController.New(nil, {
 	now = time,
 	changed = function()
-		if Addon.Changed then Addon:Changed() end
-		if Addon.CompanionChoiceChanged then Addon:CompanionChoiceChanged() end
+		if Addon.LinksChanged then Addon:LinksChanged() end
 	end,
 })
 
@@ -186,7 +162,6 @@ Addon.eventFrame = eventFrame
 -- place to silence it and no message can be added without deciding who it is for.
 --   Say   things the user asked for, or a change they need to know about
 --   Warn  something failed and they have to act; never silenced
---   Debug developer detail, off unless /mogtrot debug is on
 
 local CHAT_PREFIX = "|cff8ac6ffMogtrot|r: "
 
@@ -202,19 +177,6 @@ end
 
 function Addon:Warn(fmt, ...)
 	print(CHAT_PREFIX .. Format(fmt, ...))
-end
-
-function Addon:Debug(fmt, ...)
-	if not (MogtrotDB and MogtrotDB.debug) then return end
-	print("|cff8ac6ffMogtrot|r |cff808080debug|r: " .. Format(fmt, ...))
-end
-
--- For a warning that would otherwise repeat on every sync.
-function Addon:WarnOnce(key, fmt, ...)
-	self.warned = self.warned or {}
-	if self.warned[key] then return end
-	self.warned[key] = true
-	self:Warn(fmt, ...)
 end
 
 function Addon:CreateCategory(name, parentID, beginRename)
@@ -367,20 +329,12 @@ function Addon:MeasureViewedOutfit()
 	return OutfitLint.MeasureViewed(self)
 end
 
-function Addon:LintRecord(outfitID)
-	return OutfitLint.Record(outfitID)
-end
-
 function Addon:LintState(outfitID)
 	return OutfitLint.State(outfitID)
 end
 
 function Addon:AddLintTooltip(tooltip, outfitID)
 	return OutfitLint.AddTooltip(tooltip, outfitID)
-end
-
-function Addon:BeginLintSweep(all, verbose)
-	return OutfitLint.Begin(self, all, verbose)
 end
 
 function Addon:OnViewedSlotsReady()
@@ -410,31 +364,22 @@ function Addon:Changed()
 	self:RefreshBlizzardDecorations()
 end
 
+-- The one call after any link write: the list repaints and the summon and
+-- hearth macro icons follow what the active outfit is now paired with.
+function Addon:LinksChanged()
+	self:Changed()
+	self:CompanionChoiceChanged()
+end
+
 BlizzardOutfitUI.Initialize(Addon)
 
 -- merge adds to whatever the target already has; without it the target's list is
 -- replaced. The copy window offers both as separate confirm buttons, so the
 -- destructive one is chosen at the moment of commitment.
 function Addon:CopyMountsTo(fromOutfitID, toOutfitID, merge)
-	local char = MogtrotCharDB
-	local source = char.mounts[fromOutfitID]
-	if not source or not next(source) then return end
-
-	local had = self:CountOutfitMounts(toOutfitID)
-
-	local result, added = {}, 0
-	if merge then
-		for mountID in pairs(char.mounts[toOutfitID] or {}) do result[mountID] = true end
-	end
-	for mountID in pairs(source) do
-		if not result[mountID] then added = added + 1 end
-		result[mountID] = true
-	end
-
-	char.mounts[toOutfitID] = result
-
-	local total = 0
-	for _ in pairs(result) do total = total + 1 end
+	local added, had, total =
+		OutfitLinks.Copy(MogtrotCharDB.mounts, fromOutfitID, toOutfitID, merge)
+	if total == 0 then return end
 
 	local target = self.outfitsByID and self.outfitsByID[toOutfitID]
 	local name = target and target.name or tostring(toOutfitID)
@@ -446,7 +391,7 @@ function Addon:CopyMountsTo(fromOutfitID, toOutfitID, merge)
 		self:Say("'%s' now has %d mount(s).", name, total)
 	end
 
-	self:Changed()
+	self:LinksChanged()
 end
 
 
@@ -520,7 +465,6 @@ local mainWindowUI = ns.MainWindowUI.Attach(Addon, {
 	hearthstoneController = hearthstoneControllerProxy,
 })
 frame = mainWindowUI.frame
-local AccountMacroCount = mainWindowUI.accountMacroCount
 local minimapButton = ns.MinimapButton.Attach(Addon, {
 	addonName = ADDON_NAME,
 	frame = frame,
@@ -555,33 +499,24 @@ ns.OutfitLookCapture.Attach(Addon, {
 
 -- Keyed by outfitID, because outfit IDs are stable while names are not.
 function Addon:GetOutfitMounts(outfitID)
-	return MogtrotCharDB.mounts[outfitID] or {}
+	return OutfitLinks.Get(MogtrotCharDB.mounts, outfitID)
 end
 
 function Addon:CountOutfitMounts(outfitID)
-	local n = 0
-	for _ in pairs(self:GetOutfitMounts(outfitID)) do n = n + 1 end
-	return n
+	return OutfitLinks.Count(MogtrotCharDB.mounts, outfitID)
 end
 
 function Addon:ToggleOutfitMount(outfitID, mountID)
-	local mounts = MogtrotCharDB.mounts[outfitID] or {}
-	local adding = not mounts[mountID]
-	mounts[mountID] = adding or nil
-	MogtrotCharDB.mounts[outfitID] = next(mounts) and mounts or nil
-
-	self:Changed()
-	self:CompanionChoiceChanged()
-	if adding then self:NoticeSummonBindingOnce() end
+	OutfitLinks.Toggle(MogtrotCharDB.mounts, outfitID, mountID)
+	self:LinksChanged()
 end
 
 function Addon:ClearOutfitMounts(outfitID)
-	MogtrotCharDB.mounts[outfitID] = nil
-	self:Changed()
-	self:CompanionChoiceChanged()
+	OutfitLinks.Clear(MogtrotCharDB.mounts, outfitID)
+	self:LinksChanged()
 end
 
--- Connects outfit changes to the wear time shown in the list and tooltip.
+-- Connects outfit changes to the wear time shown in the tooltip.
 local wearSession
 
 local function WearSession()
@@ -615,11 +550,11 @@ end
 -- Only that rung. Below it both ladders pick at random, and the mount one
 -- falls through to random favourites, so there is nothing single to draw.
 local function SummonCandidates(outfitID)
-	local optOut = MogtrotCharDB.pinOptOut
+	local optOut = Pins.OptOut(MogtrotCharDB, "mounts")
 	local links = MogtrotCharDB.mounts[outfitID]
 	return OutfitCandidates.Resolve({
 		links = links,
-		pins = Pins.ActiveSet(MountPinDomain(MogtrotDB) or {}, time()),
+		pins = Pins.ActiveSet(PinDomain(MogtrotDB, "mounts") or {}, time()),
 		-- The mount ladder filters here, and account-wide pins make that
 		-- matter: a mount learned on a Horde alt is hidden on this character
 		-- and the key would never reach it. Usability is left out of the
@@ -632,7 +567,7 @@ local function SummonCandidates(outfitID)
 			return name ~= nil and isCollected and not shouldHideOnChar
 		end,
 		hasActiveOutfit = true,
-		pinsOptOut = optOut and optOut.mounts and optOut.mounts[outfitID] and true or false,
+		pinsOptOut = optOut and optOut[outfitID] and true or false,
 		allowPinsWithoutOutfit = false,
 	}), links
 end
@@ -640,11 +575,16 @@ end
 -- outfitID nil is a live case here, not a guard: hearth pins fire without an
 -- outfit, and the key's own resolve says so.
 local function HearthstoneCandidates(outfitID)
-	local optOut = MogtrotCharDB.pinOptOut and MogtrotCharDB.pinOptOut.hearthstones
+	local optOut = Pins.OptOut(MogtrotCharDB, "hearthstones")
 	local links = outfitID and MogtrotCharDB.hearthstones[outfitID] or nil
+	-- As in HearthPick.Plan, only the pinned fallback mode puts pins on top.
+	local pins
+	if HearthPick.UsesPins(MogtrotDB.hearthFallbackMode) then
+		pins = Pins.ActiveSet(PinDomain(MogtrotDB, "hearthstones") or {}, time())
+	end
 	return OutfitCandidates.Resolve({
 		links = links,
-		pins = Pins.ActiveSet(PinDomain(MogtrotDB, "hearthstones") or {}, time()),
+		pins = pins,
 		-- The hearth ladder merges only here and owns eligibility below, so
 		-- reading it a second time would be a second answer to the same
 		-- question. What it would drop is mostly cooldown anyway, and an icon
@@ -692,8 +632,8 @@ function Addon.WantedMacroIcon(_self, command)
 end
 
 -- The case UpdateWearTracking does not cover: the active outfit standing
--- still while what it would summon changes underneath it. Every link edit and
--- every pin edit calls this.
+-- still while what it would summon changes underneath it. Every pin edit calls
+-- this, and every link edit through LinksChanged.
 --
 -- Not hung on Changed. Changed repaints and saves and most of its callers
 -- cannot move an icon, while this walks the macro list once per command.
@@ -712,7 +652,7 @@ function Addon:UpdateWearTracking()
 	self:UpdateOwnedMacroIcons()
 end
 
--- The gauge is rankable but not readable, so the figures live in the tooltip.
+-- The row tooltip's wear figures.
 function Addon:AddWearTooltip(tooltip, outfitID)
 	local session = WearSession()
 	local snapshot = self:WearSnapshot()
@@ -738,27 +678,6 @@ function Addon:AddWearTooltip(tooltip, outfitID)
 	end
 end
 
-function Addon:WearReport()
-	-- Reachable without ever opening the window, and the names come from here.
-	self:SyncOutfits()
-
-	local snapshot = self:WearSnapshot()
-	if snapshot.count == 0 then
-		self:Say("no outfit has been worn while Mogtrot was loaded yet.")
-		return
-	end
-
-	self:Say("%s tracked across %d outfit(s).", Wear.Format(snapshot.sum), snapshot.count)
-
-	for _, entry in ipairs(Wear.Top(snapshot, 10)) do
-		local info = self.outfitsByID and self.outfitsByID[entry.outfitID]
-		print(("  |cffffd100%s|r  %s  %d%%"):format(
-			(info and info.name) or ("outfit " .. tostring(entry.outfitID)),
-			Wear.Format(entry.seconds),
-			math.floor(Wear.Share(snapshot.sum, entry.seconds) * 100 + 0.5)))
-	end
-end
-
 local summon = ns.SummonController.Attach(Addon, {
 	mountTravelSnapshot = function() return MountTravelSnapshot() end,
 })
@@ -766,51 +685,27 @@ local summonController = summon.controller
 local FALLBACK_MODES = summon.fallbackModes
 local LiteMountFallbackAvailable = summon.liteMountFallbackAvailable
 
-function Addon:LiteMountInstalled()
-	return LiteMountFallbackAvailable()
-end
-
 
 local mountCollection = ns.MountCollection.Attach(Addon)
-local MOUNT_TYPE_LABELS = mountCollection.TypeLabels
-local ValidMountTypes = mountCollection.ValidTypes
 local CollectMounts = mountCollection.Collect
 MountTravelSnapshot = mountCollection.TravelSnapshot
 
 
 ns.MountPickerUI.Attach(Addon, {
-	mountTypeLabels = MOUNT_TYPE_LABELS,
 	collectMounts = CollectMounts,
-	validMountTypes = ValidMountTypes,
 	buildDockGlow = previewUI.BuildDockGlow,
 	applyMountEditDock = previewUI.ApplyMountEditDock,
 	showEditPreview = previewUI.ShowEditPreview,
+	editPreviewSide = previewUI.MountEditDockSide,
 	hideEditPreview = previewUI.HideMountEditPreview,
 	outfitWearPreClick = OutfitWear_PreClick,
 	outfitWearPostClick = OutfitWear_PostClick,
 })
 
+-- chosen is a subset of choices: the picker's ticked rows.
 function Addon:ApplyMountToOutfits(mountID, mountName, choices, chosen)
-	local want = {}
-	for _, choice in ipairs(chosen) do want[choice.outfitID] = true end
-
-	local added, removed = 0, 0
-	for _, choice in ipairs(choices) do
-		local outfitID = choice.outfitID
-		local mounts = MogtrotCharDB.mounts[outfitID]
-		local has = mounts and mounts[mountID]
-
-		if want[outfitID] and not has then
-			mounts = mounts or {}
-			mounts[mountID] = true
-			MogtrotCharDB.mounts[outfitID] = mounts
-			added = added + 1
-		elseif has and not want[outfitID] then
-			mounts[mountID] = nil
-			MogtrotCharDB.mounts[outfitID] = next(mounts) and mounts or nil
-			removed = removed + 1
-		end
-	end
+	local added, removed = OutfitLinks.Apply(MogtrotCharDB.mounts, mountID,
+		OutfitLinks.Want(choices, chosen))
 
 	if added == 0 and removed == 0 then
 		self:Say("nothing changed for %s.", mountName or "that mount")
@@ -818,10 +713,20 @@ function Addon:ApplyMountToOutfits(mountID, mountName, choices, chosen)
 	end
 
 	self:Say("%s: added to %d, removed from %d.", mountName or "mount", added, removed)
-	self:Changed()
-	self:CompanionChoiceChanged()
+	self:LinksChanged()
 	if self:IsPickerOpen() then self:RepaintMountCards() end
 end
+function Addon:HearthFallbackMode()
+	return HearthPick.Mode(MogtrotDB and MogtrotDB.hearthFallbackMode)
+end
+
+-- The mode decides whether pins are in play, so the hearth icon can move.
+function Addon:SetHearthFallbackMode(mode)
+	if not HearthPick.MODES[mode] then return end
+	MogtrotDB.hearthFallbackMode = mode
+	self:CompanionChoiceChanged()
+end
+
 function Addon:GetOutfitHearthstones(outfitID)
 	if not companionReady or type(MogtrotCharDB) ~= "table" then return {} end
 	return MogtrotCharDB.hearthstones[outfitID] or {}
@@ -834,17 +739,42 @@ end
 function Addon:ToggleHearthstoneLink(outfitID, itemID)
 	if not companionReady or not outfitID or not itemID then return false end
 	local added = OutfitLinks.Toggle(MogtrotCharDB.hearthstones, outfitID, itemID)
-	self:Changed()
-	self:CompanionChoiceChanged()
+	self:LinksChanged()
 	return added
 end
 
 function Addon:ApplyHearthstoneLinks(itemID, want)
 	if not companionReady then return 0, 0 end
 	local added, removed = OutfitLinks.Apply(MogtrotCharDB.hearthstones, itemID, want)
-	self:Changed()
-	self:CompanionChoiceChanged()
+	self:LinksChanged()
 	return added, removed
+end
+
+-- Same semantics as CopyMountsTo: merge adds, otherwise the target ends up
+-- with exactly the source's hearthstones. The source keeps its own.
+function Addon:CopyHearthstonesTo(fromOutfitID, toOutfitID, merge)
+	if not companionReady then return end
+	local added, had, total =
+		OutfitLinks.Copy(MogtrotCharDB.hearthstones, fromOutfitID, toOutfitID, merge)
+	if total == 0 then return end
+
+	local target = self.outfitsByID and self.outfitsByID[toOutfitID]
+	local name = target and target.name or tostring(toOutfitID)
+	if merge then
+		self:Say("added %d hearthstone(s) to '%s' - %d in total.", added, name, total)
+	elseif had > 0 then
+		self:Say("'%s' now has %d hearthstone(s), replacing the %d it had.",
+			name, total, had)
+	else
+		self:Say("'%s' now has %d hearthstone(s).", name, total)
+	end
+	self:LinksChanged()
+end
+
+function Addon:ClearOutfitHearthstones(outfitID)
+	if not companionReady then return end
+	if OutfitLinks.Clear(MogtrotCharDB.hearthstones, outfitID) == 0 then return end
+	self:LinksChanged()
 end
 
 function Addon:GetFirstHearthstoneIcon(outfitID)
@@ -870,10 +800,7 @@ local function AttachCompanions(account, char)
 	local hearthstoneDomain = PinDomain(account, "hearthstones")
 	hearthstonePinController = ns.PinController.New(hearthstoneDomain, {
 		now = time,
-		changed = function()
-			Addon:Changed()
-			Addon:CompanionChoiceChanged()
-		end,
+		changed = function() Addon:LinksChanged() end,
 	})
 
 	local hearthButton = _G["MogtrotHearthstone"]
@@ -894,6 +821,7 @@ local function AttachCompanions(account, char)
 			now = GetTime,
 			warn = CompanionWarning,
 			say = CompanionNotice,
+			fallbackMode = function() return Addon:HearthFallbackMode() end,
 		}
 		hearthstoneController = HearthstoneController.New(hearthstoneControllerDeps)
 	end
@@ -917,7 +845,6 @@ local function AttachCompanions(account, char)
 		getCurrentOutfit = CurrentOutfitID,
 	})
 
-	companionReady = true
 	return true
 end
 local function ResetHearthstoneBaseline()
@@ -941,7 +868,6 @@ local function ScanHearthstoneAcquisitions()
 end
 
 ns.SettingsUI.Attach(Addon, {
-	Wear = Wear,
 	Lint = Lint,
 
 	liteMountFallbackAvailable = LiteMountFallbackAvailable,
@@ -952,6 +878,12 @@ ns.SettingsUI.Attach(Addon, {
 })
 
 
+-- Once a session: a library from a newer build is left alone, and the player
+-- should know why their snaps and syncs stopped.
+local LIBRARY_READ_ONLY = "your library was saved by a newer version of Mogtrot, "
+	.. "so it is read-only until you update Mogtrot"
+local libraryReadOnlyTold = false
+
 eventFrame:RegisterEvent("ADDON_LOADED")
 eventFrame:SetScript("OnEvent", function(_, event, arg1, arg2, arg3, arg4)
 	local self = Addon
@@ -961,7 +893,7 @@ eventFrame:SetScript("OnEvent", function(_, event, arg1, arg2, arg3, arg4)
 		_G[ACCOUNT_DB_NAME], _G[CHAR_DB_NAME] = account, char
 		MogtrotDB, MogtrotCharDB = account, char
 		titleController:BindStores(MogtrotDB, MogtrotCharDB)
-		mountPinController:BindDomain(MountPinDomain(MogtrotDB))
+		mountPinController:BindDomain(PinDomain(MogtrotDB, "mounts"))
 		minimapButton:Refresh()
 
 		AttachCompanions(MogtrotDB, MogtrotCharDB)
@@ -1081,6 +1013,11 @@ eventFrame:SetScript("OnEvent", function(_, event, arg1, arg2, arg3, arg4)
 		if library and ns.Library.EvictArchived then
 			ns.Library.EvictArchived(library, MogtrotDB.archiveDays, time())
 		end
+		if library and not libraryReadOnlyTold
+			and select(2, ns.Library.Writable(library)) == "newer" then
+			libraryReadOnlyTold = true
+			Addon:Warn(LIBRARY_READ_ONLY .. ".")
+		end
 		-- Prepare the hidden list so the secure toggle can reveal it during combat.
 		C_Timer.After(0, ResetHearthstoneBaseline)
 		C_Timer.After(0, function()
@@ -1095,12 +1032,6 @@ eventFrame:SetScript("OnEvent", function(_, event, arg1, arg2, arg3, arg4)
 		C_Timer.After(5, function() Addon:UpdateWearTracking() end)
 
 		C_Timer.After(5, function() Addon:CaptureActiveLook() end)
-		C_Timer.After(5, function()
-			-- Covers the user who linked their mounts while LiteMount was installed
-			-- and then removed it. Nothing on the linking path will fire for them
-			-- again, and they are exactly who needs to hear about the key.
-			if next(MogtrotCharDB.mounts or {}) then Addon:NoticeSummonBindingOnce() end
-		end)
 		-- Verified in game: the scan does not need Blizzard's window open, so it
 		-- runs on its own after login and the counts are simply there. Late enough
 		-- that it is not competing with everything else loading.
@@ -1139,15 +1070,6 @@ end)
 
 ns.Commands.Register(Addon, {
 	frame = frame,
-	diagnostics = ns.Diagnostics,
-	captureModel = ns.OutfitLookCapture.GetModel,
-	noTransmog = NO_TRANSMOG,
-	Wear = Wear,
-	wearSession = WearSession,
 	liteMountFallbackAvailable = LiteMountFallbackAvailable,
 	fallbackModes = FALLBACK_MODES,
-	Macro = Macro,
-	accountMacroCount = AccountMacroCount,
-	hearthstoneDefinitions = HearthstoneDefinitions,
-	hearthstoneAdapter = hearthstoneAdapter,
 })

@@ -2,6 +2,41 @@ local Database = require("Database")
 local Library = require("Library")
 
 describe("Database.MigrateOrInit", function()
+	it("defaults the hearthstone fallback to pinned and keeps a chosen one", function()
+		local fresh = Database.MigrateOrInit(nil, nil)
+		assert.equal("pinned", fresh.hearthFallbackMode)
+
+		local existing = Database.MigrateOrInit({ version = 3 }, { version = 7 })
+		assert.equal("pinned", existing.hearthFallbackMode)
+
+		local chosen = Database.MigrateOrInit({ version = 3, hearthFallbackMode = "off" },
+			{ version = 7 })
+		assert.equal("off", chosen.hearthFallbackMode)
+		assert.equal(3, chosen.version)
+	end)
+
+	-- The setter only ever writes true or false, so an absent value means the
+	-- player never touched the checkbox and false means they turned it off.
+	it("turns target mount match on unless the player turned it off", function()
+		assert.is_true(Database.MigrateOrInit(nil, nil).matchTargetMount)
+		assert.is_true(Database.MigrateOrInit({ version = 3 }, { version = 8 }).matchTargetMount)
+		assert.is_true(Database.MigrateOrInit({ version = 2 }, {}).matchTargetMount)
+
+		local off = Database.MigrateOrInit({ version = 3, matchTargetMount = false },
+			{ version = 8 })
+		assert.is_false(off.matchTargetMount)
+	end)
+
+	-- Version 7 stored a hidden side of a split shoulder as empty, so every
+	-- definition is read again once.
+	it("migrates a version 7 character to 8 and asks for a re-read", function()
+		local _, char = Database.MigrateOrInit({ version = 3 },
+			{ version = 7, cats = {}, roots = {}, looks = { [5] = { [3] = { 9, 0, 0 } } } })
+		assert.equal(8, char.version)
+		assert.is_true(char.rereadLooks)
+		assert.same({ [5] = { [3] = { 9, 0, 0 } } }, char.looks)
+	end)
+
 	it("initializes new account and character data", function()
 		local account, char = Database.MigrateOrInit(nil, nil)
 
@@ -9,7 +44,7 @@ describe("Database.MigrateOrInit", function()
 		assert.is_true(account.previewEnabled)
 		assert.is_false(account.hideEmptyCategories)
 		assert.equal("random", account.titleFallbackMode)
-		assert.equal(6, char.version)
+		assert.equal(8, char.version)
 		assert.same({}, char.titles)
 		assert.same({}, char.titleRotation)
 		assert.same({ "Tier", "Non-tier sets", "Simple", "Unsorted" }, {
@@ -31,7 +66,7 @@ describe("Database.MigrateOrInit", function()
 		}
 		local _, char = Database.MigrateOrInit({}, old)
 
-		assert.equal(6, char.version)
+		assert.equal(8, char.version)
 		assert.is_true(char.cats[7].color.r <= 1)
 		assert.equal("Kept", char.cats[7].name)
 	end)
@@ -87,7 +122,7 @@ describe("Database.MigrateOrInit", function()
 		local _, char = Database.MigrateOrInit({}, old)
 
 		assert.equal(old, char)
-		assert.equal(6, char.version)
+		assert.equal(8, char.version)
 		assert.equal(cats, char.cats)
 		assert.same({ 7 }, char.roots)
 		assert.same({ [42] = 7 }, char.assign)
@@ -123,7 +158,7 @@ describe("Database.MigrateOrInit", function()
 		local account, char = Database.MigrateOrInit({}, old)
 
 		assert.equal(old, char)
-		assert.equal(6, char.version)
+		assert.equal(8, char.version)
 		assert.equal(cats, char.cats)
 		assert.same({ kept = true }, char.custom)
 		assert.same({}, char.roots)
@@ -171,7 +206,7 @@ describe("Database.MigrateOrInit v2/v5", function()
 	it("targets account version 3 and character version 5", function()
 		local account, char = FreshDomains()
 		assert.equal(3, account.version)
-		assert.equal(6, char.version)
+		assert.equal(8, char.version)
 	end)
 
 	it("initializes three distinct pin domains with no baseline records", function()
@@ -264,7 +299,7 @@ describe("Database.MigrateOrInit v2/v5", function()
 			assign = {},
 			noPinnedShuffle = noPinnedShuffle,
 		})
-		assert.equal(6, char.version)
+		assert.equal(8, char.version)
 		assert.equal(noPinnedShuffle, char.pinOptOut.mounts)
 		assert.is_nil(char.noPinnedShuffle)
 	end)
@@ -292,7 +327,7 @@ describe("Database.MigrateOrInit v2/v5", function()
 			titleRotation = refs.titleRotation,
 			assign = refs.assign,
 		})
-		assert.equal(6, char.version)
+		assert.equal(8, char.version)
 		assert.equal(cats, char.cats)
 		assert.equal(refs.looks, char.looks)
 		assert.equal(refs.slots, char.slots)
@@ -315,7 +350,7 @@ describe("Database.MigrateOrInit v2/v5", function()
 			assign = {},
 			mounts = { [42] = 2747 },
 		})
-		assert.equal(6, char.version)
+		assert.equal(8, char.version)
 		assert.is_true(char.cats[7].color.r <= 1)
 		assert.same({ [2747] = true }, char.mounts[42])
 	end)
@@ -377,7 +412,7 @@ describe("Database.MigrateOrInit v2/v5", function()
 			assign = {},
 			mounts = { [42] = 2747 },
 		})
-		assert.equal(6, char.version)
+		assert.equal(8, char.version)
 		assert.is_true(char.cats[7].color.r <= 1)
 		assert.equal("Kept", char.cats[7].name)
 		assert.same({ [2747] = true }, char.mounts[42])
@@ -391,7 +426,7 @@ describe("Database.MigrateOrInit v2/v5", function()
 			assign = {},
 			mounts = { [42] = 2747 },
 		})
-		assert.equal(6, char.version)
+		assert.equal(8, char.version)
 		assert.same({ [2747] = true }, char.mounts[42])
 	end)
 
@@ -433,7 +468,7 @@ describe("Database.MigrateOrInit v2/v5", function()
 		local expected = DeepCopy(input)
 		local _, char = Database.MigrateOrInit({}, input)
 
-		assert.equal(6, char.version)
+		assert.equal(8, char.version)
 		assert.is_true(char.rereadLooks)
 		assert.same({}, char.worn)
 		assert.same({ 7 }, char.roots)
@@ -448,8 +483,19 @@ describe("Database.MigrateOrInit v2/v5", function()
 		assert.same({}, char.worn)
 	end)
 
-	it("leaves a v6 character alone", function()
-		local input = { version = 6, looks = {}, worn = { [3] = {} }, cats = {}, roots = {} }
+	-- v6's first sweep could store a definition read before it had landed.
+	it("re-reads a v6 character's looks once, keeping them until then", function()
+		local looks = { [40] = { [3] = { 106576, 180674, 0 } } }
+		local input = { version = 6, looks = looks, worn = { [3] = {} }, cats = {}, roots = {} }
+		local _, char = Database.MigrateOrInit({}, input)
+		assert.equal(8, char.version)
+		assert.is_true(char.rereadLooks)
+		assert.equal(looks, char.looks)
+		assert.same({ [3] = {} }, char.worn)
+	end)
+
+	it("leaves a v8 character alone", function()
+		local input = { version = 8, looks = {}, worn = { [3] = {} }, cats = {}, roots = {} }
 		local _, char = Database.MigrateOrInit({}, input)
 		assert.is_nil(char.rereadLooks)
 		assert.same({ [3] = {} }, char.worn)
@@ -514,5 +560,26 @@ describe("Database.MigrateOrInit archive retention", function()
 	it("leaves a chosen retention alone, including never", function()
 		local account = Database.MigrateOrInit({ version = 3, archiveDays = 0 }, nil)
 		assert.equal(0, account.archiveDays)
+	end)
+end)
+
+describe("Database.MigrateOrInit snap pop-up position", function()
+	it("starts the pop-up top centre, below the top of the screen", function()
+		local account = Database.MigrateOrInit(nil, nil)
+		assert.same({ point = "TOP", relPoint = "TOP", x = 0, y = -140 },
+			account.snapConfirmPosition)
+	end)
+
+	it("keeps a dragged position", function()
+		local where = { point = "BOTTOMLEFT", relPoint = "BOTTOMLEFT", x = 12, y = 34 }
+		local account = Database.MigrateOrInit({ version = 3, snapConfirmPosition = where }, nil)
+		assert.equal(where, account.snapConfirmPosition)
+	end)
+
+	it("replaces a position it cannot use", function()
+		local account = Database.MigrateOrInit({ version = 3,
+			snapConfirmPosition = { point = "TOP", x = "far" } }, nil)
+		assert.same({ point = "TOP", relPoint = "TOP", x = 0, y = -140 },
+			account.snapConfirmPosition)
 	end)
 end)

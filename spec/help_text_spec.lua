@@ -1,7 +1,5 @@
--- Help and picker labels are frame and chat text with no pure layer, so they
--- are checked by reading the sources against the values they describe.
-local Macro = require("Macro")
-
+-- Help text is chat text with no pure layer, so it is checked by reading the
+-- source.
 local function Read(path)
 	local file = assert(io.open(path, "r"))
 	local body = file:read("*a")
@@ -10,27 +8,25 @@ local function Read(path)
 end
 
 describe("help text", function()
-	it("names every macro that /mogtrot macro checks", function()
-		local row = Read("Commands.lua"):match('{%s*"macro",%s*"([^"]*)"')
-		assert.is_string(row)
-		for _, command in ipairs(Macro.ORDER) do
-			assert.is_truthy(row:find(command, 1, true),
-				"the macro help row does not mention " .. command)
+	-- Debug, diagnostic and report commands live in the private specs tree.
+	it("offers only player commands", function()
+		local source = Read("Commands.lua")
+		for _, name in ipairs({ "debug", "probe", "inspect", "state", "macro",
+			"wear", "slots", "library bodies", "nudge", "mountzoom", "why" }) do
+			assert.is_nil(source:find('{ "' .. name, 1, true), "a " .. name .. " help row")
+			assert.is_nil(source:find('cmd == "' .. name, 1, true), "a " .. name .. " command")
 		end
+		assert.is_nil(source:find("DevCommands", 1, true))
+		assert.is_nil(source:find("Diagnostics", 1, true))
+	end)
+
+	-- The donor debug commands live in the private specs tree, not the addon.
+	it("offers no donor command", function()
+		local source = Read("Commands.lua")
+		assert.is_nil(source:find('{ "donor', 1, true), "a donor help row")
+		assert.is_nil(source:find('cmd == "donor"', 1, true), "a donor command")
+		assert.is_nil(source:find("DonorLabUI", 1, true))
+		assert.is_nil(source:find("DonorCoverageUI", 1, true))
 	end)
 end)
 
-describe("fallback picker", function()
-	it("labels as default the mode that is actually the default", function()
-		local body = Read("SummonController.lua")
-		local default = body:match('local DEFAULT_FALLBACK_MODE = "(%w+)"')
-		assert.is_string(default)
-		local labelled
-		for item in body:gmatch("{ name = .-preselected") do
-			if item:find('note = "default', 1, true) then
-				labelled = item:match('mode = "(%w+)"')
-			end
-		end
-		assert.equals(default, labelled)
-	end)
-end)

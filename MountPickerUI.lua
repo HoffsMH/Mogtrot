@@ -13,12 +13,11 @@ local MountPickerUI = {}
 
 function MountPickerUI.Attach(Addon, deps)
 	local UI = ns.UI
-	local MOUNT_TYPE_LABELS = deps.mountTypeLabels
 	local CollectMounts = deps.collectMounts
-	local ValidMountTypes = deps.validMountTypes
 	local BuildDockGlow = deps.buildDockGlow
 	local ApplyMountEditDock = deps.applyMountEditDock
 	local ShowEditPreview = deps.showEditPreview
+	local EditPreviewSide = deps.editPreviewSide
 	local HideEditPreview = deps.hideEditPreview
 	local OutfitWear_PreClick = deps.outfitWearPreClick
 	local OutfitWear_PostClick = deps.outfitWearPostClick
@@ -28,21 +27,12 @@ function MountPickerUI.Attach(Addon, deps)
 	local hearth
 
 local function MountPinDomain()
-	local db = MogtrotDB
-	local pins = db and db.pins
-	if type(pins) ~= "table" then return nil end
-	local domain = pins.mounts
-	if type(domain) ~= "table" or type(domain.records) ~= "table"
-		or domain.autoNew == nil or domain.days == nil then
-		return nil
-	end
-	return domain
+	return Pins.Domain(MogtrotDB, "mounts")
 end
 
 local function HearthPinDomain()
-	local account = hearth and hearth.account
-	local pins = type(account) == "table" and account.pins
-	return type(pins) == "table" and pins[hearth.pinsDomain or "hearthstones"] or nil
+	if not hearth then return nil end
+	return Pins.Domain(hearth.account, hearth.pinsDomain or "hearthstones")
 end
 
 local function PinDomain(domain)
@@ -128,9 +118,8 @@ end
 
 -- Moves the mount model upward inside its card.
 local function ApplyCardNudge(card)
-	local nudge = MogtrotDB.cardNudge or CARD_NUDGE
-	card.Scene:SetPoint("TOPLEFT", 5, -34 + nudge)
-	card.Scene:SetPoint("BOTTOMRIGHT", -5, 5 + nudge)
+	card.Scene:SetPoint("TOPLEFT", 5, -34 + CARD_NUDGE)
+	card.Scene:SetPoint("BOTTOMRIGHT", -5, 5 + CARD_NUDGE)
 end
 
 -- Draws the mount using the same model scene Blizzard chose for it.
@@ -189,7 +178,7 @@ DOMAINS.mounts = {
 	SetPinDays = function(id, days) return Addon:SetMountPinDays(id, days) end,
 	ToggleLink = function(outfitID, id) Addon:ToggleOutfitMount(outfitID, id) end,
 	LinkElsewhere = function(id, name) Addon:OpenAddMountToOutfits(id, name) end,
-	LinkIndex = function() return ns.MountIndex.Build(MogtrotCharDB) end,
+	LinkIndex = function() return ns.OutfitLinks.IndexByLinked(MogtrotCharDB.mounts) end,
 	Selected = function(outfitID) return Addon:GetOutfitMounts(outfitID) end,
 	ShiftClick = SummonMountFromCard,
 	shiftHint = "Shift-left-click to mount it",
@@ -747,6 +736,10 @@ end
 local function ChoosePickerOutfit()
 	ns.OpenSearchPicker({
 		title = "Choose an outfit",
+		anchor = {
+			frame = mountPicker,
+			side = ns.OutfitPreviewUI.ChooserSide(EditPreviewSide()),
+		},
 		searchHint = "Search outfits",
 		emptyText = "No outfits match.",
 		items = OutfitChoices(function(outfitID)
@@ -789,7 +782,7 @@ function Addon:SetMountPickerOutfit(outfitID)
 	mountPicker.mode = "outfit"
 	mountPicker.outfitID = outfitID
 	if Domain() == "mounts" then
-		mountPicker.mounts, mountPicker.typeNote = CollectMounts(outfitID)
+		mountPicker.mounts = CollectMounts(outfitID)
 	end
 	ShowPreview()
 	self:RefreshMountPicker({ preserveScrollOffset = true })
@@ -799,7 +792,7 @@ function Addon:SetMountPickerPinMode()
 	if not mountPicker then return end
 	mountPicker.mode = "pins"
 	if Domain() == "mounts" then
-		mountPicker.mounts, mountPicker.typeNote = CollectMounts(nil)
+		mountPicker.mounts = CollectMounts(nil)
 	end
 	HideEditPreview()
 	self:RefreshMountPicker()
@@ -1017,6 +1010,10 @@ local function EnsureMountPicker()
 	mountPicker.Filter = CreateFrame("DropdownButton", nil, mountPicker,
 		"WowStyle1FilterDropdownTemplate")
 	mountPicker.Filter:SetPoint("LEFT", mountPicker.SearchBox, "RIGHT", 14, 0)
+	-- The footer note is added or left out by the generator, and a Refresh
+	-- response only re-ticks what is already built, so the open menu is
+	-- rebuilt after every choice (Blizzard_ClassMenu.lua does the same).
+	mountPicker.Filter:EnableRegenerateOnResponse()
 	mountPicker.Filter:SetIsDefaultCallback(function()
 		return ns.MountFilter.IsDefault(mountPicker.filter)
 	end)
@@ -1024,29 +1021,6 @@ local function EnsureMountPicker()
 		ns.MountFilter.Reset(mountPicker.filter)
 		Addon:OnPickerFilterChanged()
 	end)
-	local function TypeTicked(typeValue)
-		local filter = mountPicker.filter
-		return (filter and filter.types[typeValue]) == true
-	end
-
-	local function ToggleType(typeValue)
-		local filter = mountPicker.filter
-		if not filter then return end
-		local on = not filter.types[typeValue]
-		filter.types[typeValue] = on or nil
-		Addon:OnPickerFilterChanged()
-		return MenuResponse.Refresh
-	end
-
-	local function SetEveryType(checked)
-		local filter = mountPicker.filter
-		if filter then
-			ns.MountFilter.SetAllTypes(filter, checked)
-			Addon:OnPickerFilterChanged()
-		end
-		return MenuResponse.Refresh
-	end
-
 	local function FavouritesOnly()
 		local filter = mountPicker.filter
 		return (filter and filter.favoritesOnly) == true
@@ -1077,22 +1051,6 @@ local function EnsureMountPicker()
 	mountPicker.Filter:SetupMenu(function(_dropdown, root)
 		local filter = mountPicker.filter
 		if not filter then return end
-
-		if mountPicker.typeNote then
-			root:CreateTitle(mountPicker.typeNote)
-		else
-			root:CreateButton(CHECK_ALL or "Check All", SetEveryType, true)
-			root:CreateButton(UNCHECK_ALL or "Uncheck All", SetEveryType, false)
-
-			root:CreateSpacer()
-			root:CreateTitle(MOUNT_JOURNAL_FILTER_TYPE or "Type")
-
-			for _, value in ipairs(filter.validTypes) do
-				root:CreateCheckbox(MOUNT_TYPE_LABELS[value] or tostring(value),
-					TypeTicked, ToggleType, value)
-			end
-			root:CreateDivider()
-		end
 
 		root:CreateCheckbox("Favourites only", FavouritesOnly, ToggleFavourites)
 
@@ -1217,11 +1175,11 @@ function OpenPairing(domain, mode, outfitID)
 	picker.outfitID = outfitID
 	picker.mode = mode
 	if domain == "mounts" then
-		picker.mounts, picker.typeNote = CollectMounts(outfitID)
+		picker.mounts = CollectMounts(outfitID)
 	else
-		picker.mounts, picker.typeNote = nil, nil
+		picker.mounts = nil
 	end
-	picker.filter = ns.MountFilter.DefaultState(ValidMountTypes())
+	picker.filter = ns.MountFilter.DefaultState()
 	picker.Filter:ValidateResetState()
 	picker.Filter:SetShown(domain == "mounts")
 	if picker.SearchBox.Instructions then
@@ -1266,10 +1224,6 @@ end
 function Addon:OpenHearthstonePicker(outfitID)
 	local current = hearth and hearth.getCurrentOutfit and hearth.getCurrentOutfit()
 	OpenPairing("hearthstones", "outfit", outfitID or current)
-end
-
-function Addon:OpenHearthstonePins()
-	OpenPairing("hearthstones", "pins")
 end
 
 	return Addon

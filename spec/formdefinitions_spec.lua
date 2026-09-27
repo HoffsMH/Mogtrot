@@ -58,25 +58,6 @@ describe("FormDefinitions", function()
 	end)
 end)
 
-describe("FormDefinitions transient forms", function()
-	it("marks the cooldowns as transient", function()
-		assert.is_true(FormDefinitions.IsTransient(228260))
-		assert.is_true(FormDefinitions.IsTransient(102560))
-		assert.is_true(FormDefinitions.IsTransient(390414))
-	end)
-
-	it("leaves a stance unmarked", function()
-		assert.is_false(FormDefinitions.IsTransient(232698))
-		assert.is_false(FormDefinitions.IsTransient(24858))
-		assert.is_false(FormDefinitions.IsTransient(114302))
-	end)
-
-	it("says no rather than erroring on a spell it does not know", function()
-		assert.is_false(FormDefinitions.IsTransient(nil))
-		assert.is_false(FormDefinitions.IsTransient(1))
-	end)
-end)
-
 -- A form is read out of a unit's helpful auras, and a well-buffed player can
 -- carry a great many. The scan must not have a ceiling, so the decision that
 -- consumes it must not care how long the list is.

@@ -23,6 +23,7 @@ function CustomSetLibrarySync.Reconcile(library, owner, sets, now, trustworthyEm
 	if type(library) ~= "table" or type(owner) ~= "table" or not owner.guid then
 		return stats, "owner GUID unavailable"
 	end
+	if not Library.Writable(library) then return stats, "library is read-only" end
 	if type(sets) ~= "table" or (#sets == 0 and not trustworthyEmpty) then
 		return stats, "custom sets unavailable"
 	end

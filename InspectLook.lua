@@ -40,24 +40,5 @@ function InspectLook.FromTransmogList(list)
 	return look, filled, empty
 end
 
--- Paste-ready lines in the shape MogtrotCharDB.looks already uses.
-function InspectLook.Format(look, label)
-	local slots = {}
-	for slotID in pairs(look or {}) do
-		if type(slotID) == "number" then slots[#slots + 1] = slotID end
-	end
-	table.sort(slots)
-
-	local lines = { ("-- %s"):format(tostring(label or "captured look")) }
-	lines[#lines + 1] = "{"
-	for _, slotID in ipairs(slots) do
-		local entry = look[slotID]
-		lines[#lines + 1] = ("\t[%d] = { %d, %d, %d },")
-			:format(slotID, entry[1], entry[2], entry[3])
-	end
-	lines[#lines + 1] = "}"
-	return lines
-end
-
 ns.InspectLook = InspectLook
 return InspectLook

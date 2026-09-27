@@ -107,5 +107,29 @@ function RaceBody.Lookup(raceID, sex)
 	return nil, ("unexpected sex %s"):format(tostring(sex))
 end
 
+-- The boolean SetModelByUnit wants for usePlayerNativeForm.
+--
+-- C_UnitAuras.WantsAlteredForm reads as a preference and is not one. Measured
+-- against a Dracthyr in each form, it is the exact inverse of
+-- GetAlternateFormInfo's inAlternateForm, which makes it the value to pass
+-- straight through rather than negate:
+--
+--   in dragon form: WantsAlteredForm true,  inAlternateForm false
+--   in visage form: WantsAlteredForm false, inAlternateForm true
+--
+-- GetAlternateFormInfo is authoritative but answers only for the player, so it
+-- is preferred there and the aura flag covers everyone else.
+function RaceBody.UseNativeForm(unit)
+	if unit == "player" and C_PlayerInfo and C_PlayerInfo.GetAlternateFormInfo then
+		local ok, _hasAlternate, inAlternate = pcall(C_PlayerInfo.GetAlternateFormInfo)
+		if ok then return not inAlternate, "GetAlternateFormInfo" end
+	end
+	if C_UnitAuras and C_UnitAuras.WantsAlteredForm then
+		local ok, wants = pcall(C_UnitAuras.WantsAlteredForm, unit)
+		if ok then return wants and true or false, "WantsAlteredForm" end
+	end
+	return true, "nothing answered, assuming native"
+end
+
 ns.RaceBody = RaceBody
 return RaceBody

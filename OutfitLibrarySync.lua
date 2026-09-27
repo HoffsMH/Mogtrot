@@ -22,6 +22,7 @@ function OutfitLibrarySync.Reconcile(library, owner, infos, looks, now)
 	if type(library) ~= "table" or type(owner) ~= "table" or not owner.guid then
 		return stats, "owner GUID unavailable"
 	end
+	if not Library.Writable(library) then return stats, "library is read-only" end
 	if type(infos) ~= "table" or #infos == 0 then return stats, "outfits unavailable" end
 	looks = type(looks) == "table" and looks or {}
 	local alive, index = {}, Library.BuildIndex(library)

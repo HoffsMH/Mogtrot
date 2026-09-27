@@ -80,9 +80,8 @@ describe("StartupGuard", function()
 		assert.equal("MogtrotDevCharDB", devMetadata.SavedVariablesPerCharacter)
 		assert.is_nil(devMetadata["X-Curse-Project-ID"])
 
-		-- The development build loads everything the release build does, plus
-		-- the probe commands, which no player install may contain.
-		local devOnly = { ["DevCommands.lua"] = true }
+		-- The development build loads exactly what the release build does.
+		local devOnly = {}
 		local shared = {}
 		for _, name in ipairs(devFiles) do
 			if not devOnly[name] then shared[#shared + 1] = name end

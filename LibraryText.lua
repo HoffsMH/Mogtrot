@@ -4,13 +4,21 @@ if type(ns) ~= "table" then ns = {} end -- luacheck: ignore 331/ns
 local LookCodec = ns.LookCodec or require("LookCodec")
 local Library = ns.Library or require("Library")
 
--- How a library record reads: the two lines on its card, and the full dump
--- behind More info. Pure, so what the window says is testable without a
--- window. A field the client never answered prints as "-" rather than
--- vanishing, because "we did not get this" is itself the answer.
+-- How a library record reads: the lines on its card, its detail pane and
+-- the snap confirmation. Pure, so what the window says is testable without a
+-- window.
 local LibraryText = {}
 
-local SEXES = { [2] = "male", [3] = "female" }
+local SEXES = { [2] = "man", [3] = "woman" }
+
+-- Race file names that do not read as the race's name once split at capitals.
+local RACE_NAMES = { Scourge = "Undead", MagharOrc = "Mag'har Orc",
+	EarthenDwarf = "Earthen", Harronir = "Haranir" }
+
+function LibraryText.RaceName(raceFile)
+	if type(raceFile) ~= "string" or raceFile == "" then return nil end
+	return RACE_NAMES[raceFile] or (raceFile:gsub("(%l)(%u)", "%1 %2"))
+end
 
 -- Face value, never a guess: a record carrying no name was captured where the
 -- client refused to give one.
@@ -59,6 +67,12 @@ function LibraryText.Pieces(record)
 	return n
 end
 
+-- Where a card's lines sit, in pixels up from its bottom edge, and where the
+-- model scene ends.
+function LibraryText.CardLayout()
+	return { sub = 5, title = 17, scene = 33 }
+end
+
 -- The body the card is showing, plus how much of an outfit is on it.
 -- className is injected because naming a class is a client lookup and this
 -- module stays pure. Snapshots only: one of your own already wears its class
@@ -81,21 +95,38 @@ function LibraryText.Subtitle(record, className)
 		local pieces = LibraryText.Pieces(record)
 		return ("%s, %d piece%s"):format(owner, pieces, pieces == 1 and "" or "s")
 	end
-	local body = record.raceFile or (record.raceID and ("race " .. record.raceID))
+	local race = LibraryText.RaceName(record.raceFile)
 	local sex = SEXES[record.sex]
 	local who
-	if body and sex then
-		who = ("%s %s"):format(body, sex)
-	elseif body then
-		who = tostring(body)
+	if race and sex then
+		who = ("%s %s"):format(race, sex)
+	elseif race then
+		who = race
 	else
-		who = "body unknown"
+		who = "Unknown race"
 	end
 	if type(className) == "string" and className ~= "" then
 		who = ("%s %s"):format(who, className)
 	end
 	local pieces = LibraryText.Pieces(record)
 	return ("%s, %d piece%s"):format(who, pieces, pieces == 1 and "" or "s")
+end
+
+-- Pieces limited to one faction's races are dropped by a body of the other
+-- faction. dropped is how many armour slots the body left empty. Short enough
+-- to stand in for the card's subtitle.
+local FACTIONS = { Alliance = true, Horde = true }
+
+function LibraryText.FactionNote(record, bodyFaction, dropped)
+	if type(record) ~= "table" or type(dropped) ~= "number" or dropped < 1 then
+		return nil
+	end
+	local wanted = record.faction
+	if not (FACTIONS[wanted] and FACTIONS[bodyFaction]) or wanted == bodyFaction then
+		return nil
+	end
+	return ("%d of %d pieces %s %s only"):format(dropped, LibraryText.Pieces(record),
+		dropped == 1 and "is" or "are", wanted)
 end
 
 -- Inventory slots a transmog can occupy, in the order a person reads a
@@ -120,56 +151,6 @@ local SLOT_NAMES = {
 
 function LibraryText.SlotName(slotID)
 	return SLOT_NAMES[slotID] or ("Slot " .. tostring(slotID))
-end
-
-local function Value(value)
-	if value == nil then return "-" end
-	if type(value) == "boolean" then return value and "true" or "false" end
-	return tostring(value)
-end
-
-local ORDER = {
-	{ "id" }, { "source" },
-	{ "origin" }, { "originID" }, { "originName" }, { "originIcon" },
-	{ "name" }, { "realm" }, { "guid" }, { "title" },
-	{ "faction" }, { "level" }, { "classID" }, { "specID" },
-	{ "raceID" }, { "raceFile" }, { "sex" }, { "altRaceID" }, { "nativeForm" },
-	{ "zone" }, { "subZone" }, { "mapID" }, { "x" }, { "y" }, { "mount" },
-	{ "form" }, { "mythicPlus" }, { "itemLevel" },
-	{ "seenAt" }, { "lastSeen" }, { "seenCount" },
-	{ "savedAt" }, { "updatedAt" },
-	{ "build" }, { "tocVersion" }, { "capturedBy" },
-}
-
--- Every field the schema knows, in a fixed order, then the look one slot per
--- line. Fixed order so two dumps can be read side by side.
-function LibraryText.Details(record)
-	if type(record) ~= "table" then return {} end
-
-	local lines = { LibraryText.Title(record), LibraryText.Subtitle(record), "" }
-	for _, entry in ipairs(ORDER) do
-		local field = entry[1]
-		lines[#lines + 1] = ("%-12s %s"):format(field, Value(record[field]))
-	end
-
-	lines[#lines + 1] = ""
-	lines[#lines + 1] = ("look         %s"):format(Value(record.look))
-
-	local look = LookCodec.Decode(record.look)
-	if type(look) ~= "table" then
-		lines[#lines + 1] = "  (this look string does not parse)"
-		return lines
-	end
-
-	local slots = {}
-	for slot in pairs(look) do slots[#slots + 1] = slot end
-	table.sort(slots)
-	for _, slot in ipairs(slots) do
-		local entry = look[slot]
-		lines[#lines + 1] = ("  slot %-3d appearance %-8s secondary %-8s illusion %s")
-			:format(slot, Value(entry[1]), Value(entry[2]), Value(entry[3]))
-	end
-	return lines
 end
 
 ns.LibraryText = LibraryText

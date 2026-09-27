@@ -3,6 +3,7 @@ if type(ns) ~= "table" then ns = {} end
 
 -- Keeps Blizzard model reloads from painting an old outfit into the preview.
 local OutfitPreviewRender = {}
+local LookCodec = ns.LookCodec or require("LookCodec")
 local OUTFIT_SLOTS = { 1, 3, 4, 5, 6, 7, 8, 9, 10, 15, 16, 17, 19 }
 
 function OutfitPreviewRender.ApplyLook(model, look, createInfo, slots)
@@ -11,19 +12,20 @@ function OutfitPreviewRender.ApplyLook(model, look, createInfo, slots)
 	end
 	if model.SetAutoDress then model:SetAutoDress(false) end
 	if model.Undress then model:Undress() end
+	local function Parts(slotID, entry)
+		if type(entry) ~= "table" or type(entry[1]) ~= "number" then return 0 end
+		return LookCodec.DrawParts(slotID, entry[1], entry[2] or 0, entry[3] or 0)
+	end
 	if model.UndressSlot then
 		for _, slot in ipairs(slots or OUTFIT_SLOTS) do
-			local entry = look[slot]
-			if type(entry) ~= "table" or type(entry[1]) ~= "number"
-				or entry[1] <= 0 then model:UndressSlot(slot) end
+			if Parts(slot, look[slot]) <= 0 then model:UndressSlot(slot) end
 		end
 	end
 	if not model.SetItemTransmogInfo then return end
 	for slotID, entry in pairs(look) do
-		if type(slotID) == "number" and type(entry) == "table"
-			and type(entry[1]) == "number" and entry[1] > 0 then
-			model:SetItemTransmogInfo(
-				createInfo(entry[1], entry[2] or 0, entry[3] or 0), slotID)
+		if type(slotID) == "number" then
+			local a, b, c = Parts(slotID, entry)
+			if a > 0 then model:SetItemTransmogInfo(createInfo(a, b, c), slotID) end
 		end
 	end
 end

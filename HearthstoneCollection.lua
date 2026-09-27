@@ -98,7 +98,7 @@ function HearthstoneCollection.PickerList(rows, options)
 		if an ~= bn then return an < bn end
 		return a.itemID < b.itemID
 	end)
-	local note = #matches == 0 and "No reviewed hearthstones match."
+	local note = #matches == 0 and "No hearthstones match."
 		or ("%d of %d collected."):format(collected, #(rows or {}))
 	return { rows = matches, note = note }
 end

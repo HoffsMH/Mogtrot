@@ -15,7 +15,11 @@ if type(ns) ~= "table" then ns = {} end -- luacheck: ignore 331/ns
 --               action = "domain" | "outfit" | "mode" | "libraryMode"
 --                        | "body" | nil,
 --               icon = "mounts" | "hearthstones" | "outfit" | "pins"
---                      | "characters" | "snapshots" | nil }
+--                      | "characters" | "snapshots" | nil,
+--               menu = true | nil }
+--
+-- menu marks a word whose click opens a menu or a chooser rather than acting
+-- on the spot, so the window can draw it as a select.
 --
 -- The icon is a name, never a texture: which file a name resolves to is the
 -- window's business, and this module stays testable without a client.
@@ -40,10 +44,6 @@ end
 
 function PairingHeader.Mode(mode)
 	return mode == "pins" and "pins" or "outfit"
-end
-
-function PairingHeader.OtherDomain(domain)
-	return PairingHeader.Domain(domain) == "mounts" and "hearthstones" or "mounts"
 end
 
 function PairingHeader.OtherMode(mode)
@@ -119,6 +119,14 @@ function PairingHeader.Choice(action, value)
 	return nil
 end
 
+local OPENS_MENU = { domain = true, outfit = true, body = true }
+
+-- Whether a word with this action opens a menu or a chooser. The switches act
+-- immediately, so they read as buttons.
+function PairingHeader.OpensMenu(action)
+	return OPENS_MENU[action] == true
+end
+
 -- Reads "switch to pins" while pairing, because a control names where it
 -- takes you rather than where you already are.
 local function SwitchLabel(mode)
@@ -133,7 +141,8 @@ function PairingHeader.Segments(state)
 
 	local segments = {}
 	local function Say(text, action, icon)
-		segments[#segments + 1] = { text = text, action = action, icon = icon }
+		segments[#segments + 1] = { text = text, action = action, icon = icon,
+			menu = PairingHeader.OpensMenu(action) or nil }
 	end
 
 	-- Pins belong to the account, so naming an outfit beside them would be a
@@ -167,18 +176,23 @@ end
 -- true of the wall you are on. The count lives in the sentence, the way the pairing window's
 -- "3 chosen" does; the row below it says which filters are on and how the
 -- bodies are being drawn, which is why this reads 50 rather than 247.
+--
+-- Only the snapshot wall can be archived, so the flag says nothing on my
+-- characters. The wall word itself stays "snapshots"; "archived" qualifies it
+-- from outside so the boxed word and its icon do not have to change meaning.
 function PairingHeader.LibrarySegments(state)
 	state = type(state) == "table" and state or {}
 	local mode = PairingHeader.LibraryMode(state.mode)
 	local total = math.max(tonumber(state.total) or 0, 0)
 	local shown = math.max(tonumber(state.shown) or 0, 0)
+	local archived = mode == "snapshots" and state.archived == true
 
 	local other = PairingHeader.OtherLibraryMode(mode)
 
 	-- The wall is boxed like a word you can change but is not one; the switch
 	-- after the count is the control, as "switch to pins" is while pairing.
 	return {
-		{ text = "Showing " },
+		{ text = archived and "Showing archived " or "Showing " },
 		{ text = LIBRARY_MODE_LABEL[mode], boxed = true,
 			icon = LIBRARY_MODE_ICON[mode] },
 		{ text = (" - %s   "):format(Looks(shown, total)) },

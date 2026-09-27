@@ -93,20 +93,46 @@ describe("PairingHeader icons", function()
 	end)
 end)
 
-describe("PairingHeader toggles", function()
-	it("swaps between the two domains", function()
-		assert.equal("hearthstones", PairingHeader.OtherDomain("mounts"))
-		assert.equal("mounts", PairingHeader.OtherDomain("hearthstones"))
+-- A word that opens a menu or a chooser carries a caret; one that acts on
+-- the spot does not, so a select never looks like a button.
+describe("PairingHeader menus", function()
+	local function Menus(segments)
+		local out = {}
+		for _, segment in ipairs(segments) do
+			if segment.menu then out[#out + 1] = segment.action end
+		end
+		return out
+	end
+
+	it("marks the domain and outfit words, not the switch", function()
+		assert.same({ "domain", "outfit" },
+			Menus(PairingHeader.Segments({ domain = "mounts", mode = "outfit" })))
+		assert.same({ "domain" },
+			Menus(PairingHeader.Segments({ domain = "hearthstones", mode = "pins" })))
 	end)
 
+	it("marks nothing in the library's sentence", function()
+		assert.same({}, Menus(PairingHeader.LibrarySegments({ mode = "mine" })))
+	end)
+
+	it("answers which actions open a menu", function()
+		assert.is_true(PairingHeader.OpensMenu("domain"))
+		assert.is_true(PairingHeader.OpensMenu("outfit"))
+		assert.is_true(PairingHeader.OpensMenu("body"))
+		assert.is_false(PairingHeader.OpensMenu("mode"))
+		assert.is_false(PairingHeader.OpensMenu("libraryMode"))
+		assert.is_false(PairingHeader.OpensMenu(nil))
+	end)
+end)
+
+describe("PairingHeader toggles", function()
 	it("swaps between the two modes", function()
 		assert.equal("pins", PairingHeader.OtherMode("outfit"))
 		assert.equal("outfit", PairingHeader.OtherMode("pins"))
 	end)
 
 	-- Anything unrecognised lands on the default rather than sticking.
-	it("resolves an unknown domain or mode", function()
-		assert.equal("hearthstones", PairingHeader.OtherDomain("bananas"))
+	it("resolves an unknown mode", function()
 		assert.equal("pins", PairingHeader.OtherMode(nil))
 	end)
 end)
@@ -199,6 +225,38 @@ describe("PairingHeader.LibrarySegments", function()
 		assert.equal("snapshots", PairingHeader.LibraryMode("bananas"))
 		assert.equal("snapshots", PairingHeader.LibraryMode(nil))
 		assert.equal("mine", PairingHeader.LibraryMode("mine"))
+	end)
+
+	-- The Archived switch only exists on the snapshot wall, so its word only
+	-- ever qualifies "snapshots".
+	it("says archived snapshots when the archive is shown", function()
+		assert.equal(
+			"Showing archived snapshots - 12 of 40 looks   switch to my characters",
+			Text(PairingHeader.LibrarySegments({ mode = "snapshots", shown = 12,
+				total = 40, archived = true })))
+	end)
+
+	-- Nothing on my characters can be archived, so the flag has nothing to say
+	-- there.
+	it("ignores the archived flag on my characters", function()
+		assert.equal("Showing my characters - 50 of 247 looks   switch to snapshots",
+			Text(PairingHeader.LibrarySegments({ mode = "mine", shown = 50,
+				total = 247, archived = true })))
+	end)
+
+	it("keeps the boxed wall word and its icon when archived", function()
+		local parts = PairingHeader.LibrarySegments({ mode = "snapshots", shown = 1,
+			total = 1, archived = true })
+		assert.equal("snapshots", parts[2].text)
+		assert.is_true(parts[2].boxed)
+		assert.is_nil(parts[2].action)
+		assert.equal("snapshots", parts[2].icon)
+	end)
+
+	it("keeps the switch to my characters as the only control when archived", function()
+		assert.same({ "libraryMode" },
+			Actions(PairingHeader.LibrarySegments({ mode = "snapshots", shown = 1,
+				total = 1, archived = true })))
 	end)
 end)
 

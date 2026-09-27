@@ -10,45 +10,6 @@ describe("SettingsUI", function()
 		assert.is_nil(SettingsUI.ParsePinDays("days"))
 	end)
 
-	it("passes search-tag intent to Blizzard button initializers", function()
-		local shared = {}
-		local SettingsUI = assert(loadfile("SettingsUI.lua"))("Mogtrot", shared)
-		local initializers = {}
-		_G.Settings = {
-			VarType = { String = "string", Boolean = "boolean" },
-			RegisterVerticalLayoutCategory = function()
-				return {}, { AddInitializer = function(_, value) table.insert(initializers, value) end }
-			end,
-			RegisterProxySetting = function() return {} end,
-			CreateCheckbox = function() end,
-			CreateDropdown = function() end,
-			CreateControlTextContainer = function() return { Add = function() end, GetData = function() return {} end } end,
-			RegisterAddOnCategory = function() end,
-		}
-		_G.CreateSettingsButtonInitializer = function(_, _, _, _, addSearchTags)
-			assert.is_not_nil(addSearchTags)
-			return {}
-		end
-		_G.MogtrotDB = {}
-		local addon = { Debug = function() end, Refresh = function() end }
-		SettingsUI.Attach(addon, {
-			Wear = { ShowInList = function() return false end, SetShowInList = function() end },
-			Lint = { ShowInList = function() return false end, SetShowInList = function() end },
-			getLiteMount = function() return false end,
-			liteMountFallbackAvailable = function() return false end,
-			fallbackModes = {},
-			frame = { SettingsButton = { Enable = function() end, Icon = { SetVertexColor = function() end } } },
-			titles = {
-				FallbackTitleLabel = function() return "None chosen" end,
-				FallbackMode = function() return "random" end,
-				SetFallbackMode = function() end,
-				OpenFallbackPicker = function() end,
-			},
-		})
-		addon:RegisterSettings()
-		assert.equal(1, #initializers)
-	end)
-
 	it("uses the pin-days text field instead of a fixed dropdown", function()
 		local shared = {}
 		local SettingsUI = assert(loadfile("SettingsUI.lua"))("Mogtrot", shared)
@@ -80,7 +41,6 @@ describe("SettingsUI", function()
 		} }
 		local addon = { Debug = function() end, Refresh = function() end }
 		SettingsUI.Attach(addon, {
-			Wear = { ShowInList = function() return false end, SetShowInList = function() end },
 			Lint = { ShowInList = function() return false end, SetShowInList = function() end },
 			getLiteMount = function() return false end,
 			liteMountFallbackAvailable = function() return false end,
@@ -111,6 +71,138 @@ describe("SettingsUI", function()
 		assert.is_true(autoPin.get())
 		assert.is_true(autoPin.set(false))
 		assert.is_false(MogtrotDB.pins.mounts.autoNew)
+	end)
+end)
+
+describe("SettingsUI sections", function()
+	local rows, proxies, dropdowns, addon
+
+	before_each(function()
+		local SettingsUI = assert(loadfile("SettingsUI.lua"))("Mogtrot", {})
+		rows, proxies, dropdowns = {}, {}, {}
+		local function Row(value) table.insert(rows, value) end
+		_G.Settings = {
+			VarType = { String = "string", Boolean = "boolean" },
+			RegisterVerticalLayoutCategory = function()
+				return {}, { AddInitializer = function(_, initializer) Row(initializer.row) end }
+			end,
+			RegisterProxySetting = function(_, key, _, name, default, getter, setter)
+				proxies[key] = { name = name, default = default, get = getter, set = setter }
+				return { row = name, key = key }
+			end,
+			CreateCheckbox = function(_, setting, tooltip)
+				proxies[setting.key].tooltip = tooltip
+				Row(setting.row)
+			end,
+			CreateDropdown = function(_, setting, options)
+				dropdowns[setting.key] = options
+				Row(setting.row)
+			end,
+			CreateControlTextContainer = function()
+				local data = {}
+				return {
+					Add = function(_, value, label) table.insert(data, { value = value, label = label }) end,
+					GetData = function() return data end,
+				}
+			end,
+			CreateElementInitializer = function(_, data) return { row = data.name } end,
+			RegisterAddOnCategory = function() end,
+		}
+		_G.CreateSettingsButtonInitializer = function(name) return { row = name } end
+		_G.CreateSettingsListSectionHeaderInitializer = function(name)
+			return { row = "# " .. name }
+		end
+		_G.MogtrotDB = { pins = {
+			mounts = { autoNew = true, days = 7, records = {} },
+			hearthstones = { autoNew = true, days = 0, records = {} },
+		} }
+		addon = { Debug = function() end, Refresh = function() end }
+		function addon.HearthFallbackMode() return MogtrotDB.hearthFallbackMode or "pinned" end
+		function addon.SetHearthFallbackMode(_, value) MogtrotDB.hearthFallbackMode = value end
+		SettingsUI.Attach(addon, {
+			Lint = { ShowInList = function() return false end, SetShowInList = function() end },
+			liteMountFallbackAvailable = function() return false end,
+			fallbackModes = {},
+			frame = { SettingsButton = { Enable = function() end, Icon = { SetVertexColor = function() end } } },
+			titles = {
+				FallbackTitleLabel = function() return "None chosen" end,
+				FallbackMode = function() return "random" end,
+				SetFallbackMode = function() end,
+				OpenFallbackPicker = function() end,
+			},
+			minimap = { IsShown = function() return true end, SetShown = function() end },
+		})
+		addon:RegisterSettings()
+	end)
+
+	after_each(function()
+		_G.Settings = nil
+		_G.CreateSettingsButtonInitializer = nil
+		_G.CreateSettingsListSectionHeaderInitializer = nil
+		_G.MogtrotDB = nil
+	end)
+
+	it("groups every row under its section header, in order", function()
+		assert.same({
+			"# General",
+			"Show minimap button",
+			"Show action bar setup icons",
+			"Quiet mode",
+			"# Outfit list",
+			"Show outfit completeness in list",
+			"# Mounts",
+			"Summon fallback",
+			"Match target's mount",
+			"Auto-pin new mounts",
+			"Mount pins expire in",
+			"# Hearthstones",
+			"If no hearthstone is linked",
+			"Auto-pin new hearthstones",
+			"Hearthstone pins expire in",
+			"# Titles",
+			"If no title is linked",
+			"Pinned title",
+			"# Library",
+			"Archived snapshots expire after",
+		}, rows)
+	end)
+
+	-- The saved key is absent until changed, which shows the icons.
+	it("shows the action bar setup icons by default", function()
+		assert.is_true(proxies.MOGTROT_SHOW_MACRO_CONTROLS.default)
+	end)
+
+	it("matches the target's mount by default", function()
+		local setting = proxies.MOGTROT_MATCH_TARGET_MOUNT
+		assert.is_true(setting.default)
+		assert.is_nil(setting.tooltip:find("off by default", 1, true))
+	end)
+
+	it("offers the hearthstone fallback the summon fallback offers", function()
+		local setting = proxies.MOGTROT_HEARTH_FALLBACK
+		assert.equals("pinned", setting.default)
+		local values = {}
+		for _, option in ipairs(dropdowns.MOGTROT_HEARTH_FALLBACK()) do
+			table.insert(values, option.value)
+		end
+		assert.same({ "random", "pinned", "off" }, values)
+
+		assert.equals("pinned", setting.get())
+		setting.set("off")
+		assert.equals("off", MogtrotDB.hearthFallbackMode)
+		assert.equals("off", setting.get())
+	end)
+
+	it("binds quiet mode to the saved flag the slash command toggles", function()
+		local setting = proxies.MOGTROT_QUIET
+		assert.is_false(setting.default)
+		assert.is_false(setting.get())
+		setting.set(true)
+		assert.is_true(MogtrotDB.quiet)
+		MogtrotDB.quiet = false
+		assert.is_false(setting.get())
+		assert.truthy(setting.tooltip:find("chat", 1, true))
+		assert.truthy(setting.tooltip:find("pop-up", 1, true))
 	end)
 end)
 

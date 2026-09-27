@@ -6,23 +6,6 @@ local function NewSession(store)
 	return Wear.NewSession(store)
 end
 
-describe("Wear.ShowInList", function()
-	it("defaults off and requires an explicit opt-in", function()
-		assert.is_false(Wear.ShowInList(nil))
-		assert.is_false(Wear.ShowInList({}))
-		assert.is_false(Wear.ShowInList({ showWearInList = false }))
-		assert.is_true(Wear.ShowInList({ showWearInList = true }))
-	end)
-
-	it("persists through the shared setting table", function()
-		local settings = {}
-		Wear.SetShowInList(settings, true)
-		assert.is_true(Wear.ShowInList(settings))
-		Wear.SetShowInList(settings, false)
-		assert.is_false(Wear.ShowInList(settings))
-	end)
-end)
-
 describe("Wear.Close", function()
 	it("does nothing when no interval is open", function()
 		local session = NewSession()
@@ -232,54 +215,6 @@ describe("Wear.Snapshot", function()
 	end)
 end)
 
-describe("Wear.Heat", function()
-	it("is zero for no time, and for no busiest outfit to measure against", function()
-		assert.equal(0, Wear.Heat(100, 0))
-		assert.equal(0, Wear.Heat(0, 100))
-	end)
-
-	it("is full for the busiest outfit", function()
-		assert.equal(1, Wear.Heat(100, 100))
-	end)
-
-	it("never exceeds full, even if the total ran past max", function()
-		assert.equal(1, Wear.Heat(100, 400))
-	end)
-
-	it("floors a real but tiny total, so worn once differs from never worn", function()
-		assert.equal(Wear.MIN_HEAT, Wear.Heat(1000000, 1))
-	end)
-
-	-- The point of the curve. One dominant outfit is the normal case, and a
-	-- straight fraction would put everything else within a few percent of the
-	-- floor, where no bar is distinguishable from any other.
-	it("separates the middle of the distribution instead of collapsing it", function()
-		local max = 10000
-		local quarter = Wear.Heat(max, max / 4)
-		local half = Wear.Heat(max, max / 2)
-
-		assert.equal(0.5, quarter)
-		assert.is_true(half > 0.7)
-		assert.is_true(half - quarter > 0.2)
-	end)
-
-	it("keeps small values clear of the floor where a fraction would not", function()
-		local max = 10000
-		-- A twentieth of the busiest outfit reads as a fraction of a bar, not as
-		-- the minimum.
-		assert.is_true(Wear.Heat(max, max / 20) > 3 * Wear.MIN_HEAT)
-	end)
-
-	it("never reorders: more time is always at least as much heat", function()
-		local previous = -1
-		for _, seconds in ipairs({ 1, 10, 100, 1000, 5000, 9999, 10000 }) do
-			local heat = Wear.Heat(10000, seconds)
-			assert.is_true(heat >= previous)
-			previous = heat
-		end
-	end)
-end)
-
 describe("Wear.Share", function()
 	it("is zero with nothing tracked", function()
 		assert.equal(0, Wear.Share(0, 10))
@@ -486,5 +421,27 @@ describe("a session boundary", function()
 
 		local second = NewSession(store)
 		assert.equal(100, Wear.Total(second, 7, 5))
+	end)
+end)
+
+-- Wear time feeds the tooltip and the least-worn pick; the list draws no gauge.
+describe("the outfit list", function()
+	local function Read(path)
+		local file = assert(io.open(path, "r"))
+		local body = file:read("*a")
+		file:close()
+		return body
+	end
+
+	it("has no wear gauge and no setting for one", function()
+		assert.is_nil(Wear.ShowInList)
+		assert.is_nil(Wear.SetShowInList)
+		assert.is_nil(Wear.Heat)
+		for _, path in ipairs({ "MainWindowRows.lua", "SettingsUI.lua" }) do
+			local body = Read(path)
+			for _, needle in ipairs({ "WearBar", "showWearInList", "SHOW_WEAR_IN_LIST" }) do
+				assert.is_nil(body:find(needle, 1, true), path .. " contains " .. needle)
+			end
+		end
 	end)
 end)

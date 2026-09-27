@@ -15,22 +15,113 @@ local INSPECT_TIMEOUT = 5
 
 local waiter
 
--- How long the confirmation stays up. A ceiling, not a target.
-SnapCapture.CONFIRM_SECONDS = 2
+-- How long the confirmation waits before keeping the capture by itself.
+SnapCapture.CONFIRM_SECONDS = 3
 
--- What is left of the confirmation's bar, 1 at the start and 0 at the end.
+-- How far the Confirm button's fill has run, 0 at the start and 1 at the end.
 function SnapCapture.ConfirmFraction(elapsed, duration)
-	if type(duration) ~= "number" or duration <= 0 then return 0 end
-	if type(elapsed) ~= "number" then return 0 end
-	local left = 1 - elapsed / duration
-	if left < 0 then return 0 end
-	if left > 1 then return 1 end
-	return left
+	if type(duration) ~= "number" or duration <= 0 then return 1 end
+	if type(elapsed) ~= "number" then return 1 end
+	local done = elapsed / duration
+	if done < 0 then return 0 end
+	if done > 1 then return 1 end
+	return done
 end
 
 -- Quiet means quiet, and a pop-up in the middle of a fight is noise.
 function SnapCapture.ShouldConfirm(quiet, inCombat)
 	return not quiet and not inCombat
+end
+
+-- Whether the pop-up may build its body from the unit the capture read: only
+-- while that unit is still the player pinned, with a readable identity and a
+-- model the client says is ready.
+function SnapCapture.LiveBodyAllowed(pinnedGUID, currentGUID, identitySecret, modelReady)
+	if identitySecret or not modelReady then return false end
+	if type(pinnedGUID) ~= "string" or type(currentGUID) ~= "string" then return false end
+	return currentGUID == pinnedGUID
+end
+
+-- While the pop-up is up without the live body, it asks again every
+-- LIVE_RETRY_EVERY seconds until LIVE_RETRY_FOR. Answers "check", "wait" or
+-- "stop" for the time since the pop-up opened and since the last ask.
+SnapCapture.LIVE_RETRY_FOR = 1
+SnapCapture.LIVE_RETRY_EVERY = 0.1
+
+function SnapCapture.LiveRetry(elapsed, sinceLast)
+	if type(elapsed) ~= "number" or elapsed > SnapCapture.LIVE_RETRY_FOR then
+		return "stop"
+	end
+	if type(sinceLast) == "number" and sinceLast < SnapCapture.LIVE_RETRY_EVERY then
+		return "wait"
+	end
+	return "check"
+end
+
+-- A capture shown on the confirmation and not yet written. Held in memory
+-- only, so a /reload or logout while it is up loses it.
+local pending
+local pendingToken = 0
+
+function SnapCapture.Pending()
+	return pending
+end
+
+-- Writes the capture to the library and says so in chat.
+local function Save(addon, library, record, filled)
+	local Library = ns.Library
+	local id, isNew, failed = Library.Add(library, record, record.seenAt)
+	if not id then
+		addon:Warn("nothing saved: %s.", tostring(failed))
+		return
+	end
+	local who = record.name or "someone whose name is hidden here"
+	if isNew then
+		addon:Say("saved the look of %s (%d piece%s).", who, filled, filled == 1 and "" or "s")
+	else
+		addon:Say("the look of %s is already in your library.", who)
+	end
+	if ns.LibraryUI and ns.LibraryUI.Refresh then ns.LibraryUI.Refresh() end
+	return id, isNew
+end
+
+-- Settles the pending capture: keep writes it, otherwise it is dropped. A
+-- token that is not the pending one is a late click or timer and does nothing.
+function SnapCapture.Resolve(token, keep)
+	if not pending or token ~= pending.token then return false end
+	local held = pending
+	pending = nil
+	local ui = ns.SnapConfirmUI
+	if ui and ui.HideConfirm then pcall(ui.HideConfirm, token) end
+	if keep then
+		Save(held.addon, held.library, held.record, held.filled)
+	else
+		held.addon:Say("discarded the capture of %s; nothing saved.",
+			held.record.name or "someone whose name is hidden here")
+	end
+	return true
+end
+
+-- Shows the capture and holds it until Confirm, Cancel or the time running
+-- out, which keeps it. Anything that stops the pop-up showing saves at once.
+local function Offer(addon, library, record, filled, liveUnit, recheck)
+	local ui = ns.SnapConfirmUI
+	local Library = ns.Library
+	pendingToken = pendingToken + 1
+	local token = pendingToken
+	pending = { token = token, addon = addon, library = library,
+		record = record, filled = filled }
+
+	local existing = Library.Find and Library.Find(library, record) or nil
+	local shown = library.records[existing] or record
+	local ok = pcall(ui.ConfirmSnap, shown, existing == nil, token, liveUnit, recheck)
+	if not ok then
+		SnapCapture.Resolve(token, true)
+		return
+	end
+	C_Timer.After(SnapCapture.CONFIRM_SECONDS, function()
+		SnapCapture.Resolve(token, true)
+	end)
 end
 
 local function Cancel(clearInspect)
@@ -61,6 +152,19 @@ local function IdentityIsSecret(unit)
 	if not (C_Secrets and C_Secrets.ShouldUnitIdentityBeSecret) then return false end
 	local secret = Get(C_Secrets.ShouldUnitIdentityBeSecret, unit)
 	return secret and true or false
+end
+
+-- The unit the pop-up may build its body from, or nil for the rendering the
+-- library would give it.
+local function LiveBodyUnit(unit, pinnedGUID)
+	if not Get(UnitExists, unit) then return nil end
+	local current = Plain(Get(UnitGUID, unit))
+	local ready = Plain(Get(IsUnitModelReadyForUI, unit))
+	if SnapCapture.LiveBodyAllowed(pinnedGUID, current, IdentityIsSecret(unit),
+		ready == true) then
+		return unit
+	end
+	return nil
 end
 
 -- The title as the game draws it. UnitPVPName decorates the name, so the name
@@ -192,10 +296,8 @@ local function Gather(unit)
 		-- false for everyone else, and storing that would claim an orc was
 		-- transformed.
 		local body = ns.RaceBody
-		local diagnostics = ns.Diagnostics
-		if body and body.HasAlternateForm(facts.raceID)
-			and diagnostics and type(diagnostics.UseNativeForm) == "function" then
-			local native = diagnostics.UseNativeForm(unit)
+		if body and body.HasAlternateForm(facts.raceID) then
+			local native = body.UseNativeForm(unit)
 			-- The form they were standing in, which is how they were seen and
 			-- so how they should be shown again.
 			facts.nativeForm = native and true or false
@@ -220,10 +322,14 @@ end
 local function LibraryStore()
 	local Library = ns.Library
 	if type(Library) ~= "table" then return nil, "the library module is not loaded" end
-	if type(MogtrotDB) ~= "table" then return nil, "saved variables are not ready" end
+	if type(MogtrotDB) ~= "table" then return nil, "Mogtrot is not ready yet; try again in a moment" end
 	local library = MogtrotDB.library
 	if type(library) ~= "table" or type(library.records) ~= "table" then
 		return nil, "this account has no library yet; /reload once"
+	end
+	if select(2, Library.Writable(library)) == "newer" then
+		return nil, "your library was saved by a newer version of Mogtrot, "
+			.. "so it is read-only until you update Mogtrot"
 	end
 	return library
 end
@@ -231,6 +337,10 @@ end
 -- Captures the targeted player. Self is allowed and is the control: it is the
 -- one capture whose answer you can check by looking at your own character.
 function SnapCapture.Target(Addon)
+	-- A capture still on the confirmation was going to be kept by default, so
+	-- a new snap keeps it before starting.
+	if pending then SnapCapture.Resolve(pending.token, true) end
+
 	local Look = ns.InspectLook
 	local Library = ns.Library
 	if type(Look) ~= "table" or type(Library) ~= "table" then
@@ -244,7 +354,7 @@ function SnapCapture.Target(Addon)
 		return
 	end
 	if not (C_TransmogCollection and C_TransmogCollection.GetInspectItemTransmogInfoList) then
-		Addon:Warn("this client exposes no inspect appearance list.")
+		Addon:Warn("can't snap on this game version.")
 		return
 	end
 
@@ -276,7 +386,7 @@ function SnapCapture.Target(Addon)
 	-- Identity not flagged secret can still leave the GUID secret or empty.
 	-- Either way there is nothing to pin, so nothing is captured.
 	if not pinnedGUID then
-		Addon:Warn("can't snap your target; the client would not say who they are.")
+		Addon:Warn("can't snap your target; the game won't say who they are right now.")
 		return
 	end
 
@@ -295,31 +405,17 @@ function SnapCapture.Target(Addon)
 			return
 		end
 
-		local id, isNew, failed = Library.Add(library, record, record.seenAt)
-		if not id then
-			Addon:Warn("nothing saved: %s.", tostring(failed))
-			return
-		end
+		-- A snap borrows no body for the library: only passive donors do.
 
-		local who = record.name or "someone whose name is hidden here"
-		if isNew then
-			Addon:Say("saved %s as look #%d: %d slot(s).", who, id, filled)
-		else
-			Addon:Say("%s wears look #%d, already in the library; seen %d time(s).",
-				who, id, library.records[id].seenCount or 1)
-		end
-		-- Borrow while they are still standing there. A donor lends only sex,
-		-- so this one person supplies every body of theirs the library wants,
-		-- not just the record they are in.
-		if ns.LibraryUI and ns.LibraryUI.WarmAll then
-			pcall(ns.LibraryUI.WarmAll, unit)
-		end
-		if ns.LibraryUI then ns.LibraryUI.Refresh() end
-
-		local ui = ns.LibraryUI
+		local ui = ns.SnapConfirmUI
 		if ui and ui.ConfirmSnap and SnapCapture.ShouldConfirm(MogtrotDB.quiet,
 			InCombatLockdown and InCombatLockdown()) then
-			pcall(ui.ConfirmSnap, library.records[id] or record, isNew)
+			-- The snapped player is usually still in front of you, so the pop-up
+			-- can show their own body rather than one the library would lend.
+			Offer(Addon, library, record, filled, LiveBodyUnit(unit, pinnedGUID),
+				function() return LiveBodyUnit(unit, pinnedGUID) end)
+		else
+			Save(Addon, library, record, filled)
 		end
 	end
 
@@ -333,18 +429,19 @@ function SnapCapture.Target(Addon)
 		elapsed = elapsed + delta
 		if elapsed < INSPECT_TIMEOUT then return end
 		Cancel(true)
-		Addon:Warn("no answer about %s in %d seconds; stay in range and try again.",
-			tostring(facts.name), INSPECT_TIMEOUT)
+		Addon:Warn("couldn't inspect %s; stay close and try again.", tostring(facts.name))
 	end)
 	waiter:SetScript("OnEvent", function(_self, _event, inspecteeGUID)
-		if inspecteeGUID ~= pinnedGUID then return end
+		-- Another addon's inspect of an enemy can arrive here with a secret GUID.
+		local guid = Plain(inspecteeGUID)
+		if guid == nil or guid ~= pinnedGUID then return end
 		Cancel(false)
 
 		local ok, list = pcall(C_TransmogCollection.GetInspectItemTransmogInfoList)
 		local look, filled = Look.FromTransmogList(ok and list or nil)
 		if ClearInspectPlayer then pcall(ClearInspectPlayer) end
 		if filled == 0 then
-			Addon:Warn("%s answered with nothing worn.", tostring(facts.name))
+			Addon:Warn("%s isn't wearing any transmog to save.", tostring(facts.name))
 			return
 		end
 		Finish(look, filled)

@@ -5,7 +5,6 @@ local Commands = {}
 
 function Commands.Register(Addon, deps)
 	local frame = deps.frame
-	local Diagnostics = deps.diagnostics
 	local LiteMountFallbackAvailable = deps.liteMountFallbackAvailable
 	local FALLBACK_MODES = deps.fallbackModes
 
@@ -17,28 +16,17 @@ local HELP = {
 	{ "summon", "summon a mount linked to the outfit you are wearing" },
 	{ "fallback", "what that key does when the outfit has no mounts" },
 	{ "fallback <what>", "random, pinned, litemount or off" },
-	{ "wear", "how long each outfit has been worn" },
 	{ "capture", "re-capture the outfit you are wearing" },
-	{ "slots scan", "check every outfit again, including ones already checked" },
-	{ "slots wipe", "forget every measurement, so the next scan redoes it" },
-	{ "macro", "check the open, summon, least and hearth macros, for a bug report" },
-	{ "state", "print what Mogtrot can see, for a bug report" },
 	{ "snap", "save the look of the player you target into the library" },
-	{ "library", "every look you have captured, four to a row" },
+	{ "library", "open the library of captured looks" },
 }
 
--- The development commands are a separate file that only the development TOC
--- loads, so their help rows arrive with them or not at all.
 local function ShowHelp()
-	Addon:Warn("commands, as /mogtrot or /mogt")
+	Addon:Warn("commands, after /mogtrot (or /mogt):")
 	local function Print(entry)
 		print(("  |cffffd100%-17s|r %s"):format(entry[1], entry[2]))
 	end
 	for _, entry in ipairs(HELP) do Print(entry) end
-	local dev = ns.DevCommands
-	if dev and type(dev.HELP) == "table" then
-		for _, entry in ipairs(dev.HELP) do Print(entry) end
-	end
 end
 
 SLASH_MOGTROT1 = "/mogtrot"
@@ -67,17 +55,16 @@ SlashCmdList.MOGTROT = function(msg)
 
 	if cmd == "quiet" then
 		MogtrotDB.quiet = not MogtrotDB.quiet
+		-- Keeps the Quiet mode checkbox in step if the panel is open.
+		if Settings and Settings.NotifyUpdate and ns.SettingsUI then
+			Settings.NotifyUpdate(ns.SettingsUI.QUIET_SETTING)
+		end
 		Addon:Warn("chat output %s.", MogtrotDB.quiet and "silenced" or "on")
 		return
 	end
 
 	if cmd == "capture" then
 		Addon:CaptureActiveLook(true)
-		return
-	end
-
-	if cmd == "wear" then
-		Addon:WearReport()
 		return
 	end
 
@@ -88,8 +75,8 @@ SlashCmdList.MOGTROT = function(msg)
 
 	if cmd == "fallback" then
 		Addon:Say(Addon:SummonFallbackText())
-		Addon:Say("change it with /mogtrot fallback random, pinned, litemount or off - or in Mogtrot's "
-			.. "settings panel, where the mode lives too.")
+		Addon:Say("change it with /mogtrot fallback random, pinned, litemount or off, "
+			.. "or in Mogtrot's settings.")
 		Addon:Say("to pin a mount, right-click its card in the mount picker and choose Pin.")
 		return
 	end
@@ -97,7 +84,7 @@ SlashCmdList.MOGTROT = function(msg)
 	local fallback = cmd:match("^fallback%s+(%S+)$")
 	if fallback then
 		if fallback == "litemount" and not LiteMountFallbackAvailable() then
-			Addon:Say("LiteMount's compatibility button is unavailable.")
+			Addon:Say("LiteMount isn't ready.")
 		elseif FALLBACK_MODES[fallback] then
 			Addon:SetSummonFallback({ mode = fallback })
 		else
@@ -106,28 +93,6 @@ SlashCmdList.MOGTROT = function(msg)
 		return
 	end
 
-	if cmd == "slots wipe" then
-		local n = 0
-		for outfitID in pairs(MogtrotCharDB.slots or {}) do
-			MogtrotCharDB.slots[outfitID] = nil
-			n = n + 1
-		end
-		Addon:Say("forgot %d slot record(s). /reload to watch the scan run again, or "
-			.. "/mogtrot slots scan to do it now.", n)
-		Addon:Changed()
-		return
-	end
-
-	if cmd == "slots scan" then
-		local all, verbose = true, true
-		Addon:BeginLintSweep(all, verbose)
-		return
-	end
-
-	if cmd == "state" then
-		Diagnostics.ShowState(Addon, deps)
-		return
-	end
 	if cmd == "snap" then
 		if ns.SnapCapture then
 			ns.SnapCapture.Target(Addon)
@@ -147,10 +112,6 @@ SlashCmdList.MOGTROT = function(msg)
 		return
 	end
 
-	local dev = ns.DevCommands
-	if dev and dev.Dispatch(Addon, deps, cmd) then return end
-	if Diagnostics.Handle(Addon, deps, cmd) then return end
-
 	if cmd ~= "" then
 		Addon:Say("no such command: %s", cmd)
 		ShowHelp()
@@ -158,7 +119,8 @@ SlashCmdList.MOGTROT = function(msg)
 	end
 
 	if InCombatLockdown() then
-		UIErrorsFrame:AddMessage("Mogtrot: use the keybinding or /click MogtrotToggle in combat.", 1, 0.3, 0.3)
+		UIErrorsFrame:AddMessage("Mogtrot: can't open in combat; use the Toggle outfit list keybinding.",
+			1, 0.3, 0.3)
 		return
 	end
 	if frame:IsShown() then frame:Hide() else frame:Show() end

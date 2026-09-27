@@ -38,7 +38,9 @@ read_globals = {
 	"DRESS_UP_FRAME_MODEL_SCENE_ID",
 	"CHECK_ALL",
 	"UNCHECK_ALL",
+	"ITEM_RACES_ALLOWED",
 	"C_MountJournal",
+	"C_ModelInfo",
 	"C_AddOns",
 	"AuraUtil",
 	"C_AlliedRaces",
@@ -55,6 +57,7 @@ read_globals = {
 	"C_PaperDollInfo",
 	"C_Spell",
 	"C_Timer",
+	"C_XMLUtil",
 	"C_TransmogOutfitInfo",
 	"C_TransmogCollection",
 	"ColorPickerFrame",
@@ -144,6 +147,7 @@ read_globals = {
 	"UISpecialFrames",
 	"StaticPopup_Show",
 	"UnitGUID",
+	"UnitIsUnit",
 	"UnitName",
 	"hooksecurefunc",
 	"strlower",
@@ -167,7 +171,7 @@ files["MountPick.lua"] = { ignore = { "331/ns" } }
 files["TargetMount.lua"] = { ignore = { "331/ns" } }
 files["Lint.lua"] = { ignore = { "331/ns" } }
 files["Macro.lua"] = { ignore = { "331/ns" } }
-files["ProbeRenderUI.lua"] = { ignore = { "331/ns" } }
+files["LookRender.lua"] = { ignore = { "331/ns" } }
 
 files["spec/"] = {
 	std = "lua51+busted",

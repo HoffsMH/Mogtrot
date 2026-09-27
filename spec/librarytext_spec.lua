@@ -1,4 +1,4 @@
--- What a library card says, and what More info dumps.
+-- What a library card, its detail pane and the snap confirmation say.
 local LibraryText = require("LibraryText")
 
 describe("LibraryText", function()
@@ -85,13 +85,13 @@ describe("LibraryText", function()
 		end
 
 		it("names the class after the body", function()
-			assert.equal("NightElf female Rogue, 1 piece",
+			assert.equal("Night Elf woman Rogue, 1 piece",
 				LibraryText.Subtitle(Snap(), "Rogue"))
 		end)
 
 		it("reads the same as before when the class is unknown", function()
-			assert.equal("NightElf female, 1 piece", LibraryText.Subtitle(Snap()))
-			assert.equal("NightElf female, 1 piece", LibraryText.Subtitle(Snap(), ""))
+			assert.equal("Night Elf woman, 1 piece", LibraryText.Subtitle(Snap()))
+			assert.equal("Night Elf woman, 1 piece", LibraryText.Subtitle(Snap(), ""))
 		end)
 
 		-- One of mine already carries its class on the card title.
@@ -126,62 +126,29 @@ describe("LibraryText", function()
 
 	describe("Subtitle", function()
 		it("names the body and counts the pieces", function()
-			assert.equal("Tauren male, 2 pieces", LibraryText.Subtitle(Record()))
+			assert.equal("Tauren man, 2 pieces", LibraryText.Subtitle(Record()))
 		end)
 
 		it("says one piece in the singular", function()
-			assert.equal("Tauren male, 1 piece",
+			assert.equal("Tauren man, 1 piece",
 				LibraryText.Subtitle(Record({ look = "1:5,0,0" })))
 		end)
 
-		it("falls back to the numeric race when the file name is missing", function()
-			assert.equal("race 6 male, 2 pieces",
+		it("says so plainly when the race was never answered", function()
+			assert.equal("Unknown race, 2 pieces",
 				LibraryText.Subtitle(Record({ raceFile = "nil" })))
 		end)
 
-		it("says so plainly when the body was never answered", function()
-			assert.equal("body unknown, 2 pieces",
-				LibraryText.Subtitle(Record({ raceFile = "nil", raceID = "nil" })))
+		it("names races the way the game does, not by their file names", function()
+			assert.equal("Undead", LibraryText.RaceName("Scourge"))
+			assert.equal("Kul Tiran", LibraryText.RaceName("KulTiran"))
+			assert.equal("Highmountain Tauren", LibraryText.RaceName("HighmountainTauren"))
+			assert.equal("Mag'har Orc", LibraryText.RaceName("MagharOrc"))
+			assert.is_nil(LibraryText.RaceName(nil))
 		end)
 
 		it("omits a sex the client did not answer", function()
 			assert.equal("Tauren, 2 pieces", LibraryText.Subtitle(Record({ sex = "nil" })))
-		end)
-	end)
-
-	describe("Details", function()
-		local function Find(lines, prefix)
-			for _, line in ipairs(lines) do
-				if line:sub(1, #prefix) == prefix then return line end
-			end
-		end
-
-		it("leads with the two card lines", function()
-			local lines = LibraryText.Details(Record())
-			assert.equal("Thunderhoof-Aegwynn", lines[1])
-			assert.equal("Tauren male, 2 pieces", lines[2])
-		end)
-
-		it("prints a field the capture never answered rather than dropping it", function()
-			local lines = LibraryText.Details(Record())
-			assert.truthy(Find(lines, "guid"))
-			assert.equal("guid         -", Find(lines, "guid"))
-		end)
-
-		it("prints false as false, not as missing", function()
-			local lines = LibraryText.Details(Record({ nativeForm = false }))
-			assert.equal("nativeForm   false", Find(lines, "nativeForm"))
-		end)
-
-		it("breaks the look out one slot per line", function()
-			local lines = LibraryText.Details(Record())
-			assert.truthy(Find(lines, "  slot 1 "))
-			assert.truthy(Find(lines, "  slot 16 "):find("illusion 4"))
-		end)
-
-		it("says so when the look string is corrupt", function()
-			local lines = LibraryText.Details(Record({ look = "1:oops" }))
-			assert.truthy(Find(lines, "  (this look string does not parse)"))
 		end)
 	end)
 end)
@@ -250,5 +217,51 @@ describe("LibraryText.SLOT_COLUMNS", function()
 	it("leads each side with the slot people look at first", function()
 		assert.equal(1, columns.left[1])
 		assert.equal(10, columns.right[1])
+	end)
+end)
+
+describe("LibraryText.CardLayout", function()
+	-- The render note is a debugging aid and does not ship, so the text sits at
+	-- the card's foot and the model takes the rest.
+	it("leaves no room for a render note", function()
+		local layout = LibraryText.CardLayout()
+		assert.is_nil(layout.status)
+		assert.equal(5, layout.sub)
+		assert.equal(17, layout.title)
+		assert.equal(33, layout.scene)
+	end)
+end)
+
+-- Racial pieces are drawn only on a body of their own faction, and nothing
+-- else about the card would say why they are missing.
+describe("LibraryText.FactionNote", function()
+	local record = { faction = "Alliance" }
+
+	-- It replaces the card's subtitle, which has room for about 37 characters.
+	it("names how many of the pieces need the record's faction", function()
+		local horde = { faction = "Horde", look = "1:5,0,0;7:6,0,0" }
+		assert.equal("1 of 2 pieces is Horde only",
+			LibraryText.FactionNote(horde, "Alliance", 1))
+		local alliance = { faction = "Alliance",
+			look = "1:1,0,0;3:1,0,0;5:1,0,0;6:1,0,0;7:1,0,0;8:1,0,0;9:1,0,0;10:1,0,0;"
+				.. "15:1,0,0;16:1,0,0;19:1,0,0" }
+		local note = LibraryText.FactionNote(alliance, "Horde", 5)
+		assert.equal("5 of 11 pieces are Alliance only", note)
+		assert.is_true(#note <= 37)
+	end)
+
+	it("says nothing when every piece is on the body", function()
+		assert.is_nil(LibraryText.FactionNote(record, "Horde", 0))
+		assert.is_nil(LibraryText.FactionNote(record, "Horde", nil))
+	end)
+
+	it("says nothing when the body is already of that faction", function()
+		assert.is_nil(LibraryText.FactionNote(record, "Alliance", 3))
+	end)
+
+	it("says nothing when either faction is unknown or neutral", function()
+		assert.is_nil(LibraryText.FactionNote({}, "Horde", 3))
+		assert.is_nil(LibraryText.FactionNote(record, nil, 3))
+		assert.is_nil(LibraryText.FactionNote({ faction = "Neutral" }, "Horde", 3))
 	end)
 end)

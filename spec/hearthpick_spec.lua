@@ -236,6 +236,106 @@ describe("HearthPick", function()
 		end)
 	end)
 
+	describe("Mode", function()
+		it("defaults an absent or unknown setting to pinned", function()
+			assert.equals("pinned", HearthPick.Mode(nil))
+			assert.equals("pinned", HearthPick.Mode("litemount"))
+			assert.equals("random", HearthPick.Mode("random"))
+			assert.equals("off", HearthPick.Mode("off"))
+		end)
+
+		it("reaches for pins only in pinned mode", function()
+			assert.is_true(HearthPick.UsesPins(nil))
+			assert.is_true(HearthPick.UsesPins("pinned"))
+			assert.is_false(HearthPick.UsesPins("random"))
+			assert.is_false(HearthPick.UsesPins("off"))
+		end)
+	end)
+
+	describe("Plan, the fallback setting", function()
+		-- candidates is the linked and pinned union, linked the links alone.
+		it("serves a pin in pinned mode, as the ladder always has", function()
+			local plan = HearthPick.Plan(Request({
+				mode = "pinned",
+				candidates = { [HEARTH] = true },
+				linked = {},
+				isEligible = Eligibility({ [HEARTH] = true, [TOY] = true }),
+			}))
+			assert.same({ action = "use", itemID = HEARTH, from = "linked" }, plan)
+		end)
+
+		it("falls through to a random owned one in pinned mode with no pins", function()
+			local plan = HearthPick.Plan(Request({
+				mode = "pinned",
+				candidates = {},
+				linked = {},
+				isEligible = Eligibility({ [TOY] = true }),
+			}))
+			assert.same({ action = "use", itemID = TOY, from = "toy",
+				cause = "nolinked" }, plan)
+		end)
+
+		it("skips the pins in random mode", function()
+			local plan = HearthPick.Plan(Request({
+				mode = "random",
+				candidates = { [HEARTH] = true },
+				linked = {},
+				isEligible = Eligibility({ [HEARTH] = true, [TOY] = true }),
+			}))
+			assert.equals(TOY, plan.itemID)
+			assert.equals("toy", plan.from)
+			assert.equals("no usable linked hearthstone right now, so this is "
+				.. "a random hearthstone toy.", HearthPick.Text(plan))
+		end)
+
+		it("still serves a link in random mode", function()
+			local plan = HearthPick.Plan(Request({
+				mode = "random",
+				candidates = { [HEARTH] = true, [TOY] = true },
+				linked = { [HEARTH] = true },
+				isEligible = Eligibility({ [HEARTH] = true, [TOY] = true }),
+			}))
+			assert.same({ action = "use", itemID = HEARTH, from = "linked" }, plan)
+		end)
+
+		it("refuses in off mode with nothing linked, pins or not", function()
+			local request = Request({
+				mode = "off",
+				candidates = { [TOY] = true },
+				linked = {},
+				isEligible = Eligibility({ [HEARTH] = true, [TOY] = true }),
+			})
+			local plan = HearthPick.Plan(request)
+			assert.same({ action = "refuse", reason = "nolinked" }, plan)
+			assert.same({}, request.state)
+			assert.equals("nothing is linked to this outfit, and the fallback is "
+				.. "set to do nothing.", HearthPick.Text(plan))
+		end)
+
+		it("says why in off mode when the links are on cooldown", function()
+			local plan = HearthPick.Plan(Request({
+				mode = "off",
+				candidates = { [HEARTH] = true },
+				linked = { [HEARTH] = true },
+				isEligible = Eligibility({ [HEARTH] = "cooldown", [TOY] = true }),
+			}))
+			assert.same({ action = "refuse", reason = "nolinked",
+				detail = "cooldown" }, plan)
+			assert.equals("every linked hearthstone is on cooldown, and the fallback "
+				.. "is set to do nothing.", HearthPick.Text(plan))
+		end)
+
+		it("serves a ready link in off mode", function()
+			local plan = HearthPick.Plan(Request({
+				mode = "off",
+				candidates = { [HEARTH] = true, [TOY] = true },
+				linked = { [HEARTH] = true },
+				isEligible = Eligibility({ [HEARTH] = true, [TOY] = true }),
+			}))
+			assert.same({ action = "use", itemID = HEARTH, from = "linked" }, plan)
+		end)
+	end)
+
 	describe("Plan, rotation", function()
 		it("serves every ready linked hearthstone before repeating", function()
 			local Rotation = require("Rotation")

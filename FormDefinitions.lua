@@ -46,12 +46,6 @@ function FormDefinitions.Lookup(spellID)
 	return FormDefinitions.entries[spellID]
 end
 
--- Whether a form is a cooldown rather than a stance.
-function FormDefinitions.IsTransient(spellID)
-	local entry = FormDefinitions.entries[spellID]
-	return entry ~= nil and entry.transient == true
-end
-
 -- The first entry among the auras a unit carries, as spellID, name, kind.
 -- Order is the client's aura order, which is not meaningful, so a unit
 -- carrying two of these gets whichever came first; none of them stack in

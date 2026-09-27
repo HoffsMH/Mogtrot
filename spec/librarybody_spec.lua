@@ -110,12 +110,6 @@ describe("LibraryBody.Plan", function()
 		assert.is_false(Plan({ viewMode = "mine" }).wantRecordBody)
 	end)
 
-	it("never shows a pooled body on a mounted card", function()
-		local plan = Plan({ mounted = true })
-		assert.is_false(plan.wantRecordBody)
-		assert.is_false(plan.keyed)
-	end)
-
 	it("tags the alternate-form actor for a record captured in one", function()
 		local plan = Plan({ record = Record({ raceID = 52, raceFile = "Dracthyr",
 			nativeForm = false }) })
@@ -158,5 +152,120 @@ describe("LibraryBody.CanReuse", function()
 			hasAlternateForm = HasAlternateForm, visageRace = VisageRace,
 		})
 		assert.is_false(LibraryBody.CanReuse(mine, mine.idealKey, true))
+	end)
+end)
+
+describe("LibraryBody.PopupBody", function()
+	local function Input(over)
+		local input = { hasLook = true, live = false, pooled = false,
+			recordSex = 3, viewerSex = 2 }
+		for key, value in pairs(over or {}) do input[key] = value end
+		return input
+	end
+
+	it("draws the snapped player's own body when it is live", function()
+		assert.equal("live", LibraryBody.PopupBody(Input({ live = true })))
+		assert.equal("live", LibraryBody.PopupBody(Input({ live = true, pooled = true })))
+	end)
+
+	it("draws the record's race on your body when the sexes agree", function()
+		assert.equal("own", LibraryBody.PopupBody(Input({ recordSex = 2 })))
+	end)
+
+	it("uses a borrowed body of the record's own shape for the other sex", function()
+		assert.equal("pool", LibraryBody.PopupBody(Input({ pooled = true })))
+	end)
+
+	-- Your own body would be the wrong sex, which is worse than no body.
+	it("shows text only for the other sex with nothing borrowed", function()
+		assert.is_nil(LibraryBody.PopupBody(Input()))
+	end)
+
+	it("shows text only when the sex is unknown or there is no look", function()
+		assert.is_nil(LibraryBody.PopupBody({ hasLook = true, viewerSex = 2 }))
+		assert.is_nil(LibraryBody.PopupBody({ hasLook = true, recordSex = 2 }))
+		assert.is_nil(LibraryBody.PopupBody(Input({ hasLook = false, live = true })))
+	end)
+end)
+
+-- SetModelByUnit takes no sex override, so a body built on your unit is your
+-- sex whatever the record says.
+describe("LibraryBody.Donor", function()
+	it("builds from the donor found", function()
+		assert.equal("mouseover", LibraryBody.Donor("mouseover", 3, 2))
+	end)
+
+	it("builds from you when your sex is the record's", function()
+		assert.equal("player", LibraryBody.Donor(nil, 2, 2))
+	end)
+
+	it("builds from you when the record's sex is unknown", function()
+		assert.equal("player", LibraryBody.Donor(nil, nil, 2))
+	end)
+
+	it("builds nothing for the other sex with nobody to borrow from", function()
+		assert.is_nil(LibraryBody.Donor(nil, 3, 2))
+		assert.is_nil(LibraryBody.Donor(nil, 3, nil))
+	end)
+end)
+
+describe("LibraryBody.Shortfall", function()
+	it("counts nothing when every card has a body", function()
+		assert.same({ 0, 0 }, { LibraryBody.Shortfall({ "a", "b" }, { a = 1, b = 1 }) })
+	end)
+
+	-- The shapes count is forgiving: one body proves the shape can be built.
+	-- The cards count is what "still need one" reports.
+	it("counts a second card of a built shape as a card, not a shape", function()
+		assert.same({ 0, 1 }, { LibraryBody.Shortfall({ "a", "a" }, { a = 1 }) })
+	end)
+
+	it("counts each card of an unbuilt shape in both", function()
+		assert.same({ 2, 2 }, { LibraryBody.Shortfall({ "a", "a" }, {}) })
+	end)
+
+	it("leaves the supply it was given alone", function()
+		local supply = { a = 1 }
+		LibraryBody.Shortfall({ "a" }, supply)
+		assert.equal(1, supply.a)
+	end)
+end)
+
+describe("LibraryBody.NoBodyText", function()
+	it("names who to point at, and no debug command", function()
+		assert.matches("a woman", LibraryBody.NoBodyText(3))
+		assert.matches("seen a woman", LibraryBody.NoBodyText(3))
+		assert.matches("target or group with one", LibraryBody.NoBodyText(3))
+		assert.is_nil(LibraryBody.NoBodyText(3):find("body", 1, true))
+		assert.is_nil(LibraryBody.NoBodyText(3):find("/mogtrot", 1, true))
+		assert.matches("a man", LibraryBody.NoBodyText(2))
+		assert.is_string(LibraryBody.NoBodyText(nil))
+	end)
+end)
+
+describe("LibraryBody.DonorRank", function()
+	local record = { raceID = 4, faction = "Alliance" }
+
+	it("ranks the record's own race above its faction, and both above any", function()
+		local race = LibraryBody.DonorRank({ donorRace = 4, donorFaction = "Horde" }, record)
+		local faction = LibraryBody.DonorRank({ donorRace = 1, donorFaction = "Alliance" }, record)
+		local any = LibraryBody.DonorRank({ donorRace = 10, donorFaction = "Horde" }, record)
+		local both = LibraryBody.DonorRank({ donorRace = 4, donorFaction = "Alliance" }, record)
+		assert.is_true(both > race)
+		assert.is_true(race > faction)
+		assert.is_true(faction > any)
+	end)
+
+	it("ranks a donor known to draw the record whole above every other", function()
+		local covering = LibraryBody.DonorRank({ donorGUID = "G2", donorRace = 10,
+			donorFaction = "Horde" }, record, { G2 = true })
+		local both = LibraryBody.DonorRank({ donorGUID = "G1", donorRace = 4,
+			donorFaction = "Alliance" }, record, { G2 = true })
+		assert.is_true(covering > both)
+	end)
+
+	it("ranks nothing it cannot read", function()
+		assert.equal(0, LibraryBody.DonorRank(nil, record))
+		assert.equal(0, LibraryBody.DonorRank({}, {}))
 	end)
 end)

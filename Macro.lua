@@ -28,7 +28,7 @@ Macro.DEFS = {
 	[Macro.SUMMON] = { target = "MogtrotSummon", name = "Mogtrot Mount" },
 	[Macro.LEAST] = { target = "MogtrotLeastWorn", name = "Mogtrot Least", fixedIcon = 237285 },
 	[Macro.HEARTH] = { target = "MogtrotHearthstone", name = "Mogtrot Hearth" },
-	[Macro.SNAP] = { body = "/mogtrot snap", name = "Mogtrot Snap", fixedIcon = 134442 },
+	[Macro.SNAP] = { body = "/mogtrot snap", name = "Mogtrot Snap", fixedIcon = 1109100 },
 }
 
 -- Fixed order, so anything listing the macros reads the same way every time.
@@ -109,8 +109,9 @@ end
 function Macro.ActionBarCommands(slotCount, getActionInfo, getBody)
 	local found = {}
 	for slot = 1, slotCount do
-		local kind, macroIndex = getActionInfo(slot)
-		if kind == "macro" then
+		-- A macro showing a spell or item reports that id instead of its index.
+		local kind, macroIndex, subType = getActionInfo(slot)
+		if kind == "macro" and subType ~= "spell" and subType ~= "item" then
 			local command = Macro.CommandOf(getBody(macroIndex))
 			if command then found[command] = true end
 		end
@@ -120,6 +121,60 @@ end
 
 function Macro.DragShown(forceShown, placed, command)
 	return forceShown or not placed[command]
+end
+
+-- The main window's sidebar, top to bottom.
+Macro.SIDEBAR = { Macro.SNAP, Macro.SUMMON, Macro.HEARTH, Macro.LEAST, Macro.OPEN }
+
+-- Setup icons invite a drag: they glow, hide while their macro is on a bar,
+-- and the setup-icons setting turns them off. Snap and least always show.
+Macro.SETUP = { [Macro.SUMMON] = true, [Macro.HEARTH] = true, [Macro.OPEN] = true }
+
+-- setupShown  the setup-icons setting
+-- placed      command -> true for each Mogtrot macro on an action slot
+--
+-- Returns the icons to show, in order, each { command, glow }.
+function Macro.Sidebar(setupShown, placed)
+	local shown = {}
+	for _, command in ipairs(Macro.SIDEBAR) do
+		local setup = Macro.SETUP[command] == true
+		if not setup or (setupShown and not placed[command]) then
+			shown[#shown + 1] = { command = command, glow = setup }
+		end
+	end
+	return shown
+end
+
+-- What a user can type for a command. Snap, summon and open run as addon
+-- code, so /mogt does them. A hearth or an outfit change needs a secure
+-- click, and so does summon when it hands over to LiteMount; for those the
+-- line is the macro's own /click.
+function Macro.TypedLine(command, liteMountFallback)
+	if command == Macro.OPEN then return "/mogt" end
+	if command == Macro.SNAP then return "/mogt snap" end
+	if command == Macro.SUMMON and not liteMountFallback then return "/mogt summon" end
+	local def = Macro.DEFS[command]
+	return def and def.target and "/click " .. def.target or nil
+end
+
+local SIDEBAR_TIPS = {
+	[Macro.SNAP] = { "Snap", "Press this to snapshot another player's appearance. "
+		.. "You can also drag this to your bars or type %s while targeting another player." },
+	[Macro.SUMMON] = { "Mount",
+		"Drag this to replace your mount button on your bars or type %s." },
+	[Macro.HEARTH] = { "Hearth",
+		"Drag this to replace your hearthstone on your bars or type %s." },
+	[Macro.LEAST] = { "Random outfit", "A random outfit, starting with those you "
+		.. "haven't used much. You can also drag this to your bars or type %s." },
+	[Macro.OPEN] = { "Mogtrot window",
+		"Drag this to your bars or type %s to open this window." },
+}
+
+-- Returns the tooltip title and text for a sidebar icon.
+function Macro.SidebarTip(command, liteMountFallback)
+	local tip = SIDEBAR_TIPS[command]
+	if not tip then return nil end
+	return tip[1], tip[2]:format(Macro.TypedLine(command, liteMountFallback))
 end
 
 -- OPEN and LEAST have fixed icons Mogtrot owns, so a macro the user renamed or
