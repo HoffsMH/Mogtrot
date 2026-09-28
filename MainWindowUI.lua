@@ -15,6 +15,41 @@ function MainWindowUI.OpenLibrary(libraryUI)
 	return true
 end
 
+-- The window holds secure buttons, so combat forbids resizing, moving or
+-- hiding it. Request applies a layout now, or holds the latest one until
+-- Flush runs after combat.
+function MainWindowUI.CombatSafeLayout(inCombat)
+	local pending
+	local layout = {}
+
+	function layout.Request(apply)
+		if inCombat() then
+			pending = apply
+			return false
+		end
+		pending = nil
+		apply()
+		return true
+	end
+
+	function layout.Flush()
+		if not pending or inCombat() then return false end
+		local apply = pending
+		pending = nil
+		apply()
+		return true
+	end
+
+	function layout.Pending() return pending ~= nil end
+
+	return layout
+end
+
+-- The X hides the window, which combat forbids; the keybinding still closes it.
+function MainWindowUI.CloseAllowed(inCombat)
+	return not inCombat
+end
+
 local function StyleHeaderControl(button, width, atlas, label)
 	local MainWindow = ns.UI.MainWindow
 	button:SetSize(width, MainWindow.HeaderButtonHeight)
@@ -64,9 +99,13 @@ local function BuildWindow(Addon)
 	frame:RegisterForDrag("LeftButton")
 	frame:SetScript("OnDragStart", function(self)
 		if InCombatLockdown() then return end
+		self.dragging = true
 		self:StartMoving()
 	end)
 	frame:SetScript("OnDragStop", function(self)
+		-- A drag refused in combat still ends here; there is nothing to stop.
+		if not self.dragging then return end
+		self.dragging = nil
 		self:StopMovingOrSizing()
 		local point, _, relPoint, x, y = self:GetPoint()
 		MogtrotDB.position = { point = point, relPoint = relPoint, x = x, y = y }
@@ -682,10 +721,21 @@ local function AttachListLayout(Addon, frame, LayoutTitleBar)
 		self:UpdateListSize()
 	end
 
+	local layout = MainWindowUI.CombatSafeLayout(InCombatLockdown)
+
 	-- The grip drives this every frame while it is held, so it stops at geometry. Resizing
 	-- the ScrollBox is enough on its own: it re-lays-out from its own size-changed handler,
-	-- and no entry has to be rebuilt for that.
+	-- and no entry has to be rebuilt for that. In combat it waits for
+	-- ApplyDeferredLayout.
 	function Addon:UpdateListSize()
+		layout.Request(function() self:LayOutList() end)
+	end
+
+	function Addon.ApplyDeferredLayout(_self)
+		layout.Flush()
+	end
+
+	function Addon:LayOutList()
 		local contentHeight = self:GetListHeight()
 
 		self.listBox:SetHeight(contentHeight)
@@ -713,11 +763,12 @@ local function AttachListLayout(Addon, frame, LayoutTitleBar)
 
 	-- Greys the list and stops it taking clicks, because the game refuses to wear an
 	-- outfit in combat and a row that looks live but does nothing is worse than one
-	-- that looks unavailable. Only the list dims: the window, its scrollbar, the close
-	-- button and ESC all keep working, which is the point of the rows not being
-	-- protected. Applied to the box rather than per row, so pooled frames cannot
-	-- arrive carrying a stale state.
+	-- that looks unavailable. The scrollbar and search keep working. The X and ESC
+	-- are off, since the window holds secure buttons and cannot be hidden; the
+	-- keybinding still closes it. Applied to the box rather than per row, so pooled
+	-- frames cannot arrive carrying a stale state.
 	function Addon:SetCombatDimmed(dimmed)
+		frame.CloseButton:SetEnabled(MainWindowUI.CloseAllowed(dimmed))
 		local clearRow = self:EnsureClearRow()
 
 		if not self.combatShield then
@@ -794,7 +845,8 @@ local function AttachListLayout(Addon, frame, LayoutTitleBar)
 	end
 
 	frame:SetScript("OnShow", function()
-		-- Combat may show the prepared window, but cannot rebuild its protected rows.
+		frame.CloseButton:SetEnabled(MainWindowUI.CloseAllowed(InCombatLockdown()))
+		-- Combat may show the prepared window, but cannot lay it out.
 		if InCombatLockdown() then return end
 		Addon:UpdateMacroDragControls()
 		frame.HideEmptyCategories:SetChecked(MogtrotDB.hideEmptyCategories)

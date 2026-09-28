@@ -1,92 +1,53 @@
 # Mogtrot
 
-A categorised picker for World of Warcraft transmog outfits, openable anywhere,
-that can also link outfits to mounts.
+Mogtrot files your transmog outfits into categories you can open anywhere,
+pairs each outfit with mounts, hearthstones and titles, and keeps an
+account-wide library of your own looks and of other players' looks you snap.
 
-Blizzard's outfit list is flat and only opens at the transmogrifier. If you have
-more than a handful of outfits, Mogtrot gives you somewhere to file them.
+## Features
+
+- Your outfits in categories and sub-categories you drag them into; click a row to wear it.
+- Hover previews, and a coloured dot showing whether an outfit sets every gear slot.
+- Link mounts, hearthstones and titles to an outfit, and pin favourites for outfits with none.
+- A summon key and Mount button that call a mount matching your outfit, with a fallback you choose.
+- Match target's mount: summon the mount your target is riding, if you own it.
+- A sidebar of Snap, Mount, Hearth, Random outfit and Open buttons, each draggable to a bar.
+- Random outfit wears one you have worn least; time worn shows in each row's tooltip.
+- The library: every outfit from your characters, and snapshots of other players.
+- Snap a player you target; a pop-up shows their look before it saves.
+- Archive snapshots you are done with; they clear after 30 days unless you change that.
+- Original race: library looks shown on the race and sex that wore them.
 
 ## Installing
 
-Drop the `Mogtrot` folder into `World of Warcraft/_retail_/Interface/AddOns/`.
+Install from CurseForge, or drop the `Mogtrot` folder into
+`World of Warcraft/_retail_/Interface/AddOns/`. No libraries or other addons
+are needed.
 
-Requires no libraries and no other addons.
+## Opening it
 
-## Development
+- Bind "Toggle outfit list" and "Summon a mount for this outfit" under
+  Key Bindings, Mogtrot.
+- Click the minimap button, or type `/mogtrot` (or `/mogt`).
+- `/mogtrot help` lists the other commands. Settings are in the game's
+  Options, AddOns, Mogtrot.
 
-Keep the CurseForge `Mogtrot` folder beside a `MogtrotDev` symlink to this
-checkout. They use separate SavedVariables; switch with WoW's per-character
-addon checkboxes. See `CONTRIBUTING.md` for the development workflow.
+## Known limits
 
-`Mogtrot.toc` and `MogtrotDev.toc` must keep identical runtime file lists. Any
-change that adds, removes, renames, or reorders a TOC entry must be made in both
-files. The test suite rejects mismatches.
-
-## Commands
-
-`/mogtrot` or `/mogt` opens the window. `/mogtrot help` lists the commands below.
- 
-### Outfit companions
-
-An outfit can link exact battle-pet copies. Mogtrot keeps each
-`battlePetGUID`, not just its species, and can summon one automatically only
-after a transmog change has settled. Synchronous change events are coalesced
-and the active outfit is read on the next frame, so login and intermediate
-outfit states do not summon a pet. The pet picker also supports the three
-independent pin domains: mounts, battle pets, and hearthstones.
-
-### Hearthstones
-
-The hearthstone picker uses a curated registry of exact toy and inventory item
-IDs covering the hearthstone family: the ones that return you to the home you
-set at an innkeeper and share the hearth cooldown. Fixed-destination teleports
-such as the Garrison and Dalaran hearthstones are deliberately absent. The ones
-you have collected sort first; the rest are shown dimmed and cannot be linked.
-Ownership, usability, and cooldown are checked at click time, and linked items
-plus pinned items are selected by rotation.
-
-The client offers no toy category and no way to ask whether an item is a
-hearthstone, so the registry is hand-maintained. `/mogtrot hearthscan` walks
-your collected toys and reports anything you own that the registry is missing.
-It decides by the first sentence of each Use line, the one naming the home you
-set at an innkeeper: a toy bound to a fixed place names somewhere else, so it
-cannot match by accident.
-
-Drag the Hearth icon from the outfit window's sidebar to create the account
-macro:
-
-```text
-#mogtrot:hearth
-/click MogtrotHearthstone
-```
-
-It chooses and dispatches one usable linked or pinned toy/item through the
-secure click path. Hearthstone use is not automatic and has no keybinding.
-
-The hearthstone picker docks the same outfit preview as the mount picker,
-showing the outfit being edited. It does not preview a hearthstone's cast
-effect: the client exposes no way to map a toy or item to its animation or
-visual kit.
-
+- Mounts and hearthstones are used only through Mogtrot's own key, buttons
+  and macros; the game's own mount button is left alone.
+- Original race needs a player of the other sex to have been nearby this
+  session; until then those looks use your own body.
+- Outfits cannot be worn in combat.
 
 ## Reporting a bug
 
-Include what you did, what you expected, and whatever BugSack shows, if
-anything.
-
-(caution) Note that WoW blames whichever addon tainted the execution path, which is not
-always the addon at fault - an error naming Mogtrot may belong to something else,
-and the reverse happens too. The stack trace is more informative than the name.
+Include what you did, what you expected, and whatever BugSack shows.
 
 ## Licence
 
 MIT, see `LICENSE`.
 
-Mogtrot contains no code from LiteMount. Fallback calls LiteMount's public
-compatibility button at runtime, and retirement cleanup calls its settings API
-only to remove exact records from older Mogtrot versions. Nothing has been
-copied or adapted from it. LiteMount is GPLv2 and belongs to its authors.
-
-Nor does it contain code from any other addon. Where another addon settled a
-question about Blizzard's API, that is recorded as a citation in the notes and the
-implementation was written from scratch.
+Mogtrot contains no code from LiteMount or any other addon. Its optional
+LiteMount fallback calls LiteMount's public button at runtime. LiteMount is
+GPLv2 and belongs to its authors.

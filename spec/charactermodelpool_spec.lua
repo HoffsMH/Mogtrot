@@ -359,3 +359,66 @@ describe("CharacterModelPool bodies still being built", function()
 		assert.equal(dropped, pool:Warm("j", 1, "G3"))
 	end)
 end)
+
+-- Every passing donor keeps a body only where it beats what the pool holds,
+-- so a crowd fills the pool with bodies worth having instead of duplicates.
+describe("CharacterModelPool:Warm with a donor's rank", function()
+	local function Rank(entry) return entry.score or 0 end
+
+	it("warms a body for a donor who outranks every body of the key", function()
+		local pool = CharacterModelPool.New(8, "holder")
+		local first = pool:Warm("k", 1, "G1")
+		first.key, first.donorGUID, first.score = "k", "G1", 1
+		assert.is_table(pool:Warm("k", 1, "G2", Rank, 3))
+	end)
+
+	it("warms nothing for a donor no better than a body already held", function()
+		local pool = CharacterModelPool.New(8, "holder")
+		local first = pool:Warm("k", 1, "G1")
+		first.key, first.donorGUID, first.score = "k", "G1", 3
+		assert.is_nil(pool:Warm("k", 1, "G2", Rank, 3))
+		assert.is_nil(pool:Warm("k", 1, "G2", Rank, 1))
+	end)
+
+	it("still warms a key nobody has lent, and one more for a waiting card", function()
+		local pool = CharacterModelPool.New(8, "holder")
+		assert.is_table(pool:Warm("new", 1, "G2", Rank, 0))
+		local first = pool:Warm("k", 1, "G1")
+		first.key, first.donorGUID, first.score = "k", "G1", 3
+		assert.is_table(pool:Warm("k", 2, "G2", Rank, 0))
+	end)
+end)
+
+describe("CharacterModelPool:Full", function()
+	it("is full only when no entry is free to build into and the cap is reached", function()
+		local pool = CharacterModelPool.New(2, "holder")
+		assert.is_false(pool:Full())
+		local a = pool:Warm("a")
+		a.key = "a"
+		assert.is_false(pool:Full())
+		local b = pool:Warm("b")
+		b.key = "b"
+		assert.is_true(pool:Full())
+		b.key = nil
+		assert.is_false(pool:Full())
+	end)
+end)
+
+-- Original race is offered from the first borrowed body a card can stand in.
+describe("CharacterModelPool:HoldsBorrowed", function()
+	it("answers yes once one borrowed card body has settled", function()
+		local pool = CharacterModelPool.New(4, "holder")
+		assert.is_false(pool:HoldsBorrowed())
+		local own = pool:Warm("mine")
+		own.key, own.actor = "mine", {}
+		assert.is_false(pool:HoldsBorrowed())
+		local staged = pool:Warm("k", 1, "G1")
+		staged.key, staged.actor, staged.borrowed, staged.staging = "k", {}, true, "G1"
+		assert.is_false(pool:HoldsBorrowed())
+		local twin = pool:WarmPane("k")
+		twin.key, twin.actor, twin.borrowed = "k", {}, true
+		assert.is_false(pool:HoldsBorrowed())
+		pool:Settle("G1")
+		assert.is_true(pool:HoldsBorrowed())
+	end)
+end)

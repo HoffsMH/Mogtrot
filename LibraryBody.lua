@@ -57,10 +57,15 @@ end
 --   viewer            { raceFile, sex, altered } for the logged-in character
 --   hasAlternateForm  raceID -> boolean
 --   visageRace        raceID -> raceID or nil
+--   bodyHeld          false when no body of the record's shape is held yet
 function LibraryBody.Plan(input)
 	input = type(input) == "table" and input or {}
 	local record = type(input.record) == "table" and input.record or {}
+	local viewerSex = type(input.viewer) == "table" and input.viewer.sex or nil
+	-- A look of the other sex whose shape nobody has lent stays on you.
+	local unlent = input.bodyHeld == false and record.sex ~= nil and record.sex ~= viewerSex
 	local wantRecordBody = input.viewMode == "original" and input.fullFidelity == true
+		and not unlent
 
 	local shown, native = LibraryBody.Form(record, input.hasAlternateForm,
 		input.visageRace)
@@ -116,26 +121,31 @@ function LibraryBody.Donor(found, recordSex, viewerSex)
 end
 
 -- How well a pooled body suits a record when several donors lent its shape:
--- a donor known to draw the record whole (covering, GUID -> true) counts 4,
 -- the record's own race 2, its faction 1. A body of the other faction drops
 -- pieces limited to the record's faction.
-function LibraryBody.DonorRank(entry, record, covering)
+function LibraryBody.DonorRank(entry, record)
 	if type(entry) ~= "table" or type(record) ~= "table" then return 0 end
 	local rank = 0
-	if type(covering) == "table" and entry.donorGUID ~= nil and covering[entry.donorGUID] then
-		rank = rank + 4
-	end
 	if record.raceID ~= nil and entry.donorRace == record.raceID then rank = rank + 2 end
 	if record.faction ~= nil and entry.donorFaction == record.faction then rank = rank + 1 end
 	return rank
 end
 
+-- Whether a card on the wall should be painted again for a body that just
+-- arrived: its shape (ideal) is among arrived, and the card holds no body of
+-- that shape (heldKey) or one the new body outranks.
+function LibraryBody.WantsRepaint(heldKey, ideal, arrived, newRank, heldRank)
+	if ideal == nil or type(arrived) ~= "table" or not arrived[ideal] then return false end
+	if heldKey ~= ideal then return true end
+	return (newRank or 0) > (heldRank or 0)
+end
+
 -- How far the pool falls short of the wall. ideals holds one key per card that
 -- needs a borrowed body; supply is key -> bodies, from CountByKey.
 --   shapes  cards whose key no body carries: forgiving, since one body proves
---           the shape can be built; it decides whether the wall turns over
+--           the shape can be built
 --   cards   cards left without a body once each body serves one card: what
---           "still need one" reports and what keeps the search for donors on
+--           the status line reports as looks waiting
 function LibraryBody.Shortfall(ideals, supply)
 	supply = type(supply) == "table" and supply or {}
 	local left, shapes, cards = {}, 0, 0

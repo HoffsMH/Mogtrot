@@ -413,8 +413,8 @@ local function BuildShowRow(Filter)
 
 	-- Whose body a look stands on, as the same dropdown word the sentence
 	-- above uses for the wall. What it sets is what you asked for, not what is
-	-- on screen: original race is granted the moment the last body has been
-	-- borrowed, and until then the line under the wall says so.
+	-- on screen: original race is granted the moment the first body of the
+	-- other sex has been borrowed, and until then the line under the wall says so.
 	window.Body = ns.PairingHeaderUI.Word(window.ShowRow, SWITCH_H, "body",
 		function(value)
 			Bodies.SetViewMode(ns.PairingHeader.Body(value))
@@ -618,6 +618,31 @@ function LibraryUI.Soon()
 	end)
 end
 
+-- A donor's bodies are ready (keys: the shapes it built). The first borrowed
+-- body turns the wall over; after that only the cards the new bodies improve
+-- are painted again, since a Refresh redresses every card.
+function LibraryUI.BodiesArrived(keys, donor)
+	if not (window and window:IsShown()) then return end
+	if Bodies.FullFidelity() ~= Bodies.HoldsBorrowed() then
+		LibraryUI.Soon()
+		return
+	end
+	if not Bodies.FullFidelity() or Bodies.ViewMode() ~= "original" then return end
+	local body, Body = ns.RaceBody, ns.LibraryBody
+	local incoming = { donorRace = donor and donor.raceID, donorFaction = donor and donor.faction }
+	window.Box:ForEachFrame(function(card)
+		local record = card.record
+		if card.built and type(record) == "table" then
+			local ideal = Bodies.IdealBodyKey(record, body)
+			local held = card.body
+			if Body.WantsRepaint(held and held.key, ideal, keys,
+				Body.DonorRank(incoming, record), held and Body.DonorRank(held, record) or 0) then
+				Cards.Init(card, record)
+			end
+		end
+	end)
+end
+
 -- Bodies are borrowed only from donors DonorWatchUI takes in passing.
 local watcher = CreateFrame("Frame", "MogtrotBodyWatcher")
 
@@ -688,12 +713,10 @@ function LibraryUI.Refresh()
 			window.CharacterButton.Text:SetText(("Characters: %s"):format(ownerLabel))
 		end
 	end
-	-- The wall stays apples to apples on the forgiving count; the honest one
-	-- says how many cards still show text.
-	local waiting, unbuilt = Bodies.Missing(list)
-	local watch = ns.DonorWatchUI
-	local offered = watch ~= nil and watch.Offered()
-	local fullFidelity = waiting == 0 and offered
+	-- Original race is offered from the first borrowed body of the other sex;
+	-- the honest count says how many cards still have no body of their own.
+	local _, unbuilt = Bodies.Missing(list)
+	local fullFidelity = Bodies.HoldsBorrowed()
 	Bodies.SetFullFidelity(fullFidelity)
 	local viewMode = Bodies.ViewMode()
 
@@ -748,8 +771,8 @@ function LibraryUI.Refresh()
 	local showing = fullFidelity and viewMode == "original"
 
 	-- The word says what you asked for, and is shown only once original race
-	-- is known to draw every look; until then the line under the wall says
-	-- what is missing, and the wall turns over by itself when it arrives.
+	-- can be offered; until then the line under the wall says why, and the
+	-- wall turns over by itself when the first body arrives.
 	window.Body:Say(viewMode)
 	window.Body:SetShown(fullFidelity)
 	window.Archived:ClearAllPoints()
@@ -766,9 +789,7 @@ function LibraryUI.Refresh()
 end
 
 -- The line under the header. The count is in the sentence above, so this
--- line is only the filters and which body the looks are on. Repainted alone
--- when only the background checks moved on, since a Refresh redresses every
--- card.
+-- line is only the filters and which body the looks are on.
 function LibraryUI.PaintStatus()
 	if not (window and window:IsShown() and window.statusParts) then return end
 	local parts = window.statusParts
@@ -792,8 +813,8 @@ function LibraryUI.PaintStatus()
 	elseif Bodies.FullFidelity() then
 		window.Status:SetText(("%s | Shown on your race. %s"):format(filterStatus, hint))
 	else
-		window.Status:SetText(("%s | Some looks are shown on your own body until you've"
-			.. " seen someone who can wear them."):format(filterStatus))
+		local why = "Looks are shown on your own body until you've seen players of the other sex."
+		window.Status:SetText(("%s | %s"):format(filterStatus, why))
 	end
 end
 

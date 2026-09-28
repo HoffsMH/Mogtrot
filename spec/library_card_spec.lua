@@ -69,14 +69,24 @@ describe("library cards", function()
 			"passive card bodies are not staged")
 	end)
 
-	-- Original race is offered only once every live look has a covering body,
-	-- and until then the word is not shown at all.
-	it("offers original race only when DonorWatchUI says every look is covered", function()
+	-- Original race is offered from the first borrowed body of the other sex,
+	-- and nothing waits on a background check.
+	it("offers original race as soon as one body of the other sex is held", function()
 		local refresh = Body("LibraryUI.lua", "function LibraryUI.Refresh()")
-		assert.is_truthy(refresh:find("Offered()", 1, true))
+		assert.is_truthy(refresh:find("Bodies.HoldsBorrowed()", 1, true))
+		assert.is_nil(refresh:find("Offered()", 1, true))
 		assert.is_truthy(refresh:find("window.Body:SetShown(fullFidelity)", 1, true))
 		local rank = Body("LibraryBodies.lua", "local function RankFor(record)")
-		assert.is_truthy(rank:find("Covering(record.id)", 1, true))
+		assert.is_nil(rank:find("Covering", 1, true))
+		assert.is_nil(SOURCE:find("Wake()", 1, true), "the library wakes a background check")
+		assert.is_nil(Read("SnapCapture.lua"):find("DonorWatchUI", 1, true),
+			"a snap wakes a background check")
+	end)
+
+	it("says in plain words why looks are on your body before any body is held", function()
+		local status = Body("LibraryUI.lua", "function LibraryUI.PaintStatus()")
+		assert.is_truthy(status:find("Looks are shown on your own body until you've"
+			.. " seen players of the other sex", 1, true))
 	end)
 
 	it("reads donor facts gated by DonorWatch.Refusal", function()
@@ -95,9 +105,11 @@ describe("library cards", function()
 		for _, name in ipairs({ "DonorLabUI", "DonorLab.", "GridState", "/mogtrot donor" }) do
 			assert.is_nil(watch:find(name, 1, true), name .. " still in DonorWatchUI")
 		end
-		local coverage = Read("DonorCoverageUI.lua")
-		for _, name in ipairs({ "MogtrotDonorCoverage", "donorCoverage", "donorGrid", ".Run(" }) do
-			assert.is_nil(coverage:find(name, 1, true), name .. " still in DonorCoverageUI")
+		for _, path in ipairs({ "DonorCoverage.lua", "DonorCoverageUI.lua" }) do
+			assert.is_nil(io.open(path, "r"), path .. " is back in the addon")
+		end
+		for _, toc in ipairs({ "Mogtrot.toc", "MogtrotDev.toc" }) do
+			assert.is_nil(Read(toc):find("DonorCoverage", 1, true), "DonorCoverage in " .. toc)
 		end
 	end)
 

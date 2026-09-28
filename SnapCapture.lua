@@ -272,7 +272,8 @@ local function Gather(unit)
 		facts.classID = Plain(classID)
 		facts.level = Plain(Get(UnitLevel, unit))
 		facts.faction = Plain(Get(UnitFactionGroup, unit))
-		facts.specID = Plain(Get(GetInspectSpecialization, unit))
+		facts.specID = Plain(Get(C_SpecializationInfo
+			and C_SpecializationInfo.GetInspectSpecialization, unit))
 		if facts.specID == 0 then facts.specID = nil end
 		facts.mount, facts.form = AurasOf(unit)
 

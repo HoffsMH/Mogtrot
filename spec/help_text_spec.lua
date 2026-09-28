@@ -12,7 +12,7 @@ describe("help text", function()
 	it("offers only player commands", function()
 		local source = Read("Commands.lua")
 		for _, name in ipairs({ "debug", "probe", "inspect", "state", "macro",
-			"wear", "slots", "library bodies", "nudge", "mountzoom", "why" }) do
+			"wear", "slots", "library bodies", "nudge", "mountzoom", "why", "capture" }) do
 			assert.is_nil(source:find('{ "' .. name, 1, true), "a " .. name .. " help row")
 			assert.is_nil(source:find('cmd == "' .. name, 1, true), "a " .. name .. " command")
 		end

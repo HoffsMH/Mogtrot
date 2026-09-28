@@ -90,25 +90,51 @@ end
 
 -- An entry to build one more body of this key into, or nil once the key
 -- already has want bodies (default 1) cards can stand in. Pane twins do not
--- count: no card can take one. With a donor, that donor always gets one body
--- of the key of its own, whatever other donors lent.
-function CharacterModelPool:Warm(wantedKey, want, donor)
+-- count: no card can take one. With a donor, that donor also gets a body of
+-- the key of its own, unless rank is given and donorRank does not beat the
+-- best body of the key already held.
+function CharacterModelPool:Warm(wantedKey, want, donor, rank, donorRank)
 	want = want or 1
-	local empty, have, mine = nil, 0, 0
+	local empty, have, mine, best = nil, 0, 0, nil
 	for _, entry in ipairs(self.entries) do
 		if entry.key == wantedKey and not entry.pane then
 			have = have + 1
 			if donor ~= nil and entry.donorGUID == donor then mine = mine + 1 end
+			if rank then
+				local score = rank(entry)
+				if best == nil or score > best then best = score end
+			end
 		end
 		if not entry.card and not entry.pane and entry.key == nil then
 			empty = empty or entry
 		end
 	end
-	local ownFirst = donor ~= nil and mine == 0
+	local better = best == nil or (donorRank or 0) > best
+	local ownFirst = donor ~= nil and mine == 0 and better
 	if have >= want and not ownFirst then return nil end
 	if empty then return empty end
 	if #self.entries >= self.limit then return nil end
 	return Add(self)
+end
+
+-- No entry is free to build a body into, so a new donor would add nothing.
+function CharacterModelPool:Full()
+	if #self.entries < self.limit then return false end
+	for _, entry in ipairs(self.entries) do
+		if not entry.card and not entry.pane and entry.key == nil then return false end
+	end
+	return true
+end
+
+-- Whether any borrowed body a card can stand in is ready.
+function CharacterModelPool:HoldsBorrowed()
+	for _, entry in ipairs(self.entries) do
+		if entry.borrowed and entry.key ~= nil and entry.actor and not entry.pane
+			and not entry.staging then
+			return true
+		end
+	end
+	return false
 end
 
 function CharacterModelPool:WarmPane(wantedKey)

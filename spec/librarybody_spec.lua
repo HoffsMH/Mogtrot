@@ -106,6 +106,17 @@ describe("LibraryBody.Plan", function()
 		assert.equal("Dracthyr", plan.tagRace)
 	end)
 
+	-- Original race is offered from the first borrowed body; a card whose
+	-- shape nobody has lent yet stays on you rather than showing text.
+	it("keeps a look of the other sex on the viewer's body until its shape is held", function()
+		local woman = Record({ sex = 3 })
+		local plan = Plan({ record = woman, bodyHeld = false })
+		assert.is_false(plan.wantRecordBody)
+		assert.equal("Dracthyr", plan.tagRace)
+		assert.is_true(Plan({ record = woman, bodyHeld = true }).wantRecordBody)
+		assert.is_true(Plan({ bodyHeld = false }).wantRecordBody)
+	end)
+
 	it("shows the viewer's body on the my-race view", function()
 		assert.is_false(Plan({ viewMode = "mine" }).wantRecordBody)
 	end)
@@ -256,16 +267,35 @@ describe("LibraryBody.DonorRank", function()
 		assert.is_true(faction > any)
 	end)
 
-	it("ranks a donor known to draw the record whole above every other", function()
-		local covering = LibraryBody.DonorRank({ donorGUID = "G2", donorRace = 10,
-			donorFaction = "Horde" }, record, { G2 = true })
-		local both = LibraryBody.DonorRank({ donorGUID = "G1", donorRace = 4,
-			donorFaction = "Alliance" }, record, { G2 = true })
-		assert.is_true(covering > both)
+	it("ranks on race and faction alone, with no background verdicts to wait for", function()
+		local entry = { donorGUID = "G2", donorRace = 10, donorFaction = "Horde" }
+		assert.equal(LibraryBody.DonorRank(entry, record),
+			LibraryBody.DonorRank(entry, record, { G2 = true }))
 	end)
 
 	it("ranks nothing it cannot read", function()
 		assert.equal(0, LibraryBody.DonorRank(nil, record))
 		assert.equal(0, LibraryBody.DonorRank({}, {}))
+	end)
+end)
+
+-- A body that arrives while the wall is up is put on the cards it improves,
+-- without redrawing the rest.
+describe("LibraryBody.WantsRepaint", function()
+	local arrived = { k = true }
+
+	it("repaints a card of an arrived shape that holds no body of it", function()
+		assert.is_true(LibraryBody.WantsRepaint(nil, "k", arrived, 1, 0))
+		assert.is_true(LibraryBody.WantsRepaint("other", "k", arrived, 1, 0))
+	end)
+
+	it("repaints a card only when the new body outranks the one it holds", function()
+		assert.is_true(LibraryBody.WantsRepaint("k", "k", arrived, 3, 1))
+		assert.is_false(LibraryBody.WantsRepaint("k", "k", arrived, 1, 1))
+	end)
+
+	it("leaves every card whose shape did not arrive", function()
+		assert.is_false(LibraryBody.WantsRepaint(nil, "j", arrived, 3, 0))
+		assert.is_false(LibraryBody.WantsRepaint(nil, nil, arrived, 3, 0))
 	end)
 end)

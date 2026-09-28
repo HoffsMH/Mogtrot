@@ -82,10 +82,10 @@ end
 --
 -- Half the cards on somebody else's body and half on yours reads as broken
 -- rather than as a compromise, and invites you to wonder which half is lying.
--- So until every live look has a body known to draw it whole
--- (DonorWatchUI.Offered) and every record that needs a borrowed body has one,
--- no record gets one: every card shows your own body, wearing that outfit.
--- Then the whole wall turns over at once. LibraryUI.Refresh decides it.
+-- So until a body of the other sex has been borrowed, no record gets one:
+-- every card shows your own body, wearing that outfit. Then the wall turns
+-- over at once, and only a card whose shape nobody has lent stays on you.
+-- LibraryUI.Refresh decides it.
 local fullFidelity = false
 
 function LibraryBodies.FullFidelity()
@@ -97,9 +97,9 @@ function LibraryBodies.SetFullFidelity(granted)
 end
 
 -- What you asked to see, as opposed to what can be shown. Original race is the
--- default because it is the point of the library; it is granted only once
--- every body has been borrowed, and until then the wall stands every look on
--- you and turns over the moment the last body arrives. You can always ask for
+-- default because it is the point of the library; it is granted once a body
+-- of the other sex has been borrowed, and until then the wall stands every
+-- look on you and turns over the moment that body arrives. You can always ask for
 -- your own body instead and keep it.
 local viewMode = "original"
 
@@ -240,8 +240,8 @@ end
 LibraryBodies.IdealBodyKey = IdealBodyKey
 
 -- Distinct bodies are bounded by race, sex and form, times the donors who
--- lent them. The cap only guards against a pathological account growing this
--- without end.
+-- lent a shape better than any before them. At the cap no new donor is taken
+-- (DonorWatch.Accepts), and a shape nobody lent stays on your own body.
 local POOL_LIMIT = 120
 
 local function Pool()
@@ -294,13 +294,11 @@ local function CardLayout()
 	return ns.LibraryText.CardLayout()
 end
 
--- Among several donors' bodies of the key, a donor known to draw the record
--- whole wins, then the record's race, then its faction (LibraryBody.DonorRank).
+-- Among several donors' bodies of the key, the record's race wins, then its
+-- faction (LibraryBody.DonorRank).
 local function RankFor(record)
 	if type(record) ~= "table" then return nil end
-	local watch = ns.DonorWatchUI
-	local covering = watch and watch.Covering(record.id) or nil
-	return function(entry) return ns.LibraryBody.DonorRank(entry, record, covering) end
+	return function(entry) return ns.LibraryBody.DonorRank(entry, record) end
 end
 
 LibraryBodies.RankFor = RankFor
@@ -333,7 +331,9 @@ end
 -- Everything the planner needs that has to be asked of the client.
 function LibraryBodies.BodyPlan(record, body)
 	local altered = not ns.RaceBody.UseNativeForm("player")
+	local ideal = IdealBodyKey(record, body)
 	return ns.LibraryBody.Plan({
+		bodyHeld = ideal ~= nil and (Pool():CountByKey()[ideal] or 0) > 0,
 		record = record,
 		viewMode = viewMode,
 		fullFidelity = fullFidelity,
@@ -392,10 +392,13 @@ function LibraryBodies.WarmBody(record, donorUnit, want, staging)
 	local ok, donorSex = pcall(UnitSex, from)
 	if not ok or donorSex ~= record.sex then return false end
 
-	-- Each donor keeps a body of every shape it can lend, beside other donors'.
+	-- Each donor keeps a body of every shape it lends better than any other
+	-- donor has: the record's race, then its faction (LibraryBody.DonorRank).
 	local gotGUID, donorGUID = pcall(UnitGUID, from)
 	if not gotGUID or (issecretvalue and issecretvalue(donorGUID)) then donorGUID = nil end
-	local entry = AttachScene(Pool():Warm(ideal, want, donorGUID))
+	local donorRank = ns.LibraryBody.DonorRank({ donorRace = select(3, UnitRace(from)),
+		donorFaction = FactionOf(from) }, record)
+	local entry = AttachScene(Pool():Warm(ideal, want, donorGUID, RankFor(record), donorRank))
 	if not entry then return false end
 
 	local altered = record.nativeForm == false and body.HasAlternateForm(record.raceID)
@@ -445,24 +448,21 @@ function LibraryBodies.DropDonor(guid)
 	Pool():Drop(guid)
 end
 
--- How many records still want a body nobody has lent. Zero means the wall can
--- go to full fidelity.
+-- How many records still want a body nobody has lent.
 function LibraryBodies.Missing(list)
 	local body = ns.RaceBody
 	local mine = UnitSex and UnitSex("player") or nil
 	if not body then return 0 end
 
 	-- Without knowing your own sex there is no way to tell which records need a
-	-- borrowed body, and answering "none" would declare full fidelity with
+	-- borrowed body, and answering "none" would call the wall complete with
 	-- nothing built. Count them all as waiting instead.
 	if not mine then return #list end
 
 	-- Two counts, because two different questions were being answered by one.
 	--
-	--   keys    is any shape of body still unbuilt? The wall shows every card
-	--           on its own race or none of them, so this one decides that, and
-	--           it is deliberately forgiving: one body of a shape is enough to
-	--           prove the shape can be built.
+	--   keys    is any shape of body still unbuilt? Deliberately forgiving:
+	--           one body of a shape is enough to prove the shape can be built.
 	--   bodies  is any card still without a body of its own? A body belongs to
 	--           one card at a time, so two cards wanting one shape need two.
 	--           This one says how many cards still show text.
@@ -509,18 +509,15 @@ function LibraryBodies.DonorFacts(unit)
 		raceID = raceID, sex = sex, faction = faction, keys = {} }
 end
 
--- key -> { [donor GUID] = true } for every built card body lent by a donor,
--- for DonorWatch.Status.
-function LibraryBodies.PooledKeys()
-	local pooled = {}
-	for _, entry in ipairs(characterPool and characterPool.entries or {}) do
-		if entry.key ~= nil and not entry.pane and not entry.staging and entry.actor
-			and entry.donorGUID then
-			pooled[entry.key] = pooled[entry.key] or {}
-			pooled[entry.key][entry.donorGUID] = true
-		end
-	end
-	return pooled
+-- No room in the pool for another donor's bodies.
+function LibraryBodies.PoolFull()
+	return Pool():Full()
+end
+
+-- A borrowed body a card can stand in is ready, which is when the library
+-- offers original race.
+function LibraryBodies.HoldsBorrowed()
+	return characterPool ~= nil and characterPool:HoldsBorrowed()
 end
 
 -- The detail pane gets a body of its own, built from the same donor at the

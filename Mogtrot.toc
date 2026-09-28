@@ -23,7 +23,6 @@ OutfitLibrarySync.lua
 OutfitLibrarySyncAdapter.lua
 FormDefinitions.lua
 DonorBody.lua
-DonorCoverage.lua
 DonorWatch.lua
 CharacterModelPool.lua
 Addon.lua
@@ -41,7 +40,6 @@ LibraryBodies.lua
 LibraryCards.lua
 LibraryUI.lua
 SnapConfirmUI.lua
-DonorCoverageUI.lua
 DonorWatchUI.lua
 LibraryTransfer.lua
 LibraryDetailUI.lua

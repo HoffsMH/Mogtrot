@@ -111,12 +111,11 @@ local function PaintConfirmBody(frame)
 end
 
 -- The live body became ready while the pop-up was up; it replaces whatever
--- was drawn. after is seconds since the pop-up opened, for the harness.
-local function SwapInLive(frame, unit, after)
+-- was drawn.
+local function SwapInLive(frame, unit)
 	if not (frame.record and LiveBody(frame.Scene, frame.record, unit)) then return end
 	ReturnConfirmBody(frame)
 	frame.drawnFrom = "live"
-	frame.liveAfter = after
 	PaintConfirmBody(frame)
 end
 
@@ -215,7 +214,7 @@ local function EnsureConfirm()
 			local unit = self.recheck()
 			if unit then
 				self.recheck = nil
-				SwapInLive(self, unit, now - self.startedAt)
+				SwapInLive(self, unit)
 			end
 		end
 	end)
@@ -245,9 +244,7 @@ function SnapConfirmUI.ConfirmSnap(record, isNew, token, liveUnit, recheck)
 	frame.record = record
 
 	frame.Title:SetText(text.Confirmation(record, isNew))
-	-- Which body was drawn, for the harness to read: "live", "own", "pool",
-	-- or nil for text only. liveAfter is set when a retry found it.
-	frame.liveAfter = nil
+	-- Which body was drawn: "live", "own", "pool", or nil for text only.
 	frame.drawnFrom = DrawConfirmBody(frame, record, liveUnit)
 	PaintConfirmBody(frame)
 

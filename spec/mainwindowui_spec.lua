@@ -63,3 +63,55 @@ describe("MainWindowUI summon button", function()
 		assert.same({ false }, summons)
 	end)
 end)
+
+-- The window holds secure buttons, so the game refuses to resize, move or hide
+-- it in combat. Layout asked for then waits for combat to end.
+describe("MainWindowUI combat layout", function()
+	local MainWindowUI, inCombat, layout, applied
+
+	before_each(function()
+		MainWindowUI = assert(loadfile("MainWindowUI.lua"))("Mogtrot", {})
+		inCombat = false
+		applied = {}
+		layout = MainWindowUI.CombatSafeLayout(function() return inCombat end)
+	end)
+
+	local function apply(name)
+		return function() applied[#applied + 1] = name end
+	end
+
+	it("applies a layout at once out of combat", function()
+		assert.is_true(layout.Request(apply("a")))
+		assert.same({ "a" }, applied)
+		assert.is_false(layout.Pending())
+	end)
+
+	it("queues a layout asked for in combat instead of applying it", function()
+		inCombat = true
+		assert.is_false(layout.Request(apply("a")))
+		assert.same({}, applied)
+		assert.is_true(layout.Pending())
+	end)
+
+	it("applies only the latest queued layout, once, when combat ends", function()
+		inCombat = true
+		layout.Request(apply("a"))
+		layout.Request(apply("b"))
+		assert.is_false(layout.Flush())
+		assert.same({}, applied)
+		inCombat = false
+		assert.is_true(layout.Flush())
+		assert.is_false(layout.Flush())
+		assert.same({ "b" }, applied)
+	end)
+
+	it("has nothing to flush when nothing was queued", function()
+		assert.is_false(layout.Flush())
+		assert.same({}, applied)
+	end)
+
+	it("offers the close button only out of combat", function()
+		assert.is_true(MainWindowUI.CloseAllowed(false))
+		assert.is_false(MainWindowUI.CloseAllowed(true))
+	end)
+end)

@@ -28,18 +28,12 @@ function OutfitLookCapture.Attach(Addon, callbacks)
 		return captureModel
 	end
 
-	function Addon:StoreCapturedLook(verbose)
+	function Addon:StoreCapturedLook()
 		local outfitID = C_TransmogOutfitInfo.GetActiveOutfitID()
-		if not outfitID or outfitID == 0 or not captureModel then
-			if verbose then self:Say("no active outfit to capture.") end
-			return
-		end
+		if not outfitID or outfitID == 0 or not captureModel then return end
 
 		local list = captureModel:GetItemTransmogInfoList()
-		if not list then
-			if verbose then self:Say("your appearance has not loaded yet; try again in a moment.") end
-			return
-		end
+		if not list then return end
 
 		local look, anyAppearance = {}, false
 		for slotID, info in pairs(list) do
@@ -53,31 +47,20 @@ function OutfitLookCapture.Attach(Addon, callbacks)
 			end
 		end
 
-		if not anyAppearance then
-			if verbose then self:Say("your appearance has not loaded yet; try again in a moment.") end
-			return
-		end
+		if not anyAppearance then return end
 
 		MogtrotCharDB.worn = MogtrotCharDB.worn or {}
 		MogtrotCharDB.worn[outfitID] = look
 		self.captureOutfitID = nil
 
-		if verbose then
-			local name = self.outfitsByID and self.outfitsByID[outfitID]
-			self:Say("captured '%s'.", name and name.name or tostring(outfitID))
-		end
-
 		callbacks.onCaptured(outfitID)
 	end
 
-	function Addon:CaptureActiveLook(verbose)
+	function Addon:CaptureActiveLook()
 		if InCombatLockdown() then return end
 
 		local outfitID = C_TransmogOutfitInfo.GetActiveOutfitID()
-		if not outfitID or outfitID == 0 then
-			if verbose then self:Say("no outfit active, nothing to capture.") end
-			return
-		end
+		if not outfitID or outfitID == 0 then return end
 
 		self.captureOutfitID = outfitID
 		local model = EnsureModel()
@@ -86,7 +69,7 @@ function OutfitLookCapture.Attach(Addon, callbacks)
 		model:SetModelAlpha(0)
 
 		C_Timer.After(0.5, function() Addon:StoreCapturedLook() end)
-		C_Timer.After(1.5, function() Addon:StoreCapturedLook(verbose) end)
+		C_Timer.After(1.5, function() Addon:StoreCapturedLook() end)
 	end
 
 	function Addon:ScheduleCapture()

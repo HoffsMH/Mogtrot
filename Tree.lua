@@ -297,6 +297,71 @@ function Tree.UntouchedSlot(db, info, defaultName)
 	return not (cat and not cat.protected)
 end
 
+-- Files every outfit the client lists and drops what is stored against outfits
+-- it no longer lists. Returns outfitID -> info. The caller must not pass an
+-- empty list: that means the client has not answered yet, not that every
+-- outfit is gone.
+function Tree.SyncOutfits(char, outfits, defaultName)
+	local unsortedID = Tree.FindUnsortedID(char)
+	local byID = {}
+	for index, info in ipairs(outfits) do
+		info.index = info.playerFacingOutfitIndex or index
+		byID[info.outfitID] = info
+
+		-- An outfit slot nobody has used is not an outfit and gets no row. It stays
+		-- in outfitsByID so the rest of the addon can still name it and so the prune
+		-- below reads it as present rather than deleted.
+		if Tree.UntouchedSlot(char, info, defaultName) then
+			Tree.UnfileOutfit(char, info.outfitID)
+		else
+			local catID = char.assign[info.outfitID]
+			if not catID or not char.cats[catID] then
+				catID = unsortedID
+				char.assign[info.outfitID] = catID
+			end
+			local items = char.cats[catID].items
+			if not Tree.IndexInList(items, info.outfitID) then
+				table.insert(items, info.outfitID)
+			end
+		end
+	end
+
+	-- Drop outfits that no longer exist (different character, deleted slot).
+	for _, cat in pairs(char.cats) do
+		for i = #cat.items, 1, -1 do
+			if not byID[cat.items[i]] then
+				char.assign[cat.items[i]] = nil
+				table.remove(cat.items, i)
+			end
+		end
+	end
+
+	for outfitID in pairs(char.looks) do
+		if not byID[outfitID] then
+			char.looks[outfitID] = nil
+		end
+	end
+
+	for outfitID in pairs(char.worn or {}) do
+		if not byID[outfitID] then
+			char.worn[outfitID] = nil
+		end
+	end
+
+	for outfitID in pairs(char.mounts) do
+		if not byID[outfitID] then
+			char.mounts[outfitID] = nil
+		end
+	end
+
+	for outfitID in pairs(char.slots) do
+		if not byID[outfitID] then
+			char.slots[outfitID] = nil
+		end
+	end
+	return byID
+end
+
 function Tree.CountOutfits(db, catID, depth)
 	depth = depth or 0
 	local cat = db.cats[catID]

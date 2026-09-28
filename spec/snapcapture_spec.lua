@@ -2,7 +2,7 @@ describe("SnapCapture inspect ownership", function()
 	local names = {
 		"AuraUtil", "C_Map", "C_MountJournal", "C_PaperDollInfo", "C_PlayerInfo",
 		"C_Secrets", "C_Timer", "C_TransmogCollection", "ClearInspectPlayer",
-		"CreateFrame", "GetBuildInfo", "GetInspectSpecialization", "GetSubZoneText",
+		"C_SpecializationInfo", "CreateFrame", "GetBuildInfo", "GetSubZoneText",
 		"GetZoneText", "InCombatLockdown", "IsUnitModelReadyForUI", "MogtrotDB",
 		"NotifyInspect", "UnitClass",
 		"UnitExists", "UnitFactionGroup", "UnitGUID", "UnitIsPlayer", "UnitLevel",
@@ -55,7 +55,7 @@ describe("SnapCapture inspect ownership", function()
 		_G.UnitClass = function() return "Warrior", "WARRIOR", 1 end
 		_G.UnitLevel = function() return 90 end
 		_G.UnitFactionGroup = function() return "Horde" end
-		_G.GetInspectSpecialization = function() return 72 end
+		_G.C_SpecializationInfo = { GetInspectSpecialization = function() return 72 end }
 		_G.GetZoneText = function() return "Silvermoon City" end
 		_G.GetSubZoneText = function() return "The Bazaar" end
 		_G.GetBuildInfo = function() return "12.1.0", "", "", 120100 end

@@ -16,7 +16,6 @@ local HELP = {
 	{ "summon", "summon a mount linked to the outfit you are wearing" },
 	{ "fallback", "what that key does when the outfit has no mounts" },
 	{ "fallback <what>", "random, pinned, litemount or off" },
-	{ "capture", "re-capture the outfit you are wearing" },
 	{ "snap", "save the look of the player you target into the library" },
 	{ "library", "open the library of captured looks" },
 }
@@ -60,11 +59,6 @@ SlashCmdList.MOGTROT = function(msg)
 			Settings.NotifyUpdate(ns.SettingsUI.QUIET_SETTING)
 		end
 		Addon:Warn("chat output %s.", MogtrotDB.quiet and "silenced" or "on")
-		return
-	end
-
-	if cmd == "capture" then
-		Addon:CaptureActiveLook(true)
 		return
 	end
 

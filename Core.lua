@@ -251,71 +251,14 @@ function Addon:SyncOutfits()
 	local char = MogtrotCharDB
 	local outfits = C_TransmogOutfitInfo.GetOutfitsInfo() or {}
 
-	-- Never prune against an empty outfit list. If the API has not populated yet the
-	-- pruning below would erase every assignment, captured look and linked mount
+	-- Never prune against an empty outfit list. If the API has not populated yet
+	-- Tree.SyncOutfits would erase every assignment, captured look and linked mount
 	-- on disk, so treat "no outfits" as "no information" instead.
 	if #outfits == 0 then
 		self.outfitsByID = self.outfitsByID or {}
 		return
 	end
-	local unsortedID = Tree.FindUnsortedID(char)
-
-	self.outfitsByID = {}
-	for index, info in ipairs(outfits) do
-		info.index = info.playerFacingOutfitIndex or index
-		self.outfitsByID[info.outfitID] = info
-
-		-- An outfit slot nobody has used is not an outfit and gets no row. It stays
-		-- in outfitsByID so the rest of the addon can still name it and so the prune
-		-- below reads it as present rather than deleted.
-		if Tree.UntouchedSlot(char, info, TRANSMOG_OUTFIT_NAME_DEFAULT) then
-			Tree.UnfileOutfit(char, info.outfitID)
-		else
-			local catID = char.assign[info.outfitID]
-			if not catID or not char.cats[catID] then
-				catID = unsortedID
-				char.assign[info.outfitID] = catID
-			end
-			local items = char.cats[catID].items
-			if not Tree.IndexInList(items, info.outfitID) then
-				table.insert(items, info.outfitID)
-			end
-		end
-	end
-
-	-- Drop outfits that no longer exist (different character, deleted slot).
-	for _, cat in pairs(char.cats) do
-		for i = #cat.items, 1, -1 do
-			if not self.outfitsByID[cat.items[i]] then
-				char.assign[cat.items[i]] = nil
-				table.remove(cat.items, i)
-			end
-		end
-	end
-
-	for outfitID in pairs(char.looks) do
-		if not self.outfitsByID[outfitID] then
-			char.looks[outfitID] = nil
-		end
-	end
-
-	for outfitID in pairs(char.worn or {}) do
-		if not self.outfitsByID[outfitID] then
-			char.worn[outfitID] = nil
-		end
-	end
-
-	for outfitID in pairs(char.mounts) do
-		if not self.outfitsByID[outfitID] then
-			char.mounts[outfitID] = nil
-		end
-	end
-
-	for outfitID in pairs(char.slots) do
-		if not self.outfitsByID[outfitID] then
-			char.slots[outfitID] = nil
-		end
-	end
+	self.outfitsByID = Tree.SyncOutfits(char, outfits, TRANSMOG_OUTFIT_NAME_DEFAULT)
 	if titleController then titleController:Clean(self.outfitsByID) end
 end
 
@@ -480,7 +423,7 @@ function Addon:AnnounceOutfit(outfitID)
 	-- Sent straight from the click rather than deferred to the swap, so the call
 	-- stays inside the hardware event that triggered it.
 	local template = ANNOUNCE_FORMATS[math.random(#ANNOUNCE_FORMATS)]
-	SendChatMessage(template:format(name), "SAY")
+	C_ChatInfo.SendChatMessage(template:format(name), "SAY")
 end
 
 previewUI = ns.OutfitPreviewUI.Attach(Addon, {
@@ -1049,6 +992,7 @@ eventFrame:SetScript("OnEvent", function(_, event, arg1, arg2, arg3, arg4)
 
 	elseif event == "PLAYER_REGEN_ENABLED" then
 		self:SetEscapeClosing(true)
+		self:ApplyDeferredLayout()
 		self:SetCombatDimmed(false)
 		self:UpdateOwnedMacroIcons()
 	elseif event == "PLAYER_LOGOUT" then
